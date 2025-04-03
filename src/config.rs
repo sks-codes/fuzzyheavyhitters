@@ -4,6 +4,7 @@ use std::{fs, net::SocketAddr};
 
 pub struct Config {
     pub data_len: usize,
+    pub n_dims: usize,
     pub addkey_batch_size: usize,
     pub sketch_batch_size: usize,
     pub sketch_batch_size_last: usize,
@@ -23,6 +24,7 @@ pub fn get_config(filename: &str) -> Config {
     let v: Value = serde_json::from_str(json_data).expect("Cannot parse JSON config");
 
     let data_len: usize = v["data_len"].as_u64().expect("Can't parse data_len") as usize;
+    let n_dims: usize = v["n_dims"].as_u64().expect("Can't parse data_len") as usize;
     let addkey_batch_size: usize = v["addkey_batch_size"]
         .as_u64()
         .expect("Can't parse addkey_batch_size") as usize;
@@ -42,6 +44,7 @@ pub fn get_config(filename: &str) -> Config {
 
     Config {
         data_len,
+        n_dims,
         addkey_batch_size,
         sketch_batch_size,
         sketch_batch_size_last,

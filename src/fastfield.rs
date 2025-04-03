@@ -10,11 +10,13 @@
 use num::traits::{Num, One, Zero};
 use serde::{Deserialize, Serialize};
 use std::cmp::{Eq, PartialEq};
-use std::convert::From;
+use std::convert::{From, TryFrom, TryInto};
 use std::fmt::{self, Display, Formatter, LowerHex, UpperHex};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 use std::ops::{AddAssign, DivAssign, MulAssign, RemAssign, SubAssign};
+use scuttlebutt::Block;
+use scuttlebutt::serialization::CanonicalSerialize;
 
 // Here are the constants that determine our prime:
 //
@@ -206,6 +208,7 @@ impl From<FE> for u64 {
         v.value()
     }
 }
+
 impl Zero for FE {
     fn zero() -> FE {
         FE::new_raw(0)
@@ -406,6 +409,26 @@ impl Num for FE {
     }
 }
 
+
+
+impl TryFrom<Block> for FE {
+    type Error = &'static str;
+
+    fn try_from(block: Block) -> Result<Self, Self::Error> {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&block.as_ref()[..8]);
+        Ok(FE::new(u64::from_le_bytes(bytes)))
+    }
+}
+
+impl From<FE> for Block {
+    fn from(fe: FE) -> Block {
+        let val = fe.value();
+        let mut bytes = [0u8; 16]; // Block is 16 bytes
+        bytes[..8].copy_from_slice(&val.to_le_bytes());
+        Block::from(bytes)
+    }
+}
 #[cfg(test)]
 mod tests {
     //use math::*;
