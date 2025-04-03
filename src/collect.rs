@@ -1,52 +1,53 @@
-use crate::{dpf, ibDCF, sketch_dcf};
-use crate::prg;
-use crate::sketch;
+use std::convert::{TryFrom, TryInto};
+use std::io::{BufReader, BufWriter};
+use std::os::unix::net::UnixStream;
+use crate::{all_bit_vectors, prg, Group, Share};
 
 use rayon::prelude::*;
+use scuttlebutt::{AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
-use crate::ibDCF::ibDCFKey;
+use crate::ibDCF::{ibDCFKey, EvalState, eval_str};
+use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
+use ocelot::ot::{Receiver, Sender};
+use crate::equalitytest::{multiple_gb_equality_test, multiple_ev_equality_test};
+use crate::field::BlockPair;
+use std::marker::PhantomData;
 
 #[derive(Clone)]
-struct TreeNode<T> {
-    path: Vec<bool>,
-    value: T,
-    key_states: Vec<ibDCF::DCFEvalState>,
-    key_values: Vec<(T, T)>,
+struct TreeNode {
+    path: Vec<Vec<bool>>,
+    // value: T,
+    key_states: Vec<Vec<(EvalState, EvalState)>>,
+    // key_values: Vec<(T, T)>,
+
 }
 
-unsafe impl<T> Send for TreeNode<T> {}
-unsafe impl<T> Sync for TreeNode<T> {}
+unsafe impl Send for TreeNode {}
+unsafe impl Sync for TreeNode {}
+
 
 #[derive(Clone)]
-pub struct KeyCollection<T,U> {
+pub struct KeyCollection<T,U>
+{
     depth: usize,
-    pub keys: Vec<(bool, sketch_dcf::SketchDCFKey<T,U>)>, //TODO
-    frontier: Vec<TreeNode<T>>,
-    frontier_last: Vec<TreeNode<U>>, //TODO: why?
-
+    pub keys: Vec<(bool, Vec<(ibDCFKey, ibDCFKey)>)>,
+    frontier: Vec<TreeNode>,
+    frontier_last: Vec<Result<U>>,
     rand_stream: prg::PrgStream,
+    _phantom: PhantomData<(T, U)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Result<T> {
-    pub path: Vec<bool>,
+    pub path: Vec<Vec<bool>>,
     pub value: T,
 }
 
 impl<T,U> KeyCollection<T,U>
 where
-    T: crate::Share
-        + std::fmt::Debug
-        + std::cmp::PartialOrd
-        + std::convert::From<u32>
-        + Send
-        + Sync,
-    U: crate::Share
-        + std::fmt::Debug
-        + std::cmp::PartialOrd
-        + std::convert::From<u32>
-        + Send
-        + Sync,
+    T: Share + Clone + std::fmt::Debug + PartialOrd + From<u32> + Send + Sync + TryFrom<Block> + Into<Block>,
+    U: Share + Clone + std::fmt::Debug + PartialOrd + From<u32> + Send + Sync + TryFrom<BlockPair> + Into<BlockPair>,
+    <U as TryFrom<BlockPair>>::Error: std::fmt::Debug,
 {
     pub fn new(seed: &prg::PrgSeed, depth: usize) -> KeyCollection<T,U> {
         KeyCollection::<T,U> {
@@ -55,238 +56,271 @@ where
             frontier: vec![],
             frontier_last: vec![],
             rand_stream: seed.to_rng(),
+            _phantom: PhantomData,
         }
     }
 
-    pub fn add_key(&mut self, key: sketch_dcf::SketchDCFKey<T,U>) {
-        assert_eq!(key.triples.len(), sketch_dcf::TRIPLES_PER_LEVEL * (self.depth-1));
-        assert_eq!(key.triples_last.len(), sketch_dcf::TRIPLES_PER_LEVEL);
-        self.keys.push((true, key));
+    pub fn add_key(&mut self, key: Vec<(ibDCFKey, ibDCFKey)>) {
+        self.keys.push((true, key)); //TODO: come back and remove this bool
+
     }
 
     pub fn tree_init(&mut self) {
-        let mut root = TreeNode::<T> {
+        let mut root = TreeNode {
             path: vec![],
-            value: T::zero(),
+            // value: T::zero(),
             key_states: vec![],
-            key_values: vec![],
+            // key_values: vec![],
         };
 
         for k in &self.keys {
-            root.key_states.push(k.1.eval_init());
-            root.key_values.push((T::zero(), T::zero()));
+            let mut root_states = vec![];
+            for interval_key in k.1.clone(){
+                root_states.push((interval_key.0.eval_init(), interval_key.1.eval_init()));
+            }
+            root.key_states.push(root_states);
+        }
+
+        assert!(self.keys.len() > 0);
+        for i in 0..self.keys[0].1.len(){
+            root.path.push(vec![]);
         }
 
         self.frontier.clear();
         self.frontier_last.clear();
         self.frontier.push(root);
+
     }
 
-    fn make_tree_node(&self, parent: &TreeNode<T>, dir: bool) -> TreeNode<T> {
-        let (key_states, key_values): (Vec<ibDCF::DCFEvalState>, Vec<(T, T)>) = self
+    fn make_tree_node(&self, parent: &TreeNode, search_string: &Vec<bool>) -> TreeNode {
+        let key_states = self
             .keys
             .par_iter()
             .enumerate()
             .map(|(i, key)| {
-                let (st, out0, out1) = key.1.eval_bit(&parent.key_states[i], dir);
-                (st, (out0, out1))
+                let ev = eval_str(&key.1, &parent.key_states[i], search_string);
+                ev
             })
-            .unzip();
+            .collect();
 
-        let mut child_val = T::zero();
-        for (i, v) in key_values.iter().enumerate() {
-            // Add in only live values
-            if self.keys[i].0 {
-                child_val.add_lazy(&v.0);
-            }
+        let mut new_path = vec![];
+        for (i, dim_path) in parent.path.iter().enumerate(){
+            let mut new_dim_path = dim_path.clone();
+            new_dim_path.push(search_string[i]);
+            new_path.push(new_dim_path)
         }
-        child_val.reduce();
 
-        let mut child = TreeNode::<T> {
-            path: parent.path.clone(),
-            value: child_val,
+        let child = TreeNode {
+            path: new_path.clone(),
+            // value: child_val,
             key_states,
-            key_values,
+            // key_values : vec![],
         };
-
-        child.path.push(dir);
-        //println!("{:?} - Child value: {:?}", child.path, child.value);
         child
     }
 
-    fn make_tree_node_last(&self, parent: &TreeNode<T>, dir: bool) -> TreeNode<U> {
-        let (key_states, key_values): (Vec<ibDCF::DCFEvalState>, Vec<(U, U)>) = self
-            .keys
-            .par_iter()
-            .enumerate()
-            .map(|(i, key)| {
-                let (st, out0, out1) = key.1.eval_bit_last(&parent.key_states[i], dir);
-                (st, (out0, out1))
-            })
-            .unzip();
 
-        let mut child_val = U::zero();
-        for (i, v) in key_values.iter().enumerate() {
-            // Add in only live values
-            if self.keys[i].0 {
-                child_val.add_lazy(&v.0);
-            }
-        }
-        child_val.reduce();
-
-        let mut child = TreeNode::<U> {
-            path: parent.path.clone(),
-            value: child_val,
-            key_states,
-            key_values,
-        };
-
-        child.path.push(dir);
-
-        //println!("{:?} - Child value: {:?}", child.path, child.value);
-        child
-    }
-
-    pub fn tree_crawl(&mut self) -> Vec<T> {
+    pub fn tree_crawl(&mut self, gc_sender: bool, channel: Option<&mut SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>>) -> Vec<T> {
         println!("Crawl");
         let next_frontier = self
             .frontier
             .par_iter()
             .map(|node| {
-                assert!(node.path.len() <= self.depth);
-                let child0 = self.make_tree_node(node, false);
-                let child1 = self.make_tree_node(node, true);
-
-                vec![child0, child1]
+                let mut children = vec![];
+                let search_strings = all_bit_vectors(node.key_states[0].len());
+                for s in search_strings {
+                    children.push(self.make_tree_node(node, &s));
+                }
+                children
             })
             .flatten()
-            .collect::<Vec<TreeNode<T>>>();
+            .collect::<Vec<TreeNode>>();
+       let node_client_string : Vec<Vec<Vec<bool>>> = next_frontier
+            .par_iter()
+            .map(|node| {
+                node.key_states
+                    .par_iter()
+                    .map(|state|{
+                        let mut left_bits:Vec<bool> = state.iter().map(|(left, right)| left.y_bit ^ left.bit).collect();
+                        let mut right_bits:Vec<bool> = state.iter().map(|(left, right)| right.y_bit ^ right.bit).collect();
+                        left_bits.append(&mut right_bits);
+                        left_bits
+                        // state.iter().map(|(left, right)| left.y_bit).collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let channel = channel.unwrap();
 
-        let values = next_frontier
+        let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
-            .map(|node| node.value.clone())
-            .collect::<Vec<T>>();
+            .flat_map(|node| node.iter().map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>()))
+            .collect();
+        let mut rng = AesRng::new();
+        let mut all_binary_shares = if gc_sender {
+            multiple_gb_equality_test(&mut rng, channel, &all_client_strings.as_slice())
+        } else {
+            multiple_ev_equality_test(&mut rng, channel, &all_client_strings.as_slice())
+        };
+        let mut all_node_vals = vec![];
+        if gc_sender{
+            let mut all_shares = Vec::with_capacity(all_binary_shares.len());
+            for i in 0..all_binary_shares.len() {
+                let r0 = T::random();
+                let mut r1 = r0.clone();
+                r1.add(&T::one());
+                all_node_vals.push(r1.clone());
+                let r0_block: Block = r0.try_into().expect("Conversion failed");
+                let r1_block: Block = r1.try_into().expect("Conversion failed");
+                if all_binary_shares[i] {
+                    all_shares.push((r0_block, r1_block));
+                } else {
+                    all_shares.push((r1_block, r0_block));
+                }
+            }
+            let mut ot = OtSender::init(channel, &mut rng).unwrap();
+            ot.send(channel, all_shares.as_slice(), &mut rng).map_err(|e| {
+                println!("Error in tree_crawl ot send")
+            }).unwrap();
+        }
+        else{
+            let mut ot = OtReceiver::init(channel, &mut rng).unwrap();
+            let out_blocks = ot.receive(channel, all_binary_shares.as_slice(), &mut rng).unwrap();
+            all_node_vals = out_blocks.into_iter()
+                .map(|b| {
+                    T::try_from(b)
+                        .map_err(|e| {
+                            // eprintln!("Conversion error: {:?}", e);  // Changed to {:?}
+                            // e
+                        })
+                        .unwrap()
+                })
+                .collect();
+        }
+        let mut results_by_node = Vec::new();
+        let mut current_idx = 0;
+        for node in &node_client_string {
+            let num_clients = node.len();
+            let node_results : Vec<T> = all_node_vals[current_idx..current_idx + num_clients].to_vec();
+            let mut node_sum = T::zero();
+            for (i, v) in node_results.iter().enumerate() {
+                // Add in only live values
+                if self.keys[i].0 {
+                    node_sum.add_lazy(v);
+                }
+            }
+            results_by_node.push(node_sum);
+            current_idx += num_clients;
+       }
         println!("...done");
 
         self.frontier = next_frontier;
-        values
+        results_by_node
     }
 
-    pub fn tree_crawl_last(&mut self) -> Vec<U> {
+    pub fn tree_crawl_last(&mut self, gc_sender: bool, channel: Option<&mut SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>>) -> Vec<U> {
         println!("Crawl");
         let next_frontier = self
             .frontier
             .par_iter()
             .map(|node| {
-                assert!(node.path.len() <= self.depth);
-                let child0 = self.make_tree_node_last(node, false);
-                let child1 = self.make_tree_node_last(node, true);
-
-                vec![child0, child1]
+                let mut children = vec![];
+                let search_strings = all_bit_vectors(node.key_states[0].len());
+                for s in search_strings {
+                    children.push(self.make_tree_node(node, &s));
+                }
+                children
             })
             .flatten()
-            .collect::<Vec<TreeNode<U>>>();
+            .collect::<Vec<TreeNode>>();
+        let node_client_string : Vec<Vec<Vec<bool>>> = next_frontier
+            .par_iter()
+            .map(|node| {
+                node.key_states
+                    .par_iter()
+                    .map(|state|{
+                        let mut left_bits:Vec<bool> = state.iter().map(|(left, right)| left.y_bit ^ left.bit).collect();
+                        let mut right_bits:Vec<bool> = state.iter().map(|(left, right)| right.y_bit ^ right.bit).collect();
+                        left_bits.append(&mut right_bits);
+                        left_bits
+                        // state.iter().map(|(left, right)| left.y_bit).collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let channel = channel.unwrap();
 
-        let values = next_frontier
-            .iter()
-            .map(|node| node.value.clone())
-            .collect::<Vec<U>>();
+        let all_client_strings: Vec<Vec<u16>> = node_client_string
+            .par_iter()
+            .flat_map(|node| node.par_iter().map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>()))
+            .collect();
+        let mut rng = AesRng::new();
+        let mut all_binary_shares = if gc_sender {
+            multiple_gb_equality_test(&mut rng, channel, &all_client_strings.as_slice())
+        } else {
+            multiple_ev_equality_test(&mut rng, channel, &all_client_strings.as_slice())
+        };
+        let mut all_node_vals = vec![];
+        if gc_sender{
+            let mut all_shares = Vec::with_capacity(all_binary_shares.len());
+            for i in 0..all_binary_shares.len() {
+                let r0 = U::random();
+                let mut r1 = r0.clone();
+                r1.add(&U::one());
+                all_node_vals.push(r1.clone());
+                let r0_block: BlockPair = r0.try_into().expect("Conversion failed");
+                let r1_block: BlockPair = r1.try_into().expect("Conversion failed");
+                if all_binary_shares[i] {
+                    all_shares.push((r0_block.0[0], r1_block.0[0]));
+                    all_shares.push((r0_block.0[1], r1_block.0[1]));
+                } else {
+                    all_shares.push((r1_block.0[0], r0_block.0[0]));
+                    all_shares.push((r1_block.0[1], r0_block.0[1]));
+                }
+            }
+            let mut ot = OtSender::init(channel, &mut rng).unwrap();
+            ot.send(channel, all_shares.as_slice(), &mut rng).unwrap();
+        }
+        else{
+            let mut ot = OtReceiver::init(channel, &mut rng).unwrap();
+            let doubled_binary_shares = all_binary_shares.iter().flat_map(|&b| [b, b]).collect::<Vec<bool>>();
+            let out_blocks = ot.receive(channel, doubled_binary_shares.as_slice(), &mut rng).unwrap();
+            let mut i = 0;
+            while i < out_blocks.len() - 1 {
+                let val = U::try_from(BlockPair([out_blocks[i], out_blocks[i+1]])).map_err(|e| {
+                    // eprintln!("Conversion error: {:?}", e);  // Changed to {:?}
+                    // e
+                    }).unwrap();
+                all_node_vals.push(val);
+                i += 2;
+            }
+        }
+        let mut results_by_node = Vec::new();
+        let mut current_idx = 0;
+        for node in &node_client_string {
+            let num_clients = node.len();
+            let node_results : Vec<U> = all_node_vals[current_idx..current_idx + num_clients].to_vec();
+            let mut node_sum = U::zero();
+            for (i, v) in node_results.iter().enumerate() {
+                // Add in only live values
+                if self.keys[i].0 {
+                    node_sum.add_lazy(v);
+                }
+            }
+            results_by_node.push(node_sum);
+            current_idx += num_clients;
+        }
         println!("...done");
 
-        self.frontier_last = next_frontier;
-        values
-    }
-
-    pub fn tree_sketch_frontier(
-        &mut self,
-        start: usize,
-        end: usize,
-    ) -> Vec<sketch_dcf::SketchOutput<T>> {
-        println!("Sketching frontier {:?} to {:?}", start, end);
-        // sketch_vectors[i][j] = { j'th value expanded from i'th key }
-
-        assert!(start < end);
-        assert!(end <= self.keys.len());
-
-        let mut sketch_vectors = Vec::with_capacity(end - start);
-        for _ in &self.keys[start..end] {
-            sketch_vectors.push(Vec::with_capacity(self.frontier.len()));
-        }
-
-        for node in &self.frontier {
-            for (i, vec) in sketch_vectors.iter_mut().enumerate() { //TODO: come back to this
-                vec.push(node.key_values[start + i].clone());
+        self.frontier_last = next_frontier.par_iter().enumerate().map(|(i,node)| {
+            Result::<U> {
+                path: node.path.clone(),
+                value: results_by_node[i].clone(),
             }
-        }
-
-        //use cpuprofiler::PROFILER;
-        //PROFILER.lock().unwrap().start("./sketch.profile").unwrap();
-
-        let out = self
-            .keys[start..end]
-            .par_iter()
-            .enumerate()
-            .map(|(i, k)| {
-                let mut stream = self.rand_stream.clone();
-                k.1.sketch_at(&sketch_vectors[i], &mut stream)
-            })
-            .collect::<Vec<sketch_dcf::SketchOutput<T>>>();
-
-        //PROFILER.lock().unwrap().stop().unwrap();
-        println!("... Done");
-
-        out
+        }).collect::<Vec<Result<U>>>();
+        results_by_node
     }
 
-    pub fn tree_sketch_frontier_last(
-        &mut self,
-        start: usize,
-        end: usize,
-    ) -> Vec<sketch_dcf::SketchOutput<U>> {
-        println!("Sketching frontier {:?} to {:?}", start, end);
-        // sketch_vectors[i][j] = { j'th value expanded from i'th key }
-
-        assert!(start < end);
-        assert!(end <= self.keys.len());
-
-        let mut sketch_vectors = Vec::with_capacity(end - start);
-        for _ in &self.keys[start..end] {
-            sketch_vectors.push(Vec::with_capacity(self.frontier_last.len()));
-        }
-
-        for node in &self.frontier_last {
-            for (i, vec) in sketch_vectors.iter_mut().enumerate() {
-                vec.push(node.key_values[start + i].clone());
-            }
-        }
-
-        //use cpuprofiler::PROFILER;
-        //PROFILER.lock().unwrap().start("./sketch.profile").unwrap();
-
-        let out = self
-            .keys[start..end]
-            .par_iter()
-            .enumerate()
-            .map(|(i, k)| {
-                let mut stream = self.rand_stream.clone();
-                k.1.sketch_at_last(&sketch_vectors[i], &mut stream)
-            })
-            .collect::<Vec<sketch_dcf::SketchOutput<U>>>();
-
-        //PROFILER.lock().unwrap().stop().unwrap();
-        println!("... Done");
-
-        out
-    }
-
-    pub fn apply_sketch_results(&mut self, res: &[bool]) {
-        assert_eq!(res.len(), self.keys.len());
-
-        // Remove invalid keys
-        for (i, alive) in res.iter().enumerate() {
-            self.keys[i].0 &= alive;
-        }
-    }
 
     pub fn tree_prune(&mut self, alive_vals: &[bool]) {
         assert_eq!(alive_vals.len(), self.frontier.len());
@@ -314,6 +348,7 @@ where
         //println!("Size of frontier: {:?}", self.frontier.len());
     }
 
+
     pub fn keep_values(nclients: usize, threshold: &T, vals0: &[T], vals1: &[T]) -> Vec<bool> {
         assert_eq!(vals0.len(), vals1.len());
 
@@ -322,12 +357,13 @@ where
         for i in 0..vals0.len() {
             let mut v = T::zero();
             v.add(&vals0[i]);
-            v.add(&vals1[i]);
-            //println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
+            v.sub(&vals1[i]);
+            // println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
 
             debug_assert!(v <= nclients);
 
             // Keep nodes that are above threshold
+            // println!("{:?}",v);
             keep.push(v >= *threshold);
         }
 
@@ -341,13 +377,18 @@ where
         let mut keep = vec![];
         for i in 0..vals0.len() {
             let mut v = U::zero();
-            v.add(&vals0[i]);
-            v.add(&vals1[i]);
-            //println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
+            let mut v0 = vals0[i].clone();
+            let mut v1 = vals1[i].clone();
+            v0.reduce();
+            v1.reduce();
+            v.add(&v0);
+            v.sub(&v1);
+            // println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
 
             debug_assert!(v <= nclients);
 
             // Keep nodes that are above threshold
+            // println!("{:?}",v);
             keep.push(v >= *threshold);
         }
 
@@ -355,15 +396,16 @@ where
     }
 
 
+
     pub fn final_shares(&self) -> Vec<Result<U>> {
         let mut alive = vec![];
         for n in &self.frontier_last {
             alive.push(Result::<U> {
                 path: n.path.clone(),
-                value: n.value.clone(),
+                value: n.value.clone()
             });
 
-            println!("Final {:?}, value={:?}", n.path, n.value);
+            println!("Final {:?}", n.path);
         }
 
         alive
@@ -377,8 +419,12 @@ where
             assert_eq!(res0[i].path, res1[i].path);
 
             let mut v = U::zero();
-            v.add(&res0[i].value);
-            v.add(&res1[i].value);
+            let mut v0 = res0[i].value.clone();
+            let mut v1 = res1[i].value.clone();
+            v0.reduce();
+            v1.reduce();
+            v.add(&v0);
+            v.sub(&v1);
 
             out.push(Result {
                 path: res0[i].path.clone(),

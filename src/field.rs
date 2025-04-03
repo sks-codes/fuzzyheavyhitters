@@ -6,8 +6,9 @@ use num_bigint::{BigUint, RandBigInt};
 use serde::Deserialize;
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::u32;
+use scuttlebutt::Block;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FieldElm {
@@ -444,6 +445,52 @@ where
         self.1.from_rng(&mut rng);
     }
 }
+
+
+impl TryFrom<Block> for FieldElm {
+    type Error = &'static str;
+
+    fn try_from(block: Block) -> Result<Self, Self::Error> {
+        let bytes = block.as_ref();
+        let value = BigUint::from_bytes_be(bytes);
+        if FieldElm::from(value.clone()) >= *MODULUS {
+            Err("Value too large for FieldElm")
+        } else {
+            Ok(FieldElm { value })
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockPair(pub [Block; 2]);
+impl TryFrom<BlockPair> for FieldElm {
+    type Error = &'static str;
+
+    fn try_from(blocks: BlockPair) -> Result<Self, Self::Error> {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(blocks.0[0].as_ref());
+        bytes[16..].copy_from_slice(blocks.0[1].as_ref());
+        let value = BigUint::from_bytes_be(&bytes);
+        Ok(FieldElm { value })
+    }
+}
+
+impl From<FieldElm> for BlockPair {
+    fn from(fe: FieldElm) -> BlockPair {
+        let bytes = fe.value.to_bytes_be();
+        assert!(bytes.len() <= 32, "FieldElm value too large for BlockPair");
+
+        let mut padded = [0u8; 32];
+        // Pad with leading zeros (MSB side for big-endian)
+        padded[32 - bytes.len()..].copy_from_slice(&bytes);
+
+        let mut blocks = [Block::default(); 2];
+        blocks[0].as_mut().copy_from_slice(&padded[..16]);
+        blocks[1].as_mut().copy_from_slice(&padded[16..]);
+        BlockPair(blocks)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

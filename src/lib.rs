@@ -4,13 +4,13 @@ pub mod collect;
 pub mod config;
 pub mod dpf;
 pub mod fastfield;
-mod field;
+pub mod field;
 pub mod mpc;
 pub mod prg;
 pub mod rpc;
 pub mod sketch;
 pub mod ibDCF;
-pub mod sketch_dcf;
+pub mod equalitytest;
 
 #[macro_use]
 extern crate lazy_static;
@@ -122,6 +122,76 @@ pub fn bits_to_string(bits: &[bool]) -> String {
     out
 }
 
+fn all_bit_vectors(n: usize) -> Vec<Vec<bool>> {
+    (0..1 << n)
+        .map(|num| {
+            (0..n)
+                .map(|i| (num >> i) & 1 == 1) // Extract each bit
+                .collect::<Vec<bool>>()
+        })
+        .collect()
+}
+
+pub fn add_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
+    let max_len = alpha.len().max(beta.len());
+    let mut alpha_padded = vec![false; max_len - alpha.len()];
+    alpha_padded.extend(alpha);
+    let mut beta_padded = vec![false; max_len - beta.len()];
+    beta_padded.extend(beta);
+    let mut sum = Vec::new();
+    let mut carry = false;
+
+    // Iterate from LSB to MSB
+    for (a, b) in alpha_padded.iter().rev().zip(beta_padded.iter().rev()) {
+        let (s, c) = full_adder(*a, *b, carry);
+        sum.push(s);
+        carry = c;
+    }
+    if carry {
+        sum.push(true);
+    }
+    // Reverse to get MSB first ordering
+    sum.into_iter().rev().collect()
+}
+
+pub fn subtract_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
+    let max_len = alpha.len().max(beta.len());
+    let mut alpha_padded = vec![false; max_len - alpha.len()];
+    alpha_padded.extend(alpha);
+    let mut beta_padded = vec![false; max_len - beta.len()];
+    beta_padded.extend(beta);
+
+    let mut beta_twos_complement: Vec<bool> = beta_padded.iter().map(|b| !b).collect();
+
+    let mut carry = true;
+    for bit in beta_twos_complement.iter_mut().rev() {
+        let sum = *bit ^ carry;
+        carry = *bit && carry;
+        *bit = sum;
+        if !carry { break; }
+    }
+
+    let mut result = Vec::new();
+    let mut carry = false;
+
+    for (a, b) in alpha_padded.iter().rev().zip(beta_twos_complement.iter().rev()) {
+        let (s, c) = full_adder(*a, *b, carry);
+        result.push(s);
+        carry = c;
+    }
+
+    // If there’s a carry-out, ignore it (overflow)
+
+    // Reverse to get MSB-first ordering
+    result.into_iter().rev().collect()
+}
+
+// Helper function for single-bit addition with carry
+fn full_adder(a: bool, b: bool, carry_in: bool) -> (bool, bool) {
+    let sum = a ^ b ^ carry_in;
+    let carry_out = (a & b) | (b & carry_in) | (a & carry_in);
+    (sum, carry_out)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

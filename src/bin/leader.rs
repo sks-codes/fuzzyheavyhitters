@@ -1,26 +1,13 @@
-use counttree::{
-    FieldElm,
-    collect, config, fastfield, mpc,
-    rpc::{
-        AddKeysRequest, FinalSharesRequest, ResetRequest,
-        TreeInitRequest,
-        TreeCrawlRequest,
-        TreeCrawlLastRequest,
-        TreeOutSharesRequest,
-        TreeOutSharesLastRequest,
-        TreePruneRequest,
-        TreePruneLastRequest,
-        TreeSketchFrontierRequest,
-        TreeSketchFrontierLastRequest,
-    },
-    sketch_dcf,
-};
+use counttree::{add_bitstrings, collect, config, fastfield, rpc::{
+    AddKeysRequest, FinalSharesRequest, ResetRequest,
+    TreeInitRequest,
+    TreeCrawlRequest,
+}, string_to_bits, FieldElm, MSB_u32_to_bits};
 
 use std::time::Instant;
 
 use futures::try_join;
 use std::io;
-
 use rand::Rng;
 use rayon::prelude::*;
 use tarpc::{
@@ -34,9 +21,10 @@ use tarpc::{
 use rand::distributions::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
+use counttree::ibDCF::{eval_str, ibDCFKey};
+use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
 
-type SketchKey = sketch_dcf::SketchDCFKey<fastfield::FE,FieldElm>;
-
+type IntervalKey = (ibDCFKey, ibDCFKey);
 fn long_context() -> context::Context {
     let mut ctx = context::current();
 
@@ -53,21 +41,19 @@ fn sample_string(len: usize) -> String {
         .collect()
 }
 
-fn generate_keys(cfg: &config::Config) -> (Vec<SketchKey>, Vec<SketchKey>) {
-    let (keys0, keys1): (Vec<SketchKey>, Vec<SketchKey>) = rayon::iter::repeat(0)
+fn generate_keys(cfg: &config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) {
+    let (keys0, keys1): (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) = rayon::iter::repeat(0)
         .take(cfg.num_sites)
         .map(|_| {
             let data_string = sample_string(cfg.data_len);
-            let keys = sketch_dcf::SketchDCFKey::gen_from_str(&data_string, false);
-
-            // XXX remove these clones
-            (keys[0].clone(), keys[1].clone())
+            let keys = ibDCFKey::gen_l_inf_ball(string_to_bits(&data_string).as_slice(), cfg.n_dims);
+            (keys.0.clone(), keys.1.clone())
         })
+        .collect::<Vec<_>>()
+        .into_iter()
         .unzip();
-
     let encoded: Vec<u8> = bincode::serialize(&keys0[0]).unwrap();
     println!("Key size: {:?} bytes", encoded.len());
-
     (keys0, keys1)
 }
 
@@ -99,8 +85,8 @@ async fn add_keys(
     cfg: &config::Config,
     client0: counttree::CollectorClient,
     client1: counttree::CollectorClient,
-    keys0: &[sketch_dcf::SketchDCFKey<fastfield::FE,FieldElm>],
-    keys1: &[sketch_dcf::SketchDCFKey<fastfield::FE,FieldElm>],
+    keys0: &[Vec<IntervalKey>],
+    keys1: &[Vec<IntervalKey>],
     nreqs: usize,
 ) -> io::Result<()> {
     use rand::distributions::Distribution;
@@ -111,65 +97,21 @@ async fn add_keys(
     let mut addkey1 = Vec::with_capacity(nreqs);
 
     for _j in 0..nreqs {
-        let sample = zipf.sample(&mut rng) - 1; //TODO: replace
+        let sample = zipf.sample(&mut rng) - 1;
         addkey0.push(keys0[sample].clone());
         addkey1.push(keys1[sample].clone());
     }
 
-    let req0 = AddKeysRequest { keys: addkey0 };//TODO: might not work with new keys
-    let req1 = AddKeysRequest { keys: addkey1 };//TODO: might not work with new keys
 
-    let response0 = client0.add_keys(long_context(), req0.clone()); //TODO: might not work with new keys
-    let response1 = client1.add_keys(long_context(), req1.clone()); //TODO: might not work with new keys
+    let req0 = AddKeysRequest { keys: addkey0 };
+    let req1 = AddKeysRequest { keys: addkey1 };
+
+    let response0 = client0.add_keys(long_context(), req0.clone());
+    let response1 = client1.add_keys(long_context(), req1.clone());
 
     try_join!(response0, response1).unwrap();
 
     Ok(())
-}
-
-async fn verify_sketches(
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
-    level: usize,
-    start: usize,
-    end: usize,
-) -> io::Result<Vec<bool>> {
-    // Cor shares
-    let req = TreeSketchFrontierRequest { level, start, end };
-    let response0 = client0.tree_sketch_frontier(long_context(), req.clone());
-    let response1 = client1.tree_sketch_frontier(long_context(), req);
-    let (cor_shares0, cor_shares1) = try_join!(response0, response1).unwrap();
-    let cor = mpc::ManyMulState::cors(&cor_shares0, &cor_shares1);
-
-    // Out shares
-    let req = TreeOutSharesRequest { cor };
-    let response0 = client0.tree_out_shares(long_context(), req.clone());
-    let response1 = client1.tree_out_shares(long_context(), req);
-    let (out_shares0, out_shares1) = try_join!(response0, response1).unwrap();
-
-    Ok(mpc::ManyMulState::verify(&out_shares0, &out_shares1))
-}
-
-async fn verify_sketches_last(
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
-    start: usize,
-    end: usize,
-) -> io::Result<Vec<bool>> {
-    // Cor shares
-    let req = TreeSketchFrontierLastRequest { start, end }; //TODO:fix whole function (maybe get rid of it though)
-    let response0 = client0.tree_sketch_frontier_last(long_context(), req.clone());
-    let response1 = client1.tree_sketch_frontier_last(long_context(), req);
-    let (cor_shares0, cor_shares1) = try_join!(response0, response1).unwrap();
-    let cor = mpc::ManyMulState::cors(&cor_shares0, &cor_shares1);
-
-    // Out shares
-    let req = TreeOutSharesLastRequest { cor };
-    let response0 = client0.tree_out_shares_last(long_context(), req.clone());
-    let response1 = client1.tree_out_shares_last(long_context(), req);
-    let (out_shares0, out_shares1) = try_join!(response0, response1).unwrap();
-
-    Ok(mpc::ManyMulState::verify(&out_shares0, &out_shares1))
 }
 
 async fn run_level(
@@ -190,10 +132,15 @@ async fn run_level(
         "-",
         start_time.elapsed().as_secs_f64()
     );
-    let req = TreeCrawlRequest {};
-    let response0 = client0.tree_crawl(long_context(), req.clone());
-    let response1 = client1.tree_crawl(long_context(), req);
+
+    let req0 = TreeCrawlRequest { gc_sender: true };
+    let req1 = TreeCrawlRequest { gc_sender: false };
+
+    let response0 = client0.tree_crawl(long_context(), req0);
+    let response1 = client1.tree_crawl(long_context(), req1);
+
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
+
     println!(
         "TreeCrawlDone {:?} {:?} {:?}",
         level,
@@ -201,39 +148,10 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    println!(
-        "SketchStart {:?} {:?} {:?}",
-        level,
-        "-",
-        start_time.elapsed().as_secs_f64()
-    );
-
-    let sketch_start = Instant::now();
-
-    // Run sketching in chunks of cfg.sketch_batch_size to avoid having huge RPC messages.
-    let mut start = 0;
-    while start < nreqs {
-        let end = std::cmp::min(nreqs, start + cfg.sketch_batch_size);
-        let out = verify_sketches(client0, client1, level, start, end).await?;
-        start += cfg.sketch_batch_size;
-
-        for v in out {
-            // assert!(v); /TODO
-        }
-    }
-
-    println!(
-        "SketchDone {:?} {:?} {:?} rate={:?}",
-        level,
-        "-",
-        start_time.elapsed().as_secs_f64(),
-        (nreqs as f64) / sketch_start.elapsed().as_secs_f64()
-    );
-
     assert_eq!(vals0.len(), vals1.len());
-    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1); //TODO: change this function to be mpc
-    //println!("Keep: {:?}", keep);
-    //println!("KeepLen: {:?}", keep.len());
+    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1);
+
+    println!("Keep: {:?}", keep);
 
     // Tree prune
     let req = TreePruneRequest { keep };
@@ -256,53 +174,31 @@ async fn run_level_last(
 
     // Tree crawl
     println!(
-        "TreeCrawlStart last {:?} {:?}",
+        "TreeCrawlStart LAST {:?} {:?}",
         "-",
         start_time.elapsed().as_secs_f64()
     );
-    let req = TreeCrawlLastRequest {};
-    let response0 = client0.tree_crawl_last(long_context(), req.clone());
-    let response1 = client1.tree_crawl_last(long_context(), req);
+
+    let req0 = TreeCrawlLastRequest { gc_sender: true };
+    let req1 = TreeCrawlLastRequest { gc_sender: false };
+
+    let response0 = client0.tree_crawl_last(long_context(), req0);
+    let response1 = client1.tree_crawl_last(long_context(), req1);
+
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
+
     println!(
-        "TreeCrawlDone last {:?} {:?}",
+        "TreeCrawlDone LAST {:?} {:?}",
         "-",
         start_time.elapsed().as_secs_f64()
-    );
-
-    println!(
-        "SketchStart last {:?} {:?}",
-        "-",
-        start_time.elapsed().as_secs_f64()
-    );
-
-    let sketch_start = Instant::now();
-
-    // Run sketching in chunks of cfg.sketch_batch_size to avoid having huge RPC messages.
-    let mut start = 0;
-    while start < nreqs {
-        let end = std::cmp::min(nreqs, start + cfg.sketch_batch_size_last);
-        let out = verify_sketches_last(client0, client1, start, end).await?;
-        start += cfg.sketch_batch_size_last;
-
-        for v in out {
-            assert!(v);
-        }
-    }
-
-    println!(
-        "SketchDone last {:?} {:?} rate={:?}",
-        "-",
-        start_time.elapsed().as_secs_f64(),
-        (nreqs as f64) / sketch_start.elapsed().as_secs_f64()
     );
 
     assert_eq!(vals0.len(), vals1.len());
     let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values_last(nreqs, &threshold, &vals0, &vals1);
-    //println!("Keep: {:?}", keep);
-    //println!("KeepLen: {:?}", keep.len());
 
-    // Tree prune
+    println!("Keep: {:?}", keep);
+
+    // Tree prune //TODO: fix
     let req = TreePruneLastRequest { keep };
     let response0 = client0.tree_prune_last(long_context(), req.clone());
     let response1 = client1.tree_prune_last(long_context(), req);
@@ -319,14 +215,11 @@ async fn final_shares(
     let req = FinalSharesRequest {};
     let response0 = client0.final_shares(long_context(), req.clone());
     let response1 = client1.final_shares(long_context(), req);
-    try_join!(response0, response1).unwrap();
+    let (vals0, vals1) = try_join!(response0, response1).unwrap();
 
-    /*
     for res in &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1) {
         println!("Path = {:?}", res.path);
-        let s = crate::bits_to_string(&res.path);
-        println!("Value: {:?} = {:?}", s, res.value);
-    }*/
+    }
 
     Ok(())
 }
@@ -354,6 +247,7 @@ async fn main() -> io::Result<()> {
     println!("Generating keys...");
     let (keys0, keys1) = generate_keys(&cfg);
     println!("Done.");
+
     let delta = start.elapsed().as_secs_f64();
     println!(
         "Generated {:?} keys in {:?} seconds ({:?} sec/key)",
@@ -392,9 +286,11 @@ async fn main() -> io::Result<()> {
 
     tree_init(&mut client0, &mut client1).await?;
 
+
     let start = Instant::now();
+    let mut active_paths = 0;
     for level in 0..cfg.data_len-1 {
-        let active_paths = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
+        active_paths = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
 
         println!(
             "Level {:?} active_paths={:?} {:?}",
