@@ -5,6 +5,7 @@ use std::{fs, net::SocketAddr};
 pub struct Config {
     pub data_len: usize,
     pub n_dims: usize,
+    pub ball_size: usize,
     pub addkey_batch_size: usize,
     pub sketch_batch_size: usize,
     pub sketch_batch_size_last: usize,
@@ -25,6 +26,7 @@ pub fn get_config(filename: &str) -> Config {
 
     let data_len: usize = v["data_len"].as_u64().expect("Can't parse data_len") as usize;
     let n_dims: usize = v["n_dims"].as_u64().expect("Can't parse data_len") as usize;
+    let ball_size: usize = v["ball_size"].as_u64().expect("Can't parse data_len") as usize;
     let addkey_batch_size: usize = v["addkey_batch_size"]
         .as_u64()
         .expect("Can't parse addkey_batch_size") as usize;
@@ -45,6 +47,7 @@ pub fn get_config(filename: &str) -> Config {
     Config {
         data_len,
         n_dims,
+        ball_size,
         addkey_batch_size,
         sketch_batch_size,
         sketch_batch_size_last,

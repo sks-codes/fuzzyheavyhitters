@@ -10,8 +10,10 @@ use std::{
     os::unix::net::UnixStream,
 };
 use std::io::{Read, Write};
+use std::time::Instant;
 use fancy_garbling::util::RngExt;
 use ocelot::ot::Sender;
+use rayon::prelude::*;
 
 /// A structure that contains both the garbler and the evaluators
 /// wires. This structure simplifies the API of the garbled circuit.
@@ -19,32 +21,6 @@ struct EQInputs<F> {
     pub garbler_wires: BinaryBundle<F>,
     pub evaluator_wires: BinaryBundle<F>,
 }
-
-/// The garbler's main method:
-/// (1) The garbler is first created using the passed rng and value.
-/// (2) The garbler then exchanges their wires obliviously with the evaluator.
-/// (3) The garbler and the evaluator then run the garbled circuit.
-/// (4) The garbler and the evaluator open the result of the computation.
-// pub fn gb_equality_test<C>(rng : &mut AesRng, channel : &mut C, input: &[u16]) -> bool
-// where
-//     C: AbstractChannel + std::clone::Clone,
-// {
-//     let mask = rng.clone().gen_bool();
-//     let mut input_vec = input.to_vec();
-//     input_vec.push(mask as u16);
-//     let masked_input = input_vec.as_slice();
-//     // (1)
-//     let mut gb =
-//         Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-//     // (2)
-//     let circuit_wires = gb_set_fancy_inputs(&mut gb, masked_input, );
-//     // (3)
-//     let eq = fancy_equality::<Garbler<C, AesRng, OtSender, AllWire>>(&mut gb, circuit_wires).unwrap();
-//     // (4)
-//     gb.outputs(eq.wires()).unwrap();
-//
-//     mask
-// }
 
 pub fn multiple_gb_equality_test<C>(
     rng: &mut AesRng,
@@ -57,22 +33,36 @@ where
     let num_tests = inputs.len();
     let mut results = Vec::with_capacity(num_tests);
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    // let start = Instant::now();
+    // println!("Step 1");
     let masked_inputs =
         inputs.iter().map(|input| {
             let mask = rng.clone().gen_bool();
             results.push(mask);
             [input.as_slice(), &[mask as u16]].concat()
         }).collect::<Vec<Vec<u16>>>();
+
+    // let step1_time = start.elapsed();
+    // println!("time: {:?}", step1_time);
+    // println!("Step 2");
+
     let wire_inputs = masked_inputs.into_iter().flatten().collect::<Vec<u16>>();
     let wires = gb_set_fancy_inputs(&mut gb, wire_inputs.as_slice(), inputs.len());
+
+    // let step2_time = start.elapsed() - step1_time;
+    // println!("time: {:?}", step2_time);
+    // println!("Step 3");
+
     let eq = fancy_equality(&mut gb, wires, num_tests).unwrap();
     gb.outputs(eq.wires()).unwrap();
+    // let step3_time = start.elapsed() - step1_time - step2_time;
+    // println!("time: {:?}", step3_time);
+    // println!("Step 4");
     channel.flush().unwrap();
     let mut ack = [0u8; 1];
     channel.read_bytes(&mut ack).unwrap();
     results
 }
-
 
 /// The garbler's wire exchange method
 fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u16], num_tests : usize) -> EQInputs<F::Item>
@@ -91,35 +81,7 @@ where
     }
 }
 
-/// The evaluator's main method:
-/// (1) The evaluator is first created using the passed rng and value.
-/// (2) The evaluator then exchanges their wires obliviously with the garbler.
-/// (3) The evaluator and the garbler then run the garbled circuit.
-/// (4) The evaluator and the garbler open the result of the computation.
-/// (5) The evaluator translates the binary output of the circuit into its decimal
-///     representation.
-// pub fn ev_equality_test<C>(rng : &mut AesRng, channel : &mut C, input: &[u16], num_tests: usize) -> Vec<bool>
-// where
-//     C: AbstractChannel + std::clone::Clone,
-// {
-//     // (1)
-//     let mut ev =
-//         Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-//     // (2)
-//     let circuit_wires = ev_set_fancy_inputs(&mut ev, input);
-//     // (3)
-//     let garbled_comp_bits =
-//         fancy_equality::<Evaluator<C, AesRng, OtReceiver, AllWire>>(&mut ev, circuit_wires, num_tests).unwrap();
-//     // (4)
-//     let comp_bit = ev
-//         .outputs(garbled_comp_bits.wires())
-//         .unwrap()
-//         .expect("evaluator should produce outputs");
-//     // (5)
-//     comp_bit.iter().map(|r| *r == 1).collect::<Vec<bool>>()
-// }
 
-// Evaluator side
 pub fn multiple_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,

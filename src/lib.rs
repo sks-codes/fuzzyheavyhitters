@@ -122,14 +122,10 @@ pub fn bits_to_string(bits: &[bool]) -> String {
     out
 }
 
-fn all_bit_vectors(n: usize) -> Vec<Vec<bool>> {
-    (0..1 << n)
-        .map(|num| {
-            (0..n)
-                .map(|i| (num >> i) & 1 == 1) // Extract each bit
-                .collect::<Vec<bool>>()
-        })
-        .collect()
+fn all_bit_vectors(dim: usize) -> Vec<Vec<bool>> {
+    (0..1 << dim).map(|i| {
+        (0..dim).map(|j| (i >> j) & 1 == 1).collect()
+    }).collect()
 }
 
 pub fn add_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
