@@ -1,4 +1,5 @@
-use crate::{add_bitstrings, prg, subtract_bitstrings};
+use std::cmp::{max, min};
+use crate::{add_bitstrings, bits_to_u32, prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
 use crate::Group;
 
 use serde::Deserialize;
@@ -163,18 +164,22 @@ impl ibDCFKey
 
     pub fn gen_interval(left_bits: &[bool], right_bits: &[bool]) -> ((ibDCFKey, ibDCFKey), (ibDCFKey, ibDCFKey)){
         // let r = &[false; 512];
-        let l_minus_one = left_bits.to_vec();//subtract_bitstrings(left_bits, &[true]);
-        let r_plus_one = right_bits.to_vec(); //add_bitstrings(right_bits, &[true]);
+        let l_minus_one = left_bits.to_vec();
+        let r_plus_one = right_bits.to_vec();
         let left_key = Self::gen_ibDCF(l_minus_one.as_slice(), true);
         let right_key = Self::gen_ibDCF(r_plus_one.as_slice(), false);
         ((left_key.0, right_key.0), (left_key.1, right_key.1))
     }
 
-    pub fn gen_l_inf_ball(alpha : &[bool], d : usize) -> (Vec<(ibDCFKey, ibDCFKey)>, Vec<(ibDCFKey, ibDCFKey)>){
+    pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(ibDCFKey, ibDCFKey)>, Vec<(ibDCFKey, ibDCFKey)>){
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
-        for _ in 0..d {
-            let (k0, k1) = Self::gen_interval(alpha, alpha);
+        let delta = MSB_u32_to_bits(32, size);
+        for i in 0..alpha.len() {
+            let left = subtract_bitstrings(alpha[i].as_slice(), delta.as_slice());
+            let right = add_bitstrings(alpha[i].as_slice(), delta.as_slice());
+            assert_eq!(left.len(), right.len());
+            let (k0, k1) = Self::gen_interval(left.as_slice(), right.as_slice());
             s0_keys.push(k0);
             s1_keys.push(k1);
         }

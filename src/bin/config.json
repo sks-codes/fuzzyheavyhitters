@@ -1,7 +1,8 @@
 {
-  "data_len": 32,
+  "data_len": 16,
   "n_dims": 2,
-  "threshold": 0.01,
+  "ball_size": 5,
+  "threshold": 0.005,
   "server0": "0.0.0.0:8000",
   "server1": "0.0.0.0:8001",
   "addkey_batch_size": 100,
