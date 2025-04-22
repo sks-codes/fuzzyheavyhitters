@@ -12,6 +12,7 @@ use ocelot::ot::{Receiver, Sender};
 use crate::equalitytest::{multiple_gb_equality_test, multiple_ev_equality_test};
 use crate::field::BlockPair;
 use std::marker::PhantomData;
+use std::net::TcpStream;
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -369,7 +370,7 @@ where
     pub fn tree_crawl(
         &mut self,
         gc_sender: bool,
-        channels: &mut [&mut SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>]
+        channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>]
     ) -> Vec<T> {
         println!("Crawl");
         let start = Instant::now();
@@ -774,7 +775,7 @@ where
     pub fn tree_crawl_last(
         &mut self,
         gc_sender: bool,
-        channels: &mut [&mut SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>]
+        channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>]
     ) -> Vec<U> {
         println!("Crawl");
         let start = Instant::now();

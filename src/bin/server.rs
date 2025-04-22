@@ -23,6 +23,7 @@ use std::{
 };
 use std::convert::TryFrom;
 use std::io::{BufReader, BufWriter};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::thread::available_parallelism;
@@ -36,7 +37,8 @@ use tarpc::{
 use counttree::rpc::TreeCrawlLastRequest;
 
 extern crate num_cpus;
-type MyChannel = scuttlebutt::SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>;
+// type MyChannel = scuttlebutt::SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>;
+type MyChannel = scuttlebutt::SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>;
 
 
 #[derive(Clone)]
@@ -169,65 +171,75 @@ impl Collector for CollectorServer {
     }
 }
 
-fn setup_unix_socket(server_idx: u16) -> io::Result<MyChannel> {
-    const SOCKET_PATH: &str = "/tmp/gc-server-socket";
+// fn setup_unix_sockets(server_idx: u16, num_cpus: usize) -> io::Result<Vec<Arc<Mutex<MyChannel>>>> {
+//
+//     let mut channels = Vec::with_capacity(num_cpus);
+//
+//     for i in 0..num_cpus {
+//         let socket_path = format!("/tmp/gc-server-socket-{}", i);
+//
+//         let channel_result = if server_idx == 0 {
+//             // Garbler (client) side - with retries
+//             connect_with_retries(&socket_path)
+//         } else {
+//             // Evaluator (server) side
+//             create_server_socket(&socket_path)
+//         };
+//
+//         // Handle the Result here before pushing to vector
+//         let channel = channel_result?; // This will return early if error occurs
+//         channels.push(Arc::new(Mutex::new(channel)));
+//     }
+//
+//     Ok(channels)
+// }
 
-    if server_idx == 0 {
-        for _ in 0..20 {
-            match UnixStream::connect(SOCKET_PATH) {
-                Ok(stream) => {
-                    return Ok(scuttlebutt::SyncChannel::new(
-                        BufReader::new(stream.try_clone()?),
-                        BufWriter::new(stream),
-                    ));
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(500)),
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::ConnectionRefused, "Failed to connect after 5 attempts"))
-    } else {
-        // Server 1 (Evaluator) - Bind and listen
-        let _ = std::fs::remove_file(SOCKET_PATH);
-        let listener = UnixListener::bind(SOCKET_PATH)?;
-        let (stream, _) = listener.accept()?;
-        Ok(scuttlebutt::SyncChannel::new(
-            BufReader::new(stream.try_clone()?),
-            BufWriter::new(stream),
-        ))
-    }
+fn create_server_tcp_socket(port: u16) -> io::Result<MyChannel> {
+    let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)));
+    let (stream, _) = listener.unwrap().accept()?;
+    stream.set_nodelay(true)?;
+
+    Ok(scuttlebutt::SyncChannel::new(
+        BufReader::new(stream.try_clone()?),
+        BufWriter::new(stream),
+    ))
 }
 
-fn setup_unix_sockets(server_idx: u16, num_cpus: usize) -> io::Result<Vec<Arc<Mutex<MyChannel>>>> {
-
+fn setup_tcp_sockets(
+    server_idx: u16,
+    num_cpus: usize,
+    server0_addr: SocketAddr,
+    server1_addr: SocketAddr,
+) -> io::Result<Vec<Arc<Mutex<MyChannel>>>> {
     let mut channels = Vec::with_capacity(num_cpus);
+    let base_port = server1_addr.port(); // Use the port from the provided address
 
     for i in 0..num_cpus {
-        let socket_path = format!("/tmp/gc-server-socket-{}", i);
-
+        let port = base_port + i as u16;
         let channel_result = if server_idx == 0 {
-            // Garbler (client) side - with retries
-            connect_with_retries(&socket_path)
+            // Garbler (client) side - connect to server1
+            let target_addr = SocketAddr::new(server1_addr.ip(), port);
+            connect_with_retries_tcp(target_addr)
         } else {
-            // Evaluator (server) side
-            create_server_socket(&socket_path)
+            // Evaluator (server) side - listen for connections from server0
+            create_server_tcp_socket(port)
         };
 
-        // Handle the Result here before pushing to vector
-        let channel = channel_result?; // This will return early if error occurs
+        let channel = channel_result?;
         channels.push(Arc::new(Mutex::new(channel)));
     }
 
     Ok(channels)
 }
 
-// Helper function for client connection with retries
-fn connect_with_retries(socket_path: &str) -> io::Result<MyChannel> {
+fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
     let mut retries = 0;
     let mut last_error = None;
 
     loop {
-        match UnixStream::connect(socket_path) {
+        match TcpStream::connect(addr) {
             Ok(stream) => {
+                stream.set_nodelay(true)?;
                 return Ok(scuttlebutt::SyncChannel::new(
                     BufReader::new(stream.try_clone()?),
                     BufWriter::new(stream),
@@ -238,8 +250,8 @@ fn connect_with_retries(socket_path: &str) -> io::Result<MyChannel> {
                 if retries >= 10 {
                     return Err(io::Error::new(
                         io::ErrorKind::ConnectionRefused,
-                        format!("Failed to connect after {} retries: {:?}",
-                                10, last_error)
+                        format!("Failed to connect to {} after {} retries: {:?}",
+                                addr, 10, last_error)
                     ));
                 }
                 retries += 1;
@@ -249,24 +261,54 @@ fn connect_with_retries(socket_path: &str) -> io::Result<MyChannel> {
     }
 }
 
+
+// Helper function for client connection with retries
+// fn connect_with_retries(socket_path: &str) -> io::Result<MyChannel> {
+//     let mut retries = 0;
+//     let mut last_error = None;
+//
+//     loop {
+//         match UnixStream::connect(socket_path) {
+//             Ok(stream) => {
+//                 return Ok(scuttlebutt::SyncChannel::new(
+//                     BufReader::new(stream.try_clone()?),
+//                     BufWriter::new(stream),
+//                 ));
+//             }
+//             Err(e) => {
+//                 last_error = Some(e);
+//                 if retries >= 10 {
+//                     return Err(io::Error::new(
+//                         io::ErrorKind::ConnectionRefused,
+//                         format!("Failed to connect after {} retries: {:?}",
+//                                 10, last_error)
+//                     ));
+//                 }
+//                 retries += 1;
+//                 std::thread::sleep(Duration::from_millis(500));
+//             }
+//         }
+//     }
+// }
+
 // Helper function for server socket creation
-fn create_server_socket(socket_path: &str) -> io::Result<MyChannel> {
-    // Clean up any existing socket file
-    let _ = std::fs::remove_file(socket_path);
-
-    // Create parent directory if needed
-    if let Some(parent) = Path::new(socket_path).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let listener = UnixListener::bind(socket_path)?;
-    let (stream, _) = listener.accept()?;
-
-    Ok(scuttlebutt::SyncChannel::new(
-        BufReader::new(stream.try_clone()?),
-        BufWriter::new(stream),
-    ))
-}
+// fn create_server_socket(socket_path: &str) -> io::Result<MyChannel> {
+//     // Clean up any existing socket file
+//     let _ = std::fs::remove_file(socket_path);
+//
+//     // Create parent directory if needed
+//     if let Some(parent) = Path::new(socket_path).parent() {
+//         std::fs::create_dir_all(parent)?;
+//     }
+//
+//     let listener = UnixListener::bind(socket_path)?;
+//     let (stream, _) = listener.accept()?;
+//
+//     Ok(scuttlebutt::SyncChannel::new(
+//         BufReader::new(stream.try_clone()?),
+//         BufWriter::new(stream),
+//     ))
+// }
 
 
 #[tokio::main]
@@ -302,7 +344,11 @@ async fn main() -> io::Result<()> {
     let num_cpus = available_parallelism().unwrap().get();
 
 
-    let gc_channels = setup_unix_sockets(server_idx, num_cpus).unwrap_or_else(|e| {
+    // let gc_channels = setup_unix_sockets(server_idx, num_cpus).unwrap_or_else(|e| {
+    //     eprintln!("Warning: Failed to setup GC channels: {}", e);
+    //     vec![] // Fallback to no channels
+    // });
+    let gc_channels = setup_tcp_sockets(server_idx, num_cpus, cfg.server0, cfg.server1).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to setup GC channels: {}", e);
         vec![] // Fallback to no channels
     });
