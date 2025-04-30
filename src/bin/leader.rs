@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use futures::try_join;
 use std::io;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use rayon::prelude::*;
 use tarpc::{
     client,
@@ -23,6 +23,7 @@ use rand::distributions::Alphanumeric;
 use std::time::{Duration, SystemTime};
 use counttree::ibDCF::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
+use counttree::sample_covid_data::sample_covid_locations;
 
 type IntervalKey = (ibDCFKey, ibDCFKey);
 fn long_context() -> context::Context {
@@ -61,6 +62,16 @@ fn generate_strings(cfg: &config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>
             generate_random_bit_vectors(cfg.data_len - aug_len, cfg.n_dims) //leaving space for later per-client augmentation
         })
         .collect::<Vec<Vec<Vec<bool>>>>()
+}
+fn generate_covid_samples(nreq : usize, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
+    let covid_path = "data/COVID-19_Case_Surveillance_Public_Use_Data_with_Geography_20250430.csv";
+    let centroids_path = "data/county_centroids.csv";
+    if aug_len > 0 {
+        sample_covid_locations(&covid_path, &centroids_path, nreq, Some(aug_len as f64)).unwrap()
+    }
+    else{
+        sample_covid_locations(&covid_path, &centroids_path, nreq, None).unwrap()
+    }
 }
 
 fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
@@ -130,9 +141,9 @@ async fn add_fuzzy_keys(
     let mut addkey0 = Vec::with_capacity(nreqs);
     let mut addkey1 = Vec::with_capacity(nreqs);
 
-    for _j in 0..nreqs {
+    for i in 0..nreqs {
         let sample = zipf.sample(&mut rng) - 1;
-        let key_str = augment_string(strings[sample].clone(), aug_len);
+        let key_str = augment_string(strings[i].clone(), aug_len);
         let (key0, key1) = ibDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
         addkey0.push(key0);
         addkey1.push(key1);
@@ -154,26 +165,13 @@ async fn add_keys(
     cfg: &config::Config,
     client0: counttree::CollectorClient,
     client1: counttree::CollectorClient,
-    keys0: &[Vec<IntervalKey>],
-    keys1: &[Vec<IntervalKey>],
+    keys0: Vec<Vec<IntervalKey>>,
+    keys1: Vec<Vec<IntervalKey>>,
     nreqs: usize,
 ) -> io::Result<()> {
-    use rand::distributions::Distribution;
-    let mut rng = rand::thread_rng();
-    let zipf = zipf::ZipfDistribution::new(cfg.num_sites, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
 
-    let mut addkey0 = Vec::with_capacity(nreqs);
-    let mut addkey1 = Vec::with_capacity(nreqs);
-
-    for _j in 0..nreqs {
-        let sample = zipf.sample(&mut rng) - 1;
-        addkey0.push(keys0[sample].clone());
-        addkey1.push(keys1[sample].clone());
-    }
-
-
-    let req0 = AddKeysRequest { keys: addkey0 };
-    let req1 = AddKeysRequest { keys: addkey1 };
+    let req0 = AddKeysRequest { keys: keys0 };
+    let req1 = AddKeysRequest { keys: keys1 };
 
     let response0 = client0.add_keys(long_context(), req0.clone());
     let response1 = client1.add_keys(long_context(), req1.clone());
@@ -329,38 +327,83 @@ async fn main() -> io::Result<()> {
         delta / (bench_keys0.len() as f64)
     );
 
-    let aug_len = 9;
-    let strings = generate_strings(&cfg, aug_len);
+    let aug_len = 2;
+    if cfg.distribution.as_str() == "zipf"{
+        println!("Zipf distribution sampling...");
+        let strings = generate_strings(&cfg, aug_len);
+        println!("Generated {:?} samples", strings.len());
 
 
-    reset_servers(&mut client0, &mut client1).await?;
+        reset_servers(&mut client0, &mut client1).await?;
 
-    let mut left_to_go = nreqs;
-    let reqs_in_flight = 1000;
-    while left_to_go > 0 {
-        let mut resps = vec![];
+        let mut left_to_go = nreqs;
+        let reqs_in_flight = 1000;
+        while left_to_go > 0 {
+            let mut resps = vec![];
 
-        for _j in 0..reqs_in_flight {
-            let this_batch = std::cmp::min(left_to_go, cfg.addkey_batch_size);
-            left_to_go -= this_batch;
+            for _j in 0..reqs_in_flight {
+                let this_batch = std::cmp::min(left_to_go, cfg.addkey_batch_size);
+                left_to_go -= this_batch;
 
-            if this_batch > 0 {
-                resps.push(add_fuzzy_keys(
-                    &cfg,
-                    client0.clone(),
-                    client1.clone(),
-                    &strings,
-                    this_batch,
-                    aug_len
-                ));
+                if this_batch > 0 {
+                    resps.push(add_fuzzy_keys(
+                        &cfg,
+                        client0.clone(),
+                        client1.clone(),
+                        &strings,
+                        this_batch,
+                        aug_len
+                    ));
+                }
+            }
+
+            for r in resps {
+                r.await?;
             }
         }
+    }
+    else if cfg.distribution.as_str() == "covid"{
+        println!("Covid distribution sampling...");
+        let strings = generate_covid_samples(nreqs, aug_len);
+        println!("Generated {:?} samples", strings.len());
+        let mut addkey0 = Vec::with_capacity(nreqs);
+        let mut addkey1 = Vec::with_capacity(nreqs);
 
-        for r in resps {
-            r.await?;
+        for _j in 0..nreqs {
+            // let sample = thread_rng().gen_range(0, strings.len() + 1);
+            let (key0, key1) = ibDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
+            addkey0.push(key0);
+            addkey1.push(key1);
+        }
+
+        reset_servers(&mut client0, &mut client1).await?;
+
+        let mut left_to_go = nreqs;
+        let reqs_in_flight = 1000;
+        while left_to_go > 0 {
+            let mut resps = vec![];
+
+            for _j in 0..reqs_in_flight {
+                let this_batch = std::cmp::min(left_to_go, cfg.addkey_batch_size);
+                left_to_go -= this_batch;
+
+                if this_batch > 0 {
+                    resps.push(add_keys(
+                        &cfg,
+                        client0.clone(),
+                        client1.clone(),
+                        addkey0.clone(),
+                        addkey1.clone(),
+                        nreqs
+                    ));
+                }
+            }
+
+            for r in resps {
+                r.await?;
+            }
         }
     }
-
     tree_init(&mut client0, &mut client1).await?;
 
 
@@ -370,9 +413,8 @@ async fn main() -> io::Result<()> {
         active_paths = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
 
         println!(
-            "Level {:?} active_paths={:?} {:?}",
+            "Level {:?} {:?}",
             level,
-            active_paths,
             start.elapsed().as_secs_f64()
         );
     }

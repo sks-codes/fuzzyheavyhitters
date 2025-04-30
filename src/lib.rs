@@ -11,6 +11,7 @@ pub mod rpc;
 pub mod sketch;
 pub mod ibDCF;
 pub mod equalitytest;
+pub mod sample_covid_data;
 
 #[macro_use]
 extern crate lazy_static;
