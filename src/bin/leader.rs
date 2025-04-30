@@ -135,7 +135,7 @@ async fn add_fuzzy_keys(
     aug_len: usize,
 ) -> io::Result<()> {
     use rand::distributions::Distribution;
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     let zipf = zipf::ZipfDistribution::new(cfg.num_sites, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
 
     let mut addkey0 = Vec::with_capacity(nreqs);
@@ -143,7 +143,7 @@ async fn add_fuzzy_keys(
 
     for i in 0..nreqs {
         let sample = zipf.sample(&mut rng) - 1;
-        let key_str = augment_string(strings[i].clone(), aug_len);
+        let key_str = augment_string(strings[sample].clone(), aug_len);
         let (key0, key1) = ibDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
         addkey0.push(key0);
         addkey1.push(key1);
@@ -327,7 +327,7 @@ async fn main() -> io::Result<()> {
         delta / (bench_keys0.len() as f64)
     );
 
-    let aug_len = 2;
+    let aug_len = 0;
     if cfg.distribution.as_str() == "zipf"{
         println!("Zipf distribution sampling...");
         let strings = generate_strings(&cfg, aug_len);
@@ -392,8 +392,8 @@ async fn main() -> io::Result<()> {
                         &cfg,
                         client0.clone(),
                         client1.clone(),
-                        addkey0.clone(),
-                        addkey1.clone(),
+                        addkey0[nreqs-left_to_go - this_batch..nreqs-left_to_go].to_vec(),
+                        addkey1[nreqs-left_to_go - this_batch..nreqs-left_to_go].to_vec(),
                         nreqs
                     ));
                 }
