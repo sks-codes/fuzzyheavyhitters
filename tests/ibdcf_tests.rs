@@ -48,7 +48,7 @@ fn dcf_output_test() {
     // let (k0, k1) = ibDCFKey::gen_ibDCF(&alpha_bits, false);
     let r = &[false];
     let beta = add_bitstrings(alpha_bits.as_slice(), r);
-    let x = ibDCFKey::gen_l_inf_ball(&alpha_bits,1);
+    let x = ibDCFKey::gen_l_inf_ball(vec![alpha_bits.clone()], 1);
     let (kl0, kr0) = x.0[0].clone();
     let (kl1, kr1) = x.1[0].clone();
     println!("DCF outputs for α={} ({}),  beta={} ({:?}):", alpha, alpha_bits.iter().map(|&b| if b { '1' } else { '0' }).collect::<String>(), bits_to_u32(beta.as_slice()), beta.clone().iter().map(|&b| if b { '1' } else { '0' }).collect::<String>());

@@ -1,7 +1,7 @@
 {
   "data_len": 64,
   "n_dims": 2,
-  "ball_size": 8,
+  "ball_size": 2,
   "threshold": 0.005,
   "server0": "0.0.0.0:8000",
   "server1": "0.0.0.0:8001",
@@ -9,5 +9,6 @@
   "sketch_batch_size": 100000,
   "sketch_batch_size_last": 25000,
   "num_sites": 10000,
-  "zipf_exponent": 1.03
+  "zipf_exponent": 1.03,
+  "distribution": "covid"
 }

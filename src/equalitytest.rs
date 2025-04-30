@@ -85,7 +85,7 @@ where
 pub fn multiple_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<u16>]  // Now takes multiple inputs
+    inputs: &[Vec<u16>]
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
