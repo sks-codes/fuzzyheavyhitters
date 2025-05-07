@@ -11,3 +11,5 @@ Cargo.lock
 
 script
 .*.swp
+
+/data/

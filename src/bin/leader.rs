@@ -24,6 +24,7 @@ use std::time::{Duration, SystemTime};
 use counttree::ibDCF::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
 use counttree::sample_covid_data::sample_covid_locations;
+use counttree::sample_driving_data::{sample_start_locations, save_heavy_hitters};
 
 type IntervalKey = (ibDCFKey, ibDCFKey);
 fn long_context() -> context::Context {
@@ -287,9 +288,9 @@ async fn final_shares(
     let response0 = client0.final_shares(long_context(), req.clone());
     let response1 = client1.final_shares(long_context(), req);
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
-
     for res in &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1) {
         println!("Path = {:?}", res.path);
+        save_heavy_hitters(res.path.as_slice(), "data/ride_heavy_hitters.csv");
     }
 
     Ok(())
@@ -327,8 +328,8 @@ async fn main() -> io::Result<()> {
         delta / (bench_keys0.len() as f64)
     );
 
-    let aug_len = 0;
-    if cfg.distribution.as_str() == "zipf"{
+    let aug_len = 8;
+    if cfg.distribution.as_str() == "zipf" {
         println!("Zipf distribution sampling...");
         let strings = generate_strings(&cfg, aug_len);
         println!("Generated {:?} samples", strings.len());
@@ -362,16 +363,25 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    else if cfg.distribution.as_str() == "covid"{
-        println!("Covid distribution sampling...");
-        let strings = generate_covid_samples(nreqs, aug_len);
+    else{
+        // let mut strings :Vec<Vec<Vec<bool>>> = if cfg.distribution.as_str() == "covid"{
+        //     println!("Covid distribution sampling...");
+        //     generate_covid_samples(nreqs, aug_len)
+        // }
+        // else
+        let strings = if cfg.distribution.as_str() == "rides" {
+            println!("RideAustin distribution sampling...");
+            sample_start_locations("data/RideAustin_Weather.csv", nreqs, Some(42)).expect("ride sample failed")
+        }
+        else{
+            vec![]
+        };
         println!("Generated {:?} samples", strings.len());
         let mut addkey0 = Vec::with_capacity(nreqs);
         let mut addkey1 = Vec::with_capacity(nreqs);
 
         for _j in 0..nreqs {
-            // let sample = thread_rng().gen_range(0, strings.len() + 1);
-            let (key0, key1) = ibDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
+            let (key0, key1) = ibDCFKey::gen_l_inf_ball_from_coords(strings[_j], cfg.ball_size as i16);
             addkey0.push(key0);
             addkey1.push(key1);
         }

@@ -1,8 +1,8 @@
 {
-  "data_len": 64,
-  "n_dims": 1,
+  "data_len": 16,
+  "n_dims": 2,
   "ball_size": 1,
-  "threshold": 0.001,
+  "threshold": 0.075,
   "server0": "0.0.0.0:8000",
   "server1": "0.0.0.0:8001",
   "addkey_batch_size": 100,
@@ -10,5 +10,5 @@
   "sketch_batch_size_last": 25000,
   "num_sites": 10000,
   "zipf_exponent": 1.03,
-  "distribution": "covid"
+  "distribution": "rides"
 }

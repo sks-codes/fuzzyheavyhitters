@@ -2,16 +2,15 @@
 
 pub mod collect;
 pub mod config;
-pub mod dpf;
 pub mod fastfield;
 pub mod field;
 pub mod mpc;
 pub mod prg;
 pub mod rpc;
-pub mod sketch;
 pub mod ibDCF;
 pub mod equalitytest;
 pub mod sample_covid_data;
+pub mod sample_driving_data;
 
 #[macro_use]
 extern crate lazy_static;

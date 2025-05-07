@@ -54,7 +54,7 @@ async fn main() -> io::Result<()> {
     println!("Using only one thread!");
     rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
-    let mut wtr = Writer::from_path("ibDCFbench.csv")?;
+    let mut wtr = Writer::from_path("src/bin/benchmarks/ibDCFbench.csv")?;
     wtr.write_record(&["string_length", "number_keys", "time", "avg_time", "size"])?;
 
     let string_lengths = [128, 256, 384, 512, 640, 768, 896, 1024];
@@ -70,7 +70,7 @@ async fn main() -> io::Result<()> {
     wtr.flush()?;
 
     //Testing L-infinity ball
-    let mut wtr = Writer::from_path("ibDCFbench.csv")?;
+    let mut wtr = Writer::from_path("src/bin/benchmarks/ibDCFbench.csv")?;
     wtr.write_record(&["string_length", "number_keys", "time", "avg_time", "size"])?;
 
     let string_lengths = [128, 256, 384, 512, 640, 768, 896, 1024];
