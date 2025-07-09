@@ -2,7 +2,7 @@
   "data_len": 16,
   "n_dims": 2,
   "ball_size": 1,
-  "threshold": 0.075,
+  "threshold": 0.1,
   "server0": "0.0.0.0:8000",
   "server1": "0.0.0.0:8001",
   "addkey_batch_size": 100,

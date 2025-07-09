@@ -19,12 +19,14 @@ pub struct TreeInitRequest {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeCrawlRequest {
-    pub gc_sender: bool
+    pub gc_sender: bool,
+    pub threshold: FE
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeCrawlLastRequest {
-    pub gc_sender: bool
+    pub gc_sender: bool,
+    pub threshold: FieldElm
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,8 +60,8 @@ pub trait Collector {
     async fn reset(rst: ResetRequest) -> String;
     async fn add_keys(add: AddKeysRequest) -> String;
     async fn tree_init(req: TreeInitRequest) -> String;
-    async fn tree_crawl(req: TreeCrawlRequest) -> Vec<FE>;
-    async fn tree_crawl_last(req: TreeCrawlLastRequest) -> Vec<FieldElm>;
+    async fn tree_crawl(req: TreeCrawlRequest) -> Vec<bool>;
+    async fn tree_crawl_last(req: TreeCrawlLastRequest) -> Vec<bool>;
     async fn tree_prune(req: TreePruneRequest) -> String;
     async fn tree_prune_last(req: TreePruneLastRequest) -> String;
     async fn final_shares(req: FinalSharesRequest) -> Vec<collect::Result<FieldElm>>;

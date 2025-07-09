@@ -201,8 +201,8 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlRequest { gc_sender: true };
-    let req1 = TreeCrawlRequest { gc_sender: false };
+    let req0 = TreeCrawlRequest { gc_sender: true , threshold};
+    let req1 = TreeCrawlRequest { gc_sender: false, threshold};
 
     let response0 = client0.tree_crawl(long_context(), req0);
     let response1 = client1.tree_crawl(long_context(), req1);
@@ -216,18 +216,20 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    assert_eq!(vals0.len(), vals1.len());
-    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1);
+    // assert_eq!(vals0.len(), vals1.len());
+    // println!("Share 0: {:?}", vals0);
+    // println!("Share 1: {:?}", vals1);
+    // let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1);
 
-    println!("Keep: {:?}", &keep);
+    // println!("Keep: {:?}", &keep);
     let mut ap = 0;
-    for i in keep.clone() {
+    for i in vals1.clone() {
         if i {ap+= 1;};
     }
     println!("Active paths: {:?}", ap);
 
     // Tree prune
-    let req = TreePruneRequest { keep };
+    let req = TreePruneRequest { keep: vals1 };
     let response0 = client0.tree_prune(long_context(), req.clone());
     let response1 = client1.tree_prune(long_context(), req);
     try_join!(response0, response1).unwrap();
@@ -252,8 +254,8 @@ async fn run_level_last(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlLastRequest { gc_sender: true };
-    let req1 = TreeCrawlLastRequest { gc_sender: false };
+    let req0 = TreeCrawlLastRequest { gc_sender: true, threshold: threshold.clone() };
+    let req1 = TreeCrawlLastRequest { gc_sender: false, threshold: threshold };
 
     let response0 = client0.tree_crawl_last(long_context(), req0);
     let response1 = client1.tree_crawl_last(long_context(), req1);
@@ -266,12 +268,12 @@ async fn run_level_last(
         start_time.elapsed().as_secs_f64()
     );
 
-    assert_eq!(vals0.len(), vals1.len());
-    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values_last(nreqs, &threshold, &vals0, &vals1);
+    // assert_eq!(vals0.len(), vals1.len());
+    // let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values_last(nreqs, &threshold, &vals0, &vals1);
 
-    println!("Keep: {:?}", keep);
+    println!("Keep: {:?}", vals1);
 
-    let req = TreePruneLastRequest { keep };
+    let req = TreePruneLastRequest { keep: vals1};
     let response0 = client0.tree_prune_last(long_context(), req.clone());
     let response1 = client1.tree_prune_last(long_context(), req);
     try_join!(response0, response1).unwrap();
@@ -314,7 +316,6 @@ async fn main() -> io::Result<()> {
         counttree::CollectorClient::new(client::Config::default(),
                                         tcp::connect(cfg.server1, Bincode::default).await?
         ).spawn();
-
     let start = Instant::now();
     println!("Generating keys...");
     let (bench_keys0, bench_keys1) = generate_keys(&cfg);

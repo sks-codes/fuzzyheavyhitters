@@ -404,6 +404,7 @@ version = "0.1.0"
 dependencies = [
  "aes 0.4.0",
  "aes-ctr",
+ "aesni",
  "bincode",
  "clap 2.34.0",
  "crossbeam",

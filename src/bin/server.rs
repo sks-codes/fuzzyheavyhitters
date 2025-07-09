@@ -54,8 +54,8 @@ struct CollectorServer {
 impl Collector for CollectorServer {
     type AddKeysFut = Ready<String>;
     type TreeInitFut = Ready<String>;
-    type TreeCrawlFut = Ready<Vec<FE>>;
-    type TreeCrawlLastFut = Ready<Vec<FieldElm>>;
+    type TreeCrawlFut = Ready<Vec<bool>>;
+    type TreeCrawlLastFut = Ready<Vec<bool>>;
     type TreePruneFut = Ready<String>;
     type TreePruneLastFut = Ready<String>;
     type FinalSharesFut = Ready<Vec<collect::Result<FieldElm>>>;
@@ -112,22 +112,11 @@ impl Collector for CollectorServer {
             .map(|guard| &mut **guard)
             .collect();
 
-        let results = coll.tree_crawl(req.gc_sender, &mut channel_refs[..]);
+        let results = coll.tree_crawl(req.gc_sender, &mut channel_refs[..], req.threshold);
 
         future::ready(results)
     }
 
-    // fn tree_crawl_last(self, _: context::Context, _req: TreeCrawlLastRequest) -> Self::TreeCrawlLastFut {
-    //
-    //     let mut coll = self.arc.lock().unwrap();
-    //     let results = if let Some(gc_chan) = &self.gc_channels[0] {
-    //         let mut channel = gc_chan.lock().unwrap();
-    //         coll.tree_crawl_last(_req.gc_sender, Some(&mut *channel))
-    //     } else {
-    //         coll.tree_crawl_last(_req.gc_sender, None)
-    //     };
-    //     future::ready(results)
-    // }
     fn tree_crawl_last(
         self,
         _: context::Context,
@@ -147,10 +136,45 @@ impl Collector for CollectorServer {
             .map(|guard| &mut **guard)
             .collect();
 
-        let results = coll.tree_crawl_last(req.gc_sender, &mut channel_refs[..]);
+        let results = coll.tree_crawl_last(req.gc_sender, &mut channel_refs[..], req.threshold);
 
         future::ready(results)
     }
+
+    // fn tree_crawl_last(self, _: context::Context, _req: TreeCrawlLastRequest) -> Self::TreeCrawlLastFut {
+    //
+    //     let mut coll = self.arc.lock().unwrap();
+    //     let results = if let Some(gc_chan) = &self.gc_channels[0] {
+    //         let mut channel = gc_chan.lock().unwrap();
+    //         coll.tree_crawl_last(_req.gc_sender, Some(&mut *channel))
+    //     } else {
+    //         coll.tree_crawl_last(_req.gc_sender, None)
+    //     };
+    //     future::ready(results)
+    // }
+    // fn tree_crawl_last(
+    //     self,
+    //     _: context::Context,
+    //     req: TreeCrawlLastRequest
+    // ) -> Self::TreeCrawlLastFut {
+    //     let mut coll = self.arc.lock().unwrap();
+    //
+    //     // Lock all channels
+    //     let mut locked_channels: Vec<_> = self.gc_channels
+    //         .iter()
+    //         .map(|c| c.lock().unwrap())
+    //         .collect();
+    //
+    //     // Get mutable references to inner channels
+    //     let mut channel_refs: Vec<&mut MyChannel> = locked_channels
+    //         .iter_mut()
+    //         .map(|guard| &mut **guard)
+    //         .collect();
+    //
+    //     let results = coll.tree_crawl_last(req.gc_sender, &mut channel_refs[..]);
+    //
+    //     future::ready(results)
+    // }
 
     fn tree_prune(self, _: context::Context, req: TreePruneRequest) -> Self::TreePruneFut {
         let mut coll = self.arc.lock().unwrap();

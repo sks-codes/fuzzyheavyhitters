@@ -4,17 +4,18 @@ pub mod collect;
 pub mod config;
 pub mod fastfield;
 pub mod field;
-pub mod mpc;
 pub mod prg;
 pub mod rpc;
 pub mod ibDCF;
 pub mod equalitytest;
 pub mod sample_covid_data;
 pub mod sample_driving_data;
+mod greaterthantest;
 
 #[macro_use]
 extern crate lazy_static;
 
+use scuttlebutt::Block;
 pub use crate::field::Dummy;
 pub use crate::field::FieldElm;
 pub use crate::rpc::CollectorClient;
@@ -180,6 +181,29 @@ pub fn subtract_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
 
     // Reverse to get MSB-first ordering
     result.into_iter().rev().collect()
+}
+
+pub fn block_to_bits(block: Block, lsb_first: bool) -> Vec<bool> {
+    let bytes = block.as_ref(); // Get the 16-byte array
+    let mut bits = Vec::with_capacity(128);
+
+    if lsb_first {
+        // LSB first: process bytes in order, bits within each byte from 0 to 7
+        for byte in bytes.iter() {
+            for i in 0..8 {
+                bits.push((*byte & (1 << i)) != 0);
+            }
+        }
+    } else {
+        // MSB first: process bytes in reverse order, bits within each byte from 7 to 0
+        for byte in bytes.iter().rev() {
+            for i in (0..8).rev() {
+                bits.push((*byte & (1 << i)) != 0);
+            }
+        }
+    }
+
+    bits
 }
 
 // Helper function for single-bit addition with carry
