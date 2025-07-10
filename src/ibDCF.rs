@@ -87,6 +87,8 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
     let keep = bit;
     let lose = !keep;
 
+    println!("Generating CorWord from PRG outputs with bits {:?} and {:?}", data.0.bits, data.1.bits);
+
     let mut cw = CorWord {
         seed: data.0.seeds.get(lose) ^ data.1.seeds.get(lose),
         bits: (

@@ -31,160 +31,9 @@ pub struct FixedKeyPrgStream {
     count: usize,
 }
 
-use std::cell::RefCell;
-
-thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PrgSeed {
-    pub key: [u8; AES_KEY_SIZE],
-}
-
-pub trait FromRng {
-    fn from_rng(&mut self, stream: &mut (impl rand::Rng + rand_core::RngCore));
-
-    fn randomize(&mut self) {
-        self.from_rng(&mut rand::thread_rng());
-    }
-}
-
-#[derive(Clone)]
-pub struct PrgStream {
-    stream: Aes128Ctr,
-}
-
-pub struct PrgOutput {
-    pub bits: (bool, bool),
-    pub y_bits: (bool, bool),
-    pub seeds: (PrgSeed, PrgSeed),
-}
-
-pub struct ConvertOutput<T: FromRng> {
-    pub seed: PrgSeed,
-    pub word: T,
-}
-
-impl ops::BitXor for &PrgSeed {
-    type Output = PrgSeed;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        let mut out = PrgSeed::zero();
-
-        for ((out, left), right) in out.key.iter_mut().zip(&self.key).zip(&rhs.key) {
-            *out = left ^ right;
-        }
-
-        out
-    }
-}
-
-impl PrgSeed {
-    pub fn to_rng(&self) -> PrgStream {
-        let iv: [u8; AES_BLOCK_SIZE] = [0; AES_BLOCK_SIZE];
-
-        let key = GenericArray::from_slice(&self.key);
-        let nonce = GenericArray::from_slice(&iv);
-        PrgStream {
-            stream: Aes128Ctr::new(key, nonce),
-        }
-    }
-
-    pub fn expand_dir(self: &PrgSeed, left: bool, right: bool) -> PrgOutput {
-        FIXED_KEY_STREAM.with(|s_in| {
-            let mut key_short = self.key;
-
-            // Zero out first four bits and use for output
-            key_short[0] &= 0xF0;
-
-            let mut s = s_in.borrow_mut();
-            s.set_key(&key_short);
-
-            let mut out = PrgOutput {
-                bits: ((key_short[0] & 0x1) == 0, (key_short[0] & 0x2) == 0),
-                y_bits: ((key_short[0] & 0x4) == 0, (key_short[0] & 0x8) == 0),
-                seeds: (PrgSeed::zero(), PrgSeed::zero()),
-            };
-
-            println!("PRG outputs bits {:?}", out.bits);
-
-            if left {
-                s.fill_bytes(&mut out.seeds.0.key);
-            } else {
-                s.skip_block();
-            }
-
-            if right {
-                s.fill_bytes(&mut out.seeds.1.key);
-            } else {
-                s.skip_block();
-            }
-
-            out
-        })
-    }
-
-    pub fn expand(self: &PrgSeed) -> PrgOutput {
-        self.expand_dir(true, true)
-    }
-
-    pub fn convert<T: FromRng + crate::Group>(self: &PrgSeed) -> ConvertOutput<T> {
-        let mut out = ConvertOutput {
-            seed: PrgSeed::zero(),
-            word: T::zero(),
-        };
-
-        FIXED_KEY_STREAM.with(|s_in| {
-            let mut s = s_in.borrow_mut();
-            s.set_key(&self.key);
-            s.fill_bytes(&mut out.seed.key);
-            unsafe {
-                let sp = s_in.as_ptr();
-                out.word.from_rng(&mut *sp);
-            }
-        });
-
-        out
-    }
-
-    pub fn zero() -> PrgSeed {
-        PrgSeed {
-            key: [0; AES_KEY_SIZE],
-        }
-    }
-
-    pub fn random() -> PrgSeed {
-        let mut key: [u8; AES_KEY_SIZE] = [0; AES_KEY_SIZE];
-        rand::thread_rng().fill(&mut key);
-
-        PrgSeed { key }
-    }
-}
-
-impl rand::RngCore for PrgStream {
-    fn next_u32(&mut self) -> u32 {
-        rand_core::impls::next_u32_via_fill(self)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        rand_core::impls::next_u64_via_fill(self)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        for v in dest.iter() {
-            debug_assert_eq!(*v, 0u8);
-        }
-
-        self.stream.apply_keystream(dest);
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
 
 impl FixedKeyPrgStream {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let key = GenericArray::from_slice(&[0; AES_KEY_SIZE]);
 
         let ctr_init = FixedKeyPrgStream::load(&[0; AES_BLOCK_SIZE]);
@@ -198,20 +47,20 @@ impl FixedKeyPrgStream {
         }
     }
 
-    fn set_key(&mut self, key: &[u8; 16]) {
+    pub fn set_key(&mut self, key: &[u8; 16]) {
         self.ctr = FixedKeyPrgStream::load(key);
         self.buf_ptr = AES_BLOCK_SIZE;
         self.have = AES_BLOCK_SIZE;
     }
 
-    fn skip_block(&mut self) {
+    pub fn skip_block(&mut self) {
         // Only allow skipping a block on a block boundary.
         debug_assert_eq!(self.have % AES_BLOCK_SIZE, 0);
         debug_assert_eq!(self.buf_ptr, AES_BLOCK_SIZE);
         self.ctr = FixedKeyPrgStream::inc_be(self.ctr);
     }
 
-    fn refill(&mut self) {
+    pub fn refill(&mut self) {
         //println!("Refill");
         debug_assert_eq!(self.buf_ptr, AES_BLOCK_SIZE);
 
@@ -235,7 +84,7 @@ impl FixedKeyPrgStream {
         self.count += AES_BLOCK_SIZE;
     }
 
-    fn refill8(&mut self) {
+    pub fn refill8(&mut self) {
         self.have = 8 * AES_BLOCK_SIZE;
         self.buf_ptr = 0;
 
@@ -333,43 +182,5 @@ impl rand::RngCore for FixedKeyPrgStream {
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
         self.fill_bytes(dest);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zero() {
-        let zero = PrgSeed::zero();
-        assert_eq!(zero.key.len(), AES_KEY_SIZE);
-        for i in 0..AES_KEY_SIZE {
-            assert_eq!(zero.key[i], 0u8);
-        }
-    }
-
-    #[test]
-    fn xor_zero() {
-        let zero = PrgSeed::zero();
-        let rand = PrgSeed::random();
-        assert_ne!(rand.key, zero.key);
-
-        let out = &zero ^ &rand;
-        assert_eq!(out.key, rand.key);
-
-        let out = &rand ^ &rand;
-        assert_eq!(out.key, zero.key);
-    }
-
-    #[test]
-    fn from_stream() {
-        let rand = PrgSeed::random();
-        let zero = PrgSeed::zero();
-        let out = rand.expand();
-
-        assert_ne!(out.seeds.0.key, zero.key);
-        assert_ne!(out.seeds.1.key, zero.key);
-        assert_ne!(out.seeds.0.key, out.seeds.1.key);
     }
 }

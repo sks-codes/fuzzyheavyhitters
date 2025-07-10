@@ -11,6 +11,8 @@ pub mod equalitytest;
 pub mod sample_covid_data;
 pub mod sample_driving_data;
 mod greaterthantest;
+pub mod intervalFSS;
+pub mod aes;
 
 #[macro_use]
 extern crate lazy_static;
@@ -212,6 +214,23 @@ fn full_adder(a: bool, b: bool, carry_in: bool) -> (bool, bool) {
     let carry_out = (a & b) | (b & carry_in) | (a & carry_in);
     (sum, carry_out)
 }
+
+fn xor<const N: usize>(a: &[u8; N], b: &[u8; N]) -> [u8; N] {
+    let mut result = [0u8; N];
+    for i in 0..N {
+        result[i] = a[i] ^ b[i];
+    }
+    result
+}
+
+fn and_bit<const N: usize>(a: [u8; N], b: bool) -> [u8; N] {
+    if b {
+        a
+    } else {
+        [0u8; N]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
