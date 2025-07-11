@@ -77,7 +77,7 @@ pub fn sample_start_locations<P: AsRef<Path>>(
     let mut rdr = Reader::from_path(path)?;
     let mut rng = match seed {
         Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_entropy(),
+        None => StdRng::from_rng(&mut rand::rng()),
     };
 
     let records: Vec<StringRecord> = rdr.records().collect::<Result<_, _>>()?;

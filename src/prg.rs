@@ -9,6 +9,7 @@ use aes_ctr::Aes128Ctr;
 
 use rand::Rng;
 use rand_core::RngCore;
+use num_bigint::RandBigInt;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -176,11 +177,6 @@ impl rand::RngCore for PrgStream {
 
         self.stream.apply_keystream(dest);
     }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
 }
 
 impl FixedKeyPrgStream {
@@ -328,11 +324,6 @@ impl rand::RngCore for FixedKeyPrgStream {
             self.buf_ptr += to_copy;
             dest_ptr += to_copy;
         }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
     }
 }
 

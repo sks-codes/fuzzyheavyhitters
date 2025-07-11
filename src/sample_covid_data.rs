@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use csv::{ReaderBuilder, StringRecord, Position};
 use memmap2::Mmap;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rayon::prelude::*;
 use serde::Deserialize;
 
@@ -37,8 +37,8 @@ fn f64_to_bool_vec(value: f64) -> Vec<bool> {
 fn fuzzy_coords((lat, lon): (f64, f64), decimal_places: usize, rng: &mut StdRng) -> (f64, f64) {
     let noise_magnitude = 0.5 / 10f64.powi(decimal_places as i32);
     (
-        (lat + rng.gen_range(-noise_magnitude,noise_magnitude)).clamp(-90.0, 90.0),
-        (lon + rng.gen_range(-noise_magnitude,noise_magnitude)).clamp(-180.0, 180.0)
+        (lat + rng.gen_range(-noise_magnitude..noise_magnitude)).clamp(-90.0, 90.0),
+        (lon + rng.gen_range(-noise_magnitude..noise_magnitude)).clamp(-180.0, 180.0)
     )
 }
 
@@ -52,8 +52,8 @@ fn uniform_in_square(lat: f64, lon: f64, side_length_km: f64, rng: &mut StdRng) 
     let a_lon = (side_length_km / 2.0) / km_per_deg_lon;
 
     // Uniform distribution in [-a, a]
-    let dist_lat = Uniform::new(-a_lat, a_lat);
-    let dist_lon = Uniform::new(-a_lon, a_lon);
+    let dist_lat = Uniform::new(-a_lat, a_lat).unwrap();
+    let dist_lon = Uniform::new(-a_lon, a_lon).unwrap();
 
     (
         (lat + rng.sample(dist_lat)).clamp(-90.0, 90.0),
@@ -109,7 +109,7 @@ pub fn sample_covid_locations(
     }
 
     println!("[4/4] Beginning reservoir sampling with {} positions...", positions.len());
-    let mut rng = StdRng::from_entropy();
+    let mut rng = StdRng::from_rng(&mut rand::rng());
     let mut samples = Vec::with_capacity(sample_size);
     let file = File::open(covid_path)?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -159,7 +159,7 @@ pub fn sample_covid_locations(
         if samples.len() < sample_size {
             samples.push(sample);
         } else {
-            let j = rng.gen_range(0,i+1);
+            let j = rng.gen_range(0..i+1);
             if j < samples.len() {  // Proper bounds check
                 samples[j] = sample;
             }

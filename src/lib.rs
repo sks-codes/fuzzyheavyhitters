@@ -13,6 +13,9 @@ pub mod sample_driving_data;
 mod greaterthantest;
 pub mod intervalFSS;
 pub mod aes;
+pub mod payload;
+pub mod modint;
+pub mod pair;
 
 #[macro_use]
 extern crate lazy_static;
@@ -229,6 +232,20 @@ fn and_bit<const N: usize>(a: [u8; N], b: bool) -> [u8; N] {
     } else {
         [0u8; N]
     }
+}
+
+fn bytes_to_u128(bytes: &[u8]) -> u128 {
+    let mut buffer = [0u8; 16]; // Create a 16-byte buffer, initialized to zeros
+
+    // Determine how many bytes to copy (up to 16)
+    let bytes_to_copy = bytes.len().min(16);
+
+    // Copy the input bytes into the buffer.
+    // If bytes.len() < 16, the remaining bytes in buffer will stay 0.
+    // If bytes.len() > 16, only the first 16 bytes will be copied.
+    buffer[..bytes_to_copy].copy_from_slice(&bytes[..bytes_to_copy]);
+
+    u128::from_le_bytes(buffer)
 }
 
 #[cfg(test)]

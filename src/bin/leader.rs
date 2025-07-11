@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use futures::try_join;
 use std::io;
-use rand::{thread_rng, Rng};
+use rand::prelude::*;
+use rand::thread_rng;
+use rand_distr::Zipf;
 use rayon::prelude::*;
 use tarpc::{
     client,
@@ -18,7 +20,7 @@ use tarpc::{
     //server::{self, Channel},
 };
 
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
 use counttree::ibDCF::{eval_str, ibDCFKey};
@@ -38,7 +40,7 @@ fn long_context() -> context::Context {
 fn sample_string(len: usize) -> String {
     let mut rng = rand::thread_rng();
     std::iter::repeat(())
-        .map(|()| rng.sample(Alphanumeric))
+        .map(|()| rng.sample(Alphanumeric) as char)
         .take(len / 8)
         .collect()
 }
@@ -47,7 +49,7 @@ fn generate_random_bit_vectors(len: usize, d: usize) -> Vec<Vec<bool>> {
     (0..d)
         .map(|_| {
             let s: String = std::iter::repeat(())
-                .map(|()| rng.sample(Alphanumeric))
+                .map(|()| rng.sample(Alphanumeric) as char)
                 .take((len + 7) / 8) // Round up to ensure enough bits
                 .collect();
             let mut bits = string_to_bits(&s);
@@ -135,15 +137,14 @@ async fn add_fuzzy_keys(
     nreqs: usize,
     aug_len: usize,
 ) -> io::Result<()> {
-    use rand::distributions::Distribution;
     let mut rng = thread_rng();
-    let zipf = zipf::ZipfDistribution::new(cfg.num_sites, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
+    let zipf = Zipf::new(cfg.num_sites as f64, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
 
     let mut addkey0 = Vec::with_capacity(nreqs);
     let mut addkey1 = Vec::with_capacity(nreqs);
 
     for i in 0..nreqs {
-        let sample = zipf.sample(&mut rng) - 1;
+        let sample = (rng.sample(zipf) as usize).saturating_sub(1);
         let key_str = augment_string(strings[sample].clone(), aug_len);
         let (key0, key1) = ibDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
         addkey0.push(key0);
