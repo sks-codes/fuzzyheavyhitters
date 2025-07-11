@@ -67,10 +67,6 @@ fn main() {
     println!("  Chunk size: {}", chunk_size);
     println!();
     
-    // Create OKVS instance (will be cloned for each thread)
-    let r1: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-    let r2: [u8; 16] = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
-    
     // Shared counters for thread-safe access
     let success_count = Arc::new(AtomicUsize::new(0));
     let failure_count = Arc::new(AtomicUsize::new(0));
@@ -95,8 +91,7 @@ fn main() {
     let chunks: Vec<usize> = (0..total_runs).step_by(chunk_size).collect();
     
     chunks.par_iter().enumerate().for_each(|(chunk_idx, &start_run)| {
-        // Each thread gets its own OKVS instance and RNG
-        let okvs: RbOkvsF2k<16> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
+        // Each thread gets its own RNG
         let mut rng = rand::thread_rng();
         
         let end_run = std::cmp::min(start_run + chunk_size, total_runs);
@@ -106,12 +101,21 @@ fn main() {
         
         // Process this chunk
         (start_run..end_run).into_par_iter().for_each(|run| {
+            // Generate fresh seeds for each run
+            let mut local_rng = rand::thread_rng();
+            let mut r1: [u8; 16] = [0; 16];
+            let mut r2: [u8; 16] = [0; 16];
+            local_rng.fill(&mut r1);
+            local_rng.fill(&mut r2);
+            
+            // Create OKVS instance with fresh seeds for this run
+            let okvs: RbOkvsF2k<16> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
+            
             // Generate fresh test data for each run
             let mut keys = Vec::new();
             let mut values = Vec::new();
             
-            // Use a different RNG per iteration to avoid contention
-            let mut local_rng = rand::thread_rng();
+            // Generate test data for this run
             
             for i in 0..kv_count {
                 let key_length = local_rng.gen_range(20..40);
