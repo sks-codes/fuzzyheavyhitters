@@ -32,3 +32,13 @@ ocelot = { git = "https://github.com/GaloisInc/swanky", rev="553ede0"}
 scuttlebutt = { git = "https://github.com/GaloisInc/swanky", rev="553ede0"}
 num_cpus = "1.16.0"
 memmap2 = "0.9.5"
+blake3 = "1.8.2"
+indicatif = "0.18.0"
+
+[[bin]]
+name = "okvs_benchmark"
+path = "benchmark/okvs_timing.rs"
+
+[[bin]]
+name = "okvs_parallel_stress_test"
+path = "benchmark/parallel_stress_test.rs"

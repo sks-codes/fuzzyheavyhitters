@@ -16,6 +16,7 @@ pub mod aes;
 pub mod payload;
 pub mod modint;
 pub mod pair;
+pub mod okvs_f2k;
 
 #[macro_use]
 extern crate lazy_static;
