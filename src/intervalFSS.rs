@@ -107,9 +107,8 @@ fn gen_cor_word<const N: usize>(
     left: RingVec<N>,
     mid: RingVec<N>,
     right: RingVec<N>,
-    side_bit: bool,
     modulus: u128,
-    eval: &mut [(IntervalFSSEval<N>, IntervalFSSEval<N>)],
+    eval: &mut Vec<(IntervalFSSEval<N>, IntervalFSSEval<N>)>,
 ) -> IntervalFSSCW<N>
 {
     let modulus_mask = modulus - 1;
@@ -120,10 +119,15 @@ fn gen_cor_word<const N: usize>(
             gen_layer_data(eval1.seed, modulus, true, true)
         ));
     });
+
+    println!("Data 0: {:?}", data[0].0);
+    println!("Data 1: {:?}", data[0].1);
+
     let mut delta_seed = Vec::<([u8; 16], [u8; 16])>::new();
     let mut delta_bits = vec![];
     let mut delta_ys = vec![];
     let mut delta_y_bits = vec![];
+
     data.iter().for_each(|(d0, d1)| {
         delta_seed.push((
             xor::<16>(&d1.seeds.0, &d0.seeds.0),
@@ -142,6 +146,11 @@ fn gen_cor_word<const N: usize>(
             d1.y_bits.1 - d0.y_bits.1
         ));
     });
+
+    println!("Delta bits: {:?}", delta_bits);
+    println!("Delta ys: {:?}", delta_ys);
+    println!("Delta y bits: {:?}", delta_y_bits);
+
 
     if data.len() > 2 {
         panic!("Something went wrong, data length is greater than 2: {}", data.len());
@@ -200,7 +209,7 @@ fn gen_cor_word<const N: usize>(
         if !alpha_bit {
             cw.seeds.0 = delta_seed[0].1;
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool00 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + mid, delta_ys[0].1 + right);
+            cw.ys.0 = (delta_ys[0].0 + mid, delta_ys[0].1 + mid);
             cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
                            delta_y_bits[0].1 + mint00);
         } else {
@@ -220,7 +229,7 @@ fn gen_cor_word<const N: usize>(
         } else {
             cw.seeds.1 = delta_seed[1].0;
             cw.bits.1 = (bool00 ^ delta_bits[1].0, bool01 ^ delta_bits[1].1);
-            cw.ys.1 = (delta_ys[1].0 + left, delta_ys[1].1 + mid);
+            cw.ys.1 = (delta_ys[1].0 + mid, delta_ys[1].1 + mid);
             cw.y_bits.1 = (delta_y_bits[1].0 + mint00, 
                            delta_y_bits[1].1 + mint01);
         }
@@ -236,6 +245,7 @@ fn gen_cor_word<const N: usize>(
         let eval0 = eval[0].0;
         let eval1 = eval[0].1;
         if !alpha_bit {
+            println!("Data length is 1, alpha_bit is false");
             new_seeds.push((
                 xor::<16>(&d0.seeds.0, 
                     &xor::<16>(
@@ -252,6 +262,7 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.0 + (cw.y_bits.0.0 * eval1.y_bit.first) + (cw.y_bits.1.0 * eval1.y_bit.second)));
         }
         if beta_bit {
+            println!("Data length is 1, beta_bit is true");
             new_seeds.push((
                 xor::<16>(&d0.seeds.1, 
                     &xor::<16>(
@@ -268,6 +279,7 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
         }    
     } else {
+        println!("Data length is 2, alpha_bit = {}, beta_bit = {}", alpha_bit, beta_bit);
         let d0 = data[0].0;
         let d1 = data[0].1;
         let eval0 = eval[0].0;
@@ -342,6 +354,8 @@ fn gen_cor_word<const N: usize>(
         }
     }
 
+    println!("After updating, new_seeds length: {}", new_seeds.len());
+
     let new_eval: Vec<(IntervalFSSEval<N>, IntervalFSSEval<N>)> = new_seeds.iter().zip(new_bits.iter()).zip(new_y_bits.iter())
         .map(|((seed, bits), y_bits)| {
             (
@@ -362,12 +376,8 @@ fn gen_cor_word<const N: usize>(
             )
         }).collect();
     
-    // Update the eval slice with new values
-    for (i, new_eval_item) in new_eval.iter().enumerate() {
-        if i < eval.len() {
-            eval[i] = new_eval_item.clone();
-        }
-    }
+    eval.clear();
+    eval.extend(new_eval);
 
     cw
 }
@@ -377,7 +387,7 @@ impl<const N: usize> IntervalFSSKey<N>
 {
 
     // Need alpha < beta
-    pub fn gen_IntervalFSSKey(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec<N>, b: RingVec<N>, c: RingVec<N>, modulus: u128, side : bool) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
+    pub fn gen_IntervalFSSKey(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec<N>, b: RingVec<N>, c: RingVec<N>, modulus: u128) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
         assert!(alpha_bits.len() == beta_bits.len());
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
@@ -395,17 +405,17 @@ impl<const N: usize> IntervalFSSKey<N>
         let eval0 = IntervalFSSEval {
             level: 0,
             seed: root_seeds.0,
-            bit: Pair::new(false, false),
+            bit: Pair::new(true, false),
             y: RingVec::<N>::zero(modulus),
-            y_bit: Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
+            y_bit: Pair::new(ModInt::one(modulus), ModInt::zero(modulus)),
         };
 
         let eval1 = IntervalFSSEval {
             level: 0,
             seed: root_seeds.1,
-            bit: Pair::new(true, false),
+            bit: Pair::new(false, false),
             y: RingVec::<N>::zero(modulus),
-            y_bit: Pair::new(ModInt::one(modulus), ModInt::zero(modulus)),
+            y_bit: Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
         };
 
         let mut eval = vec![(eval0.clone(), eval1.clone())];
@@ -413,13 +423,14 @@ impl<const N: usize> IntervalFSSKey<N>
         let mut cor_words: Vec<IntervalFSSCW<N>> = Vec::new();
 
         for (i, (&alpha_bit, &beta_bit)) in alpha_bits.iter().zip(beta_bits.iter()).enumerate() {
+            println!("Layer {}: alpha_bit = {}, beta_bit = {}", i, alpha_bit, beta_bit);
+            println!("In layer {}, the length of eval is {}", i, eval.len());
             let cw = gen_cor_word(
                 alpha_bit, 
                 beta_bit, 
                 payload_left[i],
                 payload_mid[i], 
                 payload_right[i], 
-                side, 
                 modulus,
                 &mut eval
             );
@@ -464,7 +475,14 @@ impl<const N: usize> IntervalFSSKey<N>
             data.y_bits.1.clone()
         };
 
+        println!("Current state: {:?}", state);
+        println!("New y: {:?}", new_y);
+        println!("New y_bit: {:?}", new_y_bit);
+
         let cw = self.cor_words[state.level];
+
+        println!("First part ys of the cor word: {:?}", cw.ys.0);
+        println!("Second part ys of the cor word: {:?}", cw.ys.1);
 
         seed = xor::<16>(&seed,
                         &xor::<16>(&and_bit::<16>(cw.seeds.0, state.bit.first),
@@ -497,7 +515,7 @@ impl<const N: usize> IntervalFSSKey<N>
     }
 
     pub fn eval_init(&self, modulus: u128) -> IntervalFSSEval<N> {
-        let y_bit_first = if !self.key_idx {
+        let y_bit_first = if self.key_idx {
             ModInt::zero(modulus)
         } else {
             ModInt::one(modulus)
@@ -505,7 +523,7 @@ impl<const N: usize> IntervalFSSKey<N>
         IntervalFSSEval {
             level: 0,
             seed: self.root_seed.clone(),
-            bit: Pair::new(self.key_idx, false),
+            bit: Pair::new(!self.key_idx, false),
             y: RingVec::<N>::zero(modulus),
             y_bit: Pair::new(y_bit_first, ModInt::zero(modulus)),
         }
