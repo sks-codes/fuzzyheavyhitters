@@ -8,7 +8,7 @@ use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
 use counttree::config::Config;
-use counttree::ibDCF::ibDCFKey;
+use counttree::fss::ibdcf::ibDCFKey;
 use counttree::string_to_bits;
 
 

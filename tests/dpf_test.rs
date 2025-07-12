@@ -1,5 +1,5 @@
 use counttree::*;
-use counttree::ibDCF::ibDCFKey;
+use counttree::fss::ibdcf::ibDCFKey;
 
 // #[test]
 // fn dcf_complete() {

@@ -2,28 +2,22 @@
 
 pub mod collect;
 pub mod config;
-pub mod fastfield;
-pub mod field;
-pub mod prg;
+pub mod data_structures;
 pub mod rpc;
-pub mod ibDCF;
-pub mod equalitytest;
+pub mod fss;
+pub mod garbled_circuits;
 pub mod sample_covid_data;
 pub mod sample_driving_data;
-mod greaterthantest;
-pub mod intervalFSS;
+pub mod share_phase;
 pub mod aes;
-pub mod payload;
-pub mod modint;
-pub mod pair;
 pub mod okvs_f2k;
 
 #[macro_use]
 extern crate lazy_static;
 
 use scuttlebutt::Block;
-pub use crate::field::Dummy;
-pub use crate::field::FieldElm;
+pub use crate::data_structures::field::Dummy;
+pub use crate::data_structures::field::FieldElm;
 pub use crate::rpc::CollectorClient;
 
 // Additive group, such as (Z_n, +)
@@ -39,7 +33,7 @@ pub trait Group {
     fn sub(&mut self, other: &Self);
 }
 
-pub trait Share: Group + prg::FromRng + Clone {
+pub trait Share: Group + data_structures::prg::FromRng + Clone {
     fn random() -> Self {
         let mut out = Self::zero();
         out.randomize();

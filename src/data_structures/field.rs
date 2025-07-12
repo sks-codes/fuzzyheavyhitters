@@ -1,4 +1,4 @@
-use crate::fastfield::FE;
+use crate::data_structures::fastfield::FE;
 #[cfg(test)]
 use crate::Share;
 
@@ -41,7 +41,7 @@ impl FieldElm {
     }
 
     pub fn random() -> Self {
-        use crate::prg::FromRng;
+        use crate::data_structures::prg::FromRng;
         use crate::Group;
         let mut result = FieldElm::zero();
         result.randomize();
@@ -125,7 +125,7 @@ impl crate::Group for Dummy {
     }
 }
 
-impl crate::prg::FromRng for Dummy {
+impl crate::data_structures::prg::FromRng for Dummy {
     fn from_rng(&mut self, rng: &mut (impl rand::Rng + rand_core::RngCore)) {
         // Just generate a random u32 and take modulo
         self.value = rng.next_u32() % (MODULUS_DUMMY.value);
@@ -196,7 +196,7 @@ impl crate::Group for u64 {
     }
 }
 
-impl crate::prg::FromRng for u64 {
+impl crate::data_structures::prg::FromRng for u64 {
     fn from_rng(&mut self, rng: &mut (impl rand::Rng + rand_core::RngCore)) {
         *self = u64::MAX;
         while *self >= MODULUS_64 {
@@ -257,7 +257,7 @@ impl crate::Group for FE {
     }
 }
 
-impl crate::prg::FromRng for FE {
+impl crate::data_structures::prg::FromRng for FE {
     fn from_rng(&mut self, rng: &mut (impl rand::Rng + rand_core::RngCore)) {
         loop {
             let v = FE::from_u64_unbiased(rng.next_u64());
@@ -373,7 +373,7 @@ impl crate::Group for FieldElm {
     }
 }
 
-impl crate::prg::FromRng for FieldElm {
+impl crate::data_structures::prg::FromRng for FieldElm {
     #[inline]
     fn from_rng(&mut self, rng: &mut (impl rand::Rng + rand_core::RngCore)) {
         // Generate random bytes and create BigUint from them
@@ -448,9 +448,9 @@ where
     }
 }
 
-impl<T> crate::prg::FromRng for (T, T)
+impl<T> crate::data_structures::prg::FromRng for (T, T)
 where
-    T: crate::prg::FromRng + crate::Group,
+    T: crate::data_structures::prg::FromRng + crate::Group,
 {
     fn from_rng(&mut self, rng: &mut (impl rand::Rng + rand_core::RngCore)) {
         self.0 = T::zero();

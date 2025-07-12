@@ -1,12 +1,12 @@
 use core::num;
 use std::cmp::{max, min};
-use crate::modint::ModInt;
-use crate::{add_bitstrings, bits_to_u32, prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits, 
+use crate::data_structures::modint::ModInt;
+use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits, 
             xor, and_bit, bytes_to_u128};
 use crate::Group;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
-use crate::payload::RingVec;
-use crate::pair::Pair;
+use crate::data_structures::payload::RingVec;
+use crate::data_structures::pair::Pair;
 
 use serde::Deserialize;
 use serde::Serialize;

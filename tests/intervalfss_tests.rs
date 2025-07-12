@@ -1,5 +1,5 @@
-use counttree::intervalFSS::IntervalFSSKey;
-use counttree::payload::RingVec;
+use counttree::fss::interval::IntervalFSSKey;
+use counttree::data_structures::payload::RingVec;
 use counttree::{u32_to_bits, bits_to_u32};
 
 #[test]

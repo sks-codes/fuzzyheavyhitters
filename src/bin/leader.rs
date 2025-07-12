@@ -1,4 +1,4 @@
-use counttree::{add_bitstrings, collect, config, fastfield, rpc::{
+use counttree::{add_bitstrings, collect, config, data_structures::fastfield, rpc::{
     AddKeysRequest, FinalSharesRequest, ResetRequest,
     TreeInitRequest,
     TreeCrawlRequest,
@@ -23,7 +23,7 @@ use tarpc::{
 use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
-use counttree::ibDCF::{eval_str, ibDCFKey};
+use counttree::fss::ibdcf::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
 use counttree::sample_covid_data::sample_covid_locations;
 use counttree::sample_driving_data::{sample_start_locations, save_heavy_hitters};

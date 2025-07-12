@@ -1,5 +1,5 @@
 /*
-use counttree::prg::PrgSeed;
+use counttree::data_structures::prg::PrgSeed;
 use counttree::sketch::*;
 use counttree::*;
 

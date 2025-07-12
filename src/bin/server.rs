@@ -4,7 +4,7 @@
 use counttree::{
     collect, config,
     FieldElm,
-    fastfield::FE, prg,
+    data_structures::fastfield::FE, data_structures::prg,
     rpc::Collector,
     rpc::{
         AddKeysRequest, FinalSharesRequest, ResetRequest, TreeCrawlRequest, TreeInitRequest,

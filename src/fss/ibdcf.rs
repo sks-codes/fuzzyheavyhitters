@@ -1,5 +1,5 @@
 use std::cmp::{max, min};
-use crate::{add_bitstrings, bits_to_u32, prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
+use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
 use crate::Group;
 
 use serde::Deserialize;

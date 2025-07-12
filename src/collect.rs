@@ -1,20 +1,20 @@
 use std::convert::{TryFrom, TryInto};
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
-use crate::{all_bit_vectors, block_to_bits, prg, Group, Share};
+use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Group, Share};
 
 use rayon::prelude::*;
 use scuttlebutt::{AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
-use crate::ibDCF::{ibDCFKey, EvalState, eval_str};
+use crate::fss::ibdcf::{ibDCFKey, EvalState, eval_str};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
-use crate::equalitytest::{multiple_gb_equality_test, multiple_ev_equality_test};
-use crate::field::BlockPair;
+use crate::garbled_circuits::equality::{multiple_gb_equality_test, multiple_ev_equality_test};
+use crate::data_structures::field::BlockPair;
 use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::time::Instant;
-use crate::greaterthantest::{multiple_gb_greater_than, multiple_ev_greater_than, BitWidth};
+use crate::garbled_circuits::greater_than::{multiple_gb_greater_than, multiple_ev_greater_than, BitWidth};
 
 #[derive(Clone)]
 struct TreeNode {
