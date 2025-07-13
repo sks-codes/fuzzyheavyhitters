@@ -13,7 +13,7 @@ fn test_okvs_basic_functionality() {
     let r2: [u8; 16] = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
     
     // Create OKVS instance
-    let okvs: RbOkvsF2k<16> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
+    let okvs: RbOkvsF2k<u128> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
     
     // Generate test data
     let mut rng = rand::thread_rng();

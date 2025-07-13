@@ -1,5 +1,6 @@
 use std::convert::TryInto;
 use std::ops::{BitXor, Shl, Shr};
+use std::fmt::Debug;
 use blake3;
 
 // Custom error type for OKVS operations
@@ -27,15 +28,27 @@ impl std::error::Error for OkvsError {}
 // Type alias for convenience
 pub type Result<T> = std::result::Result<T, OkvsError>;
 
-pub struct RbOkvsF2k<const KEY_DIM: usize> {
+/// Trait defining the requirements for OKVS value types
+pub trait OkvsValue: BitXor<Output = Self> + Copy + Clone + Debug + Default + PartialEq {}
+
+// Implement the trait for common types
+impl OkvsValue for u128 {}
+impl OkvsValue for u64 {}
+impl OkvsValue for u32 {}
+impl OkvsValue for u16 {}
+impl OkvsValue for u8 {}
+impl OkvsValue for bool {}
+
+pub struct RbOkvsF2k<V: OkvsValue> {
     pub kv_count: usize,
     pub columns: usize,
     band_width: usize,
     r1: [u8; 16],
     r2: [u8; 16],
+    _phantom: std::marker::PhantomData<V>,
 }
 
-impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
+impl<V: OkvsValue> RbOkvsF2k<V> {
     pub fn new(kv_count: usize, columns: usize, band_width: usize, r1: &[u8; 16], r2: &[u8; 16]) -> Self {
         assert!(band_width < columns, "Band width must be less than or equal to the number of columns");
         assert!(band_width <= 256, "Band width must be less than or equal to 256");
@@ -45,17 +58,18 @@ impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
             band_width,
             r1: *r1,
             r2: *r2,
+            _phantom: std::marker::PhantomData,
         }
     }
 
-    pub fn encode(&self, keys: &Vec<Vec<bool>>, values: &Vec<u128>) -> Result<Vec<u128>> {
+    pub fn encode(&self, keys: &Vec<Vec<bool>>, values: &Vec<V>) -> Result<Vec<V>> {
         assert_eq!(keys.len(), values.len(), "Keys and values must have the same length");
         assert_eq!(keys.len(), self.kv_count, "Keys length must match kv_count");
         let (mut matrix, start_pos, mut y) = self.create_sorted_matrix(keys, values)?;
         self.simple_gauss(&mut y, &mut matrix, start_pos)
     }
 
-    pub fn decode(&self, encoding: &Vec<u128>, key: &[Vec<bool>]) -> Vec<u128> {
+    pub fn decode(&self, encoding: &Vec<V>, key: &[Vec<bool>]) -> Vec<V> {
         let n = key.len();
         let mut start = vec![0usize; n];
         let mut band = vec![vec![false; self.band_width]; n];
@@ -67,12 +81,12 @@ impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
             *band_i = self.hash_to_band(&key[i], &self.r2);
         });
 
-        let mut res = vec![0; n];
+        let mut res = vec![V::default(); n];
 
         for i in 0..n {
             for j in 0..self.band_width {
                 if band[i][j] {
-                    res[i] ^= encoding[start[i] + j];
+                    res[i] = res[i] ^ encoding[start[i] + j];
                 }
             }
         }
@@ -80,11 +94,11 @@ impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
         res
     }
 
-    fn create_sorted_matrix(&self, keys: &Vec<Vec<bool>>, values: &Vec<u128>) -> Result<(Vec<Vec<bool>>, Vec<usize>, Vec<u128>)> {
+    fn create_sorted_matrix(&self, keys: &Vec<Vec<bool>>, values: &Vec<V>) -> Result<(Vec<Vec<bool>>, Vec<usize>, Vec<V>)> {
         let mut start_pos: Vec<(usize, usize)> = vec![(0, 0); self.kv_count];
         let mut matrix: Vec<Vec<bool>> = vec![vec![false; self.band_width]; self.kv_count];
         let mut start_ids: Vec<usize> = vec![0; self.kv_count];
-        let mut y: Vec<u128> = vec![0; self.kv_count];
+        let mut y: Vec<V> = vec![V::default(); self.kv_count];
 
         start_pos.iter_mut().enumerate().for_each(|(i, start_pos_i)| {
             *start_pos_i = (i, self.hash_to_index(&keys[i], &self.r1, self.columns - self.band_width));
@@ -109,10 +123,10 @@ impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
 
     fn simple_gauss(
         &self,
-        y: &mut Vec<u128>,
+        y: &mut Vec<V>,
         bands: &mut Vec<Vec<bool>>,
         start_pos: Vec<usize>,
-    ) -> Result<Vec<u128>> {
+    ) -> Result<Vec<V>> {
         assert_eq!(bands.len(), self.kv_count, "Number of bands must match kv_count");
         assert_eq!(y.len(), self.kv_count, "Length of y must match kv_count");  
 
@@ -146,28 +160,28 @@ impl<const KEY_DIM: usize> RbOkvsF2k<KEY_DIM> {
                     for k in 0..(self.band_width - first_nonzero[i]) {
                         bands[j][k + offset] ^= bands_i[k + first_nonzero[i]];
                     }
-                    y[j] ^= y_i;
+                    y[j] = y[j] ^ y_i;
                 }
 
             }
         }
 
-        let mut x = vec![0; self.columns];
+        let mut x = vec![V::default(); self.columns];
         for i in (0..self.kv_count).rev() {
             let mut res = y[i];   
             for j in 0..self.band_width {
                 if bands[i][j] {
-                    res ^= x[start_pos[i] + j];
+                    res = res ^ x[start_pos[i] + j];
                 }
             }
             x[pivot[i]] = res;
         }
 
         for i in 0..self.kv_count {
-            let mut res = 0;
+            let mut res = V::default();
             for j in 0..self.band_width {
                 if bands[i][j] {
-                    res ^= x[start_pos[i] + j];
+                    res = res ^ x[start_pos[i] + j];
                 }
             }
             if res != y[i] {

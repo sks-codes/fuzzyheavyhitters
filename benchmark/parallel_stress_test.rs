@@ -109,7 +109,7 @@ fn main() {
             local_rng.fill(&mut r2);
             
             // Create OKVS instance with fresh seeds for this run
-            let okvs: RbOkvsF2k<16> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
+            let okvs: RbOkvsF2k<u128> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
             
             // Generate fresh test data for each run
             let mut keys = Vec::new();

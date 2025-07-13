@@ -14,7 +14,7 @@ fn main() {
     let r1: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let r2: [u8; 16] = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
     
-    let okvs: RbOkvsF2k<16> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
+    let okvs: RbOkvsF2k<u128> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
     
     // Generate test data
     let mut rng = rand::thread_rng();
