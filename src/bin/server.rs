@@ -124,13 +124,11 @@ impl Collector for CollectorServer {
     ) -> Self::TreeCrawlLastFut {
         let mut coll = self.arc.lock().unwrap();
 
-        // Lock all channels
         let mut locked_channels: Vec<_> = self.gc_channels
             .iter()
             .map(|c| c.lock().unwrap())
             .collect();
 
-        // Get mutable references to inner channels
         let mut channel_refs: Vec<&mut MyChannel> = locked_channels
             .iter_mut()
             .map(|guard| &mut **guard)

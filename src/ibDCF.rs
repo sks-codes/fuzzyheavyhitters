@@ -4,7 +4,6 @@ use crate::Group;
 
 use serde::Deserialize;
 use serde::Serialize;
-use crate::sample_driving_data::i16_to_bitvec;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CorWord {
@@ -175,7 +174,7 @@ impl ibDCFKey
     pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(ibDCFKey, ibDCFKey)>, Vec<(ibDCFKey, ibDCFKey)>){
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
-        let delta = MSB_u32_to_bits(32, size);
+        let delta = MSB_u32_to_bits(alpha[0].len() as u8, size);
         for i in 0..alpha.len() {
             let left = subtract_bitstrings(alpha[i].as_slice(), delta.as_slice());
             let right = add_bitstrings(alpha[i].as_slice(), delta.as_slice());
@@ -185,23 +184,6 @@ impl ibDCFKey
             s1_keys.push(k1);
         }
         (s0_keys, s1_keys)
-    }
-    pub fn gen_l_inf_ball_from_coords((lat, long): (i16, i16), size: i16) -> (Vec<(ibDCFKey, ibDCFKey)>, Vec<(ibDCFKey, ibDCFKey)>) {
-        let left_lat = (lat - size).clamp(-9000, 9000);
-        let right_lat = (lat + size).clamp(-9000, 9000);
-        let left_long = (long - size).clamp(-18000, 18000);
-        let right_long = (long + size).clamp(-18000, 18000);
-        // println!("lat: {:?} - {:?}", lat, lat + size);
-        // println!("long: {:?} - {:?}", long, long + size);
-        let (k0_lat, k1_lat) = Self::gen_interval(
-            &i16_to_bitvec(left_lat),
-            &i16_to_bitvec(right_lat),
-        );
-        let (k0_long, k1_long) = Self::gen_interval(
-            &i16_to_bitvec(left_long),
-            &i16_to_bitvec(right_long),
-        );
-        (vec![k0_lat, k0_long], vec![k1_lat, k1_long])
     }
 
 

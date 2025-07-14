@@ -1,163 +1,111 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
-use csv::{Reader, Writer, StringRecord};
-use rand::{seq::IteratorRandom, rngs::StdRng, SeedableRng};
 use std::path::Path;
+use csv::{Reader, Writer};
+use std::io::{BufReader, BufWriter};
 
-const CENTIDEGREES_SCALE: f64 = 100.0; // 2 decimal places (~1.1 km precision)
+// Austin bounding box
+const AUSTIN_CENTER: (f64, f64) = (30.267, -97.743);
+const BUFFER_DEGREES: f64 = 1.0;
+const AUSTIN_MIN_LAT: f64 = AUSTIN_CENTER.0 - BUFFER_DEGREES;
+const AUSTIN_MAX_LAT: f64 = AUSTIN_CENTER.0 + BUFFER_DEGREES;
+const AUSTIN_MIN_LON: f64 = AUSTIN_CENTER.1 - BUFFER_DEGREES;
+const AUSTIN_MAX_LON: f64 = AUSTIN_CENTER.1 + BUFFER_DEGREES;
 
-// Convert lat/lng floats to centidegrees (i16)
-fn geo_to_int(lat: f64, lng: f64) -> (i16, i16) {
-    let lat_int = (lat * CENTIDEGREES_SCALE).round() as i16;
-    let lng_int = (lng * CENTIDEGREES_SCALE).round() as i16;
-    (lat_int, lng_int)
+//Grid metadata
+const PRECISION: i32 = 3;
+const DECIMAL_SCALE: u32 = 1000;
+
+const LAT_GRID_SIZE: u32 = 2000;
+const LON_GRID_SIZE: u32 = 2000;
+
+const LAT_BITS: usize = 11;
+const LON_BITS: usize = 11;
+
+pub fn geo_to_grid(lat: f64, lon: f64) -> (u32, u32) {
+    let lat_grid = ((lat - AUSTIN_MIN_LAT) * DECIMAL_SCALE as f64).round() as u32;
+    let lon_grid = ((lon - AUSTIN_MIN_LON) * DECIMAL_SCALE as f64).round() as u32;
+    (
+        if lat_grid < LAT_GRID_SIZE { lat_grid } else { LAT_GRID_SIZE - 1 },
+        if lon_grid < LON_GRID_SIZE { lon_grid } else { LON_GRID_SIZE - 1 }
+    )
 }
 
-// Convert centidegrees back to floats
-fn int_to_geo(lat_int: i16, lng_int: i16) -> (f64, f64) {
-    let lat = f64::from(lat_int) / CENTIDEGREES_SCALE;
-    let lng = f64::from(lng_int) / CENTIDEGREES_SCALE;
-    (lat, lng)
+pub fn grid_to_geo(lat_grid: u32, lon_grid: u32) -> (f64, f64) {
+    (
+        AUSTIN_MIN_LAT + (lat_grid as f64 / DECIMAL_SCALE as f64),
+        AUSTIN_MIN_LON + (lon_grid as f64 / DECIMAL_SCALE as f64)
+    )
 }
 
-/// Convert i16 to 16-bit vector (MSB first)
-pub fn i16_to_bitvec(value: i16) -> Vec<bool> {
-    let bits = value as u16; // Safe for bit ops
-    (0..16).map(|i| (bits >> (15 - i)) & 1 == 1).collect()
+pub fn to_bitvec(value: u32, bits: usize) -> Vec<bool> {
+    (0..bits).map(|i| ((value >> (bits - 1 - i)) & 1) == 1).collect()
 }
 
-/// Convert 16-bit vector back to i16
-fn bitvec_to_i16(bits: &[bool]) -> i16 {
-    let mut value: u16 = 0;
-    for (i, &bit) in bits.iter().enumerate() {
-        if bit {
-            value |= 1 << (15 - i);
-        }
-    }
-    value as i16
+pub fn from_bitvec(bits: &[bool]) -> u32 {
+    bits.iter().enumerate().fold(0, |acc, (i, &bit)| {
+        acc | ((bit as u32) << (bits.len() - 1 - i))
+    })
 }
 
-/// Sample start locations as 16-bit centidegrees
-// pub fn sample_start_locations<P: AsRef<Path>>(
-//     path: P,
-//     sample_size: usize,
-//     seed: Option<u64>,
-// ) -> Result<Vec<Vec<Vec<bool>>>, Box<dyn std::error::Error>> {
-//     let mut rdr = Reader::from_path(path)?;
-//     let mut rng = match seed {
-//         Some(s) => StdRng::seed_from_u64(s),
-//         None => StdRng::from_entropy(),
-//     };
-//
-//     let records: Vec<StringRecord> = rdr.records().collect::<Result<_, _>>()?;
-//
-//     records
-//         .iter()
-//         .choose_multiple(&mut rng, sample_size)
-//         .into_iter()
-//         .map(|record| {
-//             let (lat_int, lon_int) = geo_to_int(
-//                 record[12].parse::<f64>()?, // start_lat
-//                 record[13].parse::<f64>()?, // start_lon
-//             );
-//             Ok(vec![
-//                 i16_to_bitvec(lat_int),
-//                 i16_to_bitvec(lon_int),
-//             ])
-//         })
-//         .collect()
-// }
-
-pub fn sample_start_locations<P: AsRef<Path>>(
-        path: P,
-        sample_size: usize,
-        seed: Option<u64>,
-    ) -> Result<Vec<(i16, i16)>, Box<dyn std::error::Error>> {
+pub fn csv_to_bitvecs<P: AsRef<Path>>(
+    path: P,
+) -> Result<Vec<Vec<Vec<bool>>>, Box<dyn Error>> {
     let mut rdr = Reader::from_path(path)?;
-    let mut rng = match seed {
-        Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_entropy(),
-    };
 
-    let records: Vec<StringRecord> = rdr.records().collect::<Result<_, _>>()?;
+    rdr.records().map(|record| {
+        let record = record?;
+        let lon = record[7].parse::<f64>()?; //15 and 16 for start lon and lat
+        let lat = record[6].parse::<f64>()?; // 7 and 6 for end lon and lat
 
-    records
-        .iter()
-        .choose_multiple(&mut rng, sample_size)
-        .into_iter()
-        .map(|record| {
-            let (lat_int, lon_int) = geo_to_int(
-                record[14].parse::<f64>()?, // start_lat
-                record[13].parse::<f64>()?, // start_lon
-            );
-            Ok((lat_int, lon_int))
-        })
-        .collect()
+        let (lat_grid, lon_grid) = geo_to_grid(lat, lon);
+        let lat_bits = to_bitvec(lat_grid, LAT_BITS);
+        let lon_bits = to_bitvec(lon_grid, LON_BITS);
+        Ok(vec![lat_bits, lon_bits])
+    }).collect()
 }
 
-fn keep_only_header<P: AsRef<Path>>(input_path: P, output_path: P) -> Result<(), Box<dyn Error>> {
-    // Open input file
-    let input_file = File::open(input_path)?;
-    let mut reader = csv::Reader::from_reader(BufReader::new(input_file));
-
-    // Open output file
-    let output_file = File::create(output_path)?;
-    let mut writer = csv::Writer::from_writer(BufWriter::new(output_file));
-
-    // Get headers and write them to output
-    let headers = reader.headers()?.clone();
-    writer.write_record(&headers)?;
-
-    writer.flush()?;
-    Ok(())
-}
-
-/// Save heavy hitters with centidegree conversion
 pub fn save_heavy_hitters(
-    heavy_hitters: &[Vec<bool>],
+    heavy_hitters: Vec<Vec<bool>>,
     output_path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Open file in append mode (creates if doesn't exist)
-    let file = std::fs::OpenOptions::new()
+) -> Result<(), Box<dyn Error>> {
+    let file = File::options()
         .append(true)
         .create(true)
         .open(output_path)?;
 
-    let mut wtr = csv::Writer::from_writer(file);
+    let mut wtr = Writer::from_writer(BufWriter::new(file));
 
-    // Only write headers if file is empty
     if std::fs::metadata(output_path)?.len() == 0 {
-        wtr.write_record(&["index", "latitude", "longitude"])?;
+        wtr.write_record(&["latitude", "longitude"])?;
     }
+    let lat_bits = heavy_hitters[0].clone();
+    let lon_bits = heavy_hitters[1].clone();
+    let lat_grid = from_bitvec(lat_bits.as_slice());
+    let lon_grid = from_bitvec(lon_bits.as_slice());
+    let (lat, lon) = grid_to_geo(lat_grid, lon_grid);
 
-    for (i, chunk) in heavy_hitters.chunks_exact(2).enumerate() {
-        let lat = bitvec_to_i16(&chunk[0]);
-        let lon = bitvec_to_i16(&chunk[1]);
-        let (lat_float, lon_float) = int_to_geo(lat, lon);
-
-        wtr.write_record(&[
-            i.to_string(),
-            lat_float.to_string(),
-            lon_float.to_string(),
-        ])?;
-    }
+    wtr.write_record(&[
+        lat.to_string(),
+        lon.to_string(),
+    ])?;
 
     wtr.flush()?;
     Ok(())
 }
+
 #[test]
-fn test_austin_coords() {
-    let (lat, lon) = (30.26, -97.74); // Austin, 2 decimal places
-    let (lat_int, lon_int) = geo_to_int(lat, lon);
-    let bits_lat = i16_to_bitvec(lat_int);
-    let bits_lon = i16_to_bitvec(lon_int);
+fn test_grid_conversion() {
+    let (lat, lon) = (30.2672, -97.7431);
+    let (lat_grid, lon_grid) = geo_to_grid(lat, lon);
+    let (lat_back, lon_back) = grid_to_geo(lat_grid, lon_grid);
 
-    let reconstructed_lat = bitvec_to_i16(&bits_lat);
-    let reconstructed_lon = bitvec_to_i16(&bits_lon);
-    let (lat_back, lon_back) = int_to_geo(reconstructed_lat, reconstructed_lon);
+    let tolerance = 1.0 / DECIMAL_SCALE as f64;
+    assert!((lat - lat_back).abs() < tolerance);
+    assert!((lon - lon_back).abs() < tolerance);
+    println!("Test passed! Grid coordinates: ({}, {})", lat_grid, lon_grid);
 
-    assert_eq!(lat, lat_back); // Exact match (no floating-point errors)
-    assert_eq!(lon, lon_back);
-    println!("Test passed! Coordinates: ({}, {})", lat_back, lon_back);
+    let bits = to_bitvec(lat_grid, LAT_BITS);
+    let reconstructed = from_bitvec(&bits);
+    assert_eq!(lat_grid, reconstructed);
 }

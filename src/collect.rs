@@ -1,6 +1,5 @@
 use std::convert::{TryFrom, TryInto};
 use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
 use crate::{all_bit_vectors, block_to_bits, prg, Group, Share};
 
 use rayon::prelude::*;
@@ -112,9 +111,7 @@ where
 
         let child = TreeNode {
             path: new_path.clone(),
-            // value: child_val,
             key_states,
-            // key_values : vec![],
         };
         child
     }
@@ -124,7 +121,7 @@ where
         gc_sender: bool,
         channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>],
         threshold: T
-    ) -> Vec<bool>{//Vec<T> {
+    ) -> Vec<bool> {//Vec<T> {
         println!("Crawl");
         let start = Instant::now();
 
@@ -316,7 +313,6 @@ where
         println!("Crawl");
         let start = Instant::now();
 
-        // 1. Prepare next frontier (parallel tree expansion)
         let next_frontier = self
             .frontier
             .par_iter()
@@ -513,8 +509,6 @@ where
                 self.frontier.remove(i);
             }
         }
-
-        //println!("Size of frontier: {:?}", self.frontier.len());
     }
 
     pub fn tree_prune_last(&mut self, alive_vals: &[bool]) {
@@ -526,57 +520,7 @@ where
                 self.frontier_last.remove(i);
             }
         }
-
-        //println!("Size of frontier: {:?}", self.frontier.len());
     }
-
-
-    pub fn keep_values(nclients: usize, threshold: &T, vals0: &[T], vals1: &[T]) -> Vec<bool> {
-        assert_eq!(vals0.len(), vals1.len());
-
-        let nclients = T::from(nclients as u32);
-        let mut keep = vec![];
-        for i in 0..vals0.len() {
-            let mut v = T::zero();
-            v.add(&vals0[i]);
-            v.sub(&vals1[i]);
-            // println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
-
-            debug_assert!(v <= nclients);
-
-            // Keep nodes that are above threshold
-            // println!("{:?}",v);
-            keep.push(v >= *threshold);
-        }
-
-        keep
-    }
-
-    pub fn keep_values_last(nclients: usize, threshold: &U, vals0: &[U], vals1: &[U]) -> Vec<bool> {
-        assert_eq!(vals0.len(), vals1.len());
-
-        let nclients = U::from(nclients as u32);
-        let mut keep = vec![];
-        for i in 0..vals0.len() {
-            let mut v = U::zero();
-            let mut v0 = vals0[i].clone();
-            let mut v1 = vals1[i].clone();
-            v0.reduce();
-            v1.reduce();
-            v.add(&v0);
-            v.sub(&v1);
-            // println!("-> {:?} {:?} {:?}", v, *threshold, nclients);
-
-            debug_assert!(v <= nclients);
-
-            // Keep nodes that are above threshold
-            // println!("{:?}",v);
-            keep.push(v >= *threshold);
-        }
-
-        keep
-    }
-
 
 
     pub fn final_shares(&self) -> Vec<Result<U>> {

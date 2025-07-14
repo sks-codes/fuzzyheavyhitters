@@ -8,9 +8,9 @@ pub mod prg;
 pub mod rpc;
 pub mod ibDCF;
 pub mod equalitytest;
-pub mod sample_covid_data;
 pub mod sample_driving_data;
 mod greaterthantest;
+mod logexperiments;
 
 #[macro_use]
 extern crate lazy_static;

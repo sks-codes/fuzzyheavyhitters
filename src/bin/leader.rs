@@ -23,8 +23,7 @@ use rand::distributions::Alphanumeric;
 use std::time::{Duration, SystemTime};
 use counttree::ibDCF::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
-use counttree::sample_covid_data::sample_covid_locations;
-use counttree::sample_driving_data::{sample_start_locations, save_heavy_hitters};
+use counttree::sample_driving_data::{csv_to_bitvecs, save_heavy_hitters};
 
 type IntervalKey = (ibDCFKey, ibDCFKey);
 fn long_context() -> context::Context {
@@ -63,16 +62,6 @@ fn generate_strings(cfg: &config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>
             generate_random_bit_vectors(cfg.data_len - aug_len, cfg.n_dims) //leaving space for later per-client augmentation
         })
         .collect::<Vec<Vec<Vec<bool>>>>()
-}
-fn generate_covid_samples(nreq : usize, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
-    let covid_path = "data/COVID-19_Case_Surveillance_Public_Use_Data_with_Geography_20250430.csv";
-    let centroids_path = "data/county_centroids.csv";
-    if aug_len > 0 {
-        sample_covid_locations(&covid_path, &centroids_path, nreq, Some(aug_len as f64)).unwrap()
-    }
-    else{
-        sample_covid_locations(&covid_path, &centroids_path, nreq, None).unwrap()
-    }
 }
 
 fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
@@ -292,7 +281,7 @@ async fn final_shares(
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
     for res in &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1) {
         println!("Path = {:?}", res.path);
-        save_heavy_hitters(res.path.as_slice(), "data/ride_heavy_hitters.csv");
+        save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
     }
 
     Ok(())
@@ -304,7 +293,7 @@ async fn main() -> io::Result<()> {
     rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
     env_logger::init();
-    let (cfg, _, nreqs) = config::get_args("Leader", false, true);
+    let (cfg, _, mut nreqs) = config::get_args("Leader", false, true);
     debug_assert_eq!(cfg.data_len % 8, 0);
 
     // XXX WARNING: THERE IS NO TLS HERE!!!
@@ -316,18 +305,18 @@ async fn main() -> io::Result<()> {
         counttree::CollectorClient::new(client::Config::default(),
                                         tcp::connect(cfg.server1, Bincode::default).await?
         ).spawn();
-    let start = Instant::now();
-    println!("Generating keys...");
-    let (bench_keys0, bench_keys1) = generate_keys(&cfg);
-    println!("Done.");
-
-    let delta = start.elapsed().as_secs_f64();
-    println!(
-        "Generated {:?} keys in {:?} seconds ({:?} sec/key)",
-        bench_keys0.len(),
-        delta,
-        delta / (bench_keys0.len() as f64)
-    );
+    // let start = Instant::now();
+    // println!("Generating keys...");
+    // let (bench_keys0, bench_keys1) = generate_keys(&cfg);
+    // println!("Done.");
+    //
+    // let delta = start.elapsed().as_secs_f64();
+    // println!(
+    //     "Generated {:?} keys in {:?} seconds ({:?} sec/key)",
+    //     bench_keys0.len(),
+    //     delta,
+    //     delta / (bench_keys0.len() as f64)
+    // );
 
     let aug_len = 8;
     if cfg.distribution.as_str() == "zipf" {
@@ -364,25 +353,16 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    else{
-        // let mut strings :Vec<Vec<Vec<bool>>> = if cfg.distribution.as_str() == "covid"{
-        //     println!("Covid distribution sampling...");
-        //     generate_covid_samples(nreqs, aug_len)
-        // }
-        // else
-        let strings = if cfg.distribution.as_str() == "rides" {
-            println!("RideAustin distribution sampling...");
-            sample_start_locations("data/RideAustin_Weather.csv", nreqs, Some(42)).expect("ride sample failed")
-        }
-        else{
-            vec![]
-        };
-        println!("Generated {:?} samples", strings.len());
+    else if cfg.distribution.as_str() == "rides" {
+        println!("RideAustin distribution sampling...");
+        let strings = csv_to_bitvecs("data/sample.csv").expect("ride sample failed");
+        nreqs = strings.len();
+        println!("Generated {:?} samples", nreqs);
         let mut addkey0 = Vec::with_capacity(nreqs);
         let mut addkey1 = Vec::with_capacity(nreqs);
 
         for _j in 0..nreqs {
-            let (key0, key1) = ibDCFKey::gen_l_inf_ball_from_coords(strings[_j], cfg.ball_size as i16);
+            let (key0, key1) = ibDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
             addkey0.push(key0);
             addkey1.push(key1);
         }
