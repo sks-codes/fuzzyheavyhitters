@@ -2,22 +2,22 @@
 
 pub mod collect;
 pub mod config;
-pub mod fastfield;
-pub mod field;
-pub mod prg;
+pub mod data_structures;
 pub mod rpc;
-pub mod ibDCF;
-pub mod equalitytest;
-pub mod sample_driving_data;
-mod greaterthantest;
 mod logexperiments;
+pub mod fss;
+pub mod garbled_circuits;
+pub mod sample_driving_data;
+pub mod share_phase;
+pub mod aes;
+pub mod okvs_f2k;
 
 #[macro_use]
 extern crate lazy_static;
 
 use scuttlebutt::Block;
-pub use crate::field::Dummy;
-pub use crate::field::FieldElm;
+pub use crate::data_structures::field::Dummy;
+pub use crate::data_structures::field::FieldElm;
 pub use crate::rpc::CollectorClient;
 
 // Additive group, such as (Z_n, +)
@@ -33,7 +33,7 @@ pub trait Group {
     fn sub(&mut self, other: &Self);
 }
 
-pub trait Share: Group + prg::FromRng + Clone {
+pub trait Share: Group + data_structures::prg::FromRng + Clone {
     fn random() -> Self {
         let mut out = Self::zero();
         out.randomize();
@@ -212,6 +212,37 @@ fn full_adder(a: bool, b: bool, carry_in: bool) -> (bool, bool) {
     let carry_out = (a & b) | (b & carry_in) | (a & carry_in);
     (sum, carry_out)
 }
+
+fn xor<const N: usize>(a: &[u8; N], b: &[u8; N]) -> [u8; N] {
+    let mut result = [0u8; N];
+    for i in 0..N {
+        result[i] = a[i] ^ b[i];
+    }
+    result
+}
+
+fn and_bit<const N: usize>(a: [u8; N], b: bool) -> [u8; N] {
+    if b {
+        a
+    } else {
+        [0u8; N]
+    }
+}
+
+fn bytes_to_u128(bytes: &[u8]) -> u128 {
+    let mut buffer = [0u8; 16]; // Create a 16-byte buffer, initialized to zeros
+
+    // Determine how many bytes to copy (up to 16)
+    let bytes_to_copy = bytes.len().min(16);
+
+    // Copy the input bytes into the buffer.
+    // If bytes.len() < 16, the remaining bytes in buffer will stay 0.
+    // If bytes.len() > 16, only the first 16 bytes will be copied.
+    buffer[..bytes_to_copy].copy_from_slice(&bytes[..bytes_to_copy]);
+
+    u128::from_le_bytes(buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

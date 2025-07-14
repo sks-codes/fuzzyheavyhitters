@@ -4,18 +4,18 @@ use std::time::Instant;
 use std::{io, mem};
 use rand::Rng;
 use rayon::prelude::*;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
 use counttree::config::Config;
-use counttree::ibDCF::ibDCFKey;
+use counttree::fss::ibdcf::ibDCFKey;
 use counttree::string_to_bits;
 
 
 fn sample_string(len: usize) -> String {
     let mut rng = rand::thread_rng();
     std::iter::repeat(())
-        .map(|()| rng.sample(Alphanumeric))
+        .map(|()| rng.sample(Alphanumeric) as char)
         .take(len / 8)
         .collect()
 }

@@ -1,5 +1,5 @@
 use std::cmp::{max, min};
-use crate::{add_bitstrings, bits_to_u32, prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
+use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
 use crate::Group;
 
 use serde::Deserialize;
@@ -85,6 +85,8 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
     let data = seeds.map(|s| s.expand());
     let keep = bit;
     let lose = !keep;
+
+    println!("Generating CorWord from PRG outputs with bits {:?} and {:?}", data.0.bits, data.1.bits);
 
     let mut cw = CorWord {
         seed: data.0.seeds.get(lose) ^ data.1.seeds.get(lose),

@@ -1,10 +1,10 @@
 use crate::collect;
 use crate::FieldElm;
-use crate::fastfield::FE;
+use crate::data_structures::fastfield::FE;
 
 use serde::Deserialize;
 use serde::Serialize;
-use crate::ibDCF::ibDCFKey;
+use crate::fss::ibdcf::ibDCFKey;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResetRequest {}
