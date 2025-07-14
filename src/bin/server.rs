@@ -4,7 +4,7 @@
 use counttree::{
     collect, config,
     FieldElm,
-    fastfield::FE, prg,
+    data_structures::fastfield::FE, data_structures::prg,
     rpc::Collector,
     rpc::{
         AddKeysRequest, FinalSharesRequest, ResetRequest, TreeCrawlRequest, TreeInitRequest,
@@ -54,8 +54,8 @@ struct CollectorServer {
 impl Collector for CollectorServer {
     type AddKeysFut = Ready<String>;
     type TreeInitFut = Ready<String>;
-    type TreeCrawlFut = Ready<Vec<FE>>;
-    type TreeCrawlLastFut = Ready<Vec<FieldElm>>;
+    type TreeCrawlFut = Ready<Vec<bool>>;
+    type TreeCrawlLastFut = Ready<Vec<bool>>;
     type TreePruneFut = Ready<String>;
     type TreePruneLastFut = Ready<String>;
     type FinalSharesFut = Ready<Vec<collect::Result<FieldElm>>>;
@@ -112,22 +112,11 @@ impl Collector for CollectorServer {
             .map(|guard| &mut **guard)
             .collect();
 
-        let results = coll.tree_crawl(req.gc_sender, &mut channel_refs[..]);
+        let results = coll.tree_crawl(req.gc_sender, &mut channel_refs[..], req.threshold);
 
         future::ready(results)
     }
 
-    // fn tree_crawl_last(self, _: context::Context, _req: TreeCrawlLastRequest) -> Self::TreeCrawlLastFut {
-    //
-    //     let mut coll = self.arc.lock().unwrap();
-    //     let results = if let Some(gc_chan) = &self.gc_channels[0] {
-    //         let mut channel = gc_chan.lock().unwrap();
-    //         coll.tree_crawl_last(_req.gc_sender, Some(&mut *channel))
-    //     } else {
-    //         coll.tree_crawl_last(_req.gc_sender, None)
-    //     };
-    //     future::ready(results)
-    // }
     fn tree_crawl_last(
         self,
         _: context::Context,
@@ -135,19 +124,17 @@ impl Collector for CollectorServer {
     ) -> Self::TreeCrawlLastFut {
         let mut coll = self.arc.lock().unwrap();
 
-        // Lock all channels
         let mut locked_channels: Vec<_> = self.gc_channels
             .iter()
             .map(|c| c.lock().unwrap())
             .collect();
 
-        // Get mutable references to inner channels
         let mut channel_refs: Vec<&mut MyChannel> = locked_channels
             .iter_mut()
             .map(|guard| &mut **guard)
             .collect();
 
-        let results = coll.tree_crawl_last(req.gc_sender, &mut channel_refs[..]);
+        let results = coll.tree_crawl_last(req.gc_sender, &mut channel_refs[..], req.threshold);
 
         future::ready(results)
     }
@@ -170,29 +157,6 @@ impl Collector for CollectorServer {
         future::ready(out)
     }
 }
-
-// fn setup_unix_sockets(server_idx: u16, num_cpus: usize) -> io::Result<Vec<Arc<Mutex<MyChannel>>>> {
-//
-//     let mut channels = Vec::with_capacity(num_cpus);
-//
-//     for i in 0..num_cpus {
-//         let socket_path = format!("/tmp/gc-server-socket-{}", i);
-//
-//         let channel_result = if server_idx == 0 {
-//             // Garbler (client) side - with retries
-//             connect_with_retries(&socket_path)
-//         } else {
-//             // Evaluator (server) side
-//             create_server_socket(&socket_path)
-//         };
-//
-//         // Handle the Result here before pushing to vector
-//         let channel = channel_result?; // This will return early if error occurs
-//         channels.push(Arc::new(Mutex::new(channel)));
-//     }
-//
-//     Ok(channels)
-// }
 
 fn create_server_tcp_socket(port: u16) -> io::Result<MyChannel> {
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)));
@@ -260,56 +224,6 @@ fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
         }
     }
 }
-
-
-// Helper function for client connection with retries
-// fn connect_with_retries(socket_path: &str) -> io::Result<MyChannel> {
-//     let mut retries = 0;
-//     let mut last_error = None;
-//
-//     loop {
-//         match UnixStream::connect(socket_path) {
-//             Ok(stream) => {
-//                 return Ok(scuttlebutt::SyncChannel::new(
-//                     BufReader::new(stream.try_clone()?),
-//                     BufWriter::new(stream),
-//                 ));
-//             }
-//             Err(e) => {
-//                 last_error = Some(e);
-//                 if retries >= 10 {
-//                     return Err(io::Error::new(
-//                         io::ErrorKind::ConnectionRefused,
-//                         format!("Failed to connect after {} retries: {:?}",
-//                                 10, last_error)
-//                     ));
-//                 }
-//                 retries += 1;
-//                 std::thread::sleep(Duration::from_millis(500));
-//             }
-//         }
-//     }
-// }
-
-// Helper function for server socket creation
-// fn create_server_socket(socket_path: &str) -> io::Result<MyChannel> {
-//     // Clean up any existing socket file
-//     let _ = std::fs::remove_file(socket_path);
-//
-//     // Create parent directory if needed
-//     if let Some(parent) = Path::new(socket_path).parent() {
-//         std::fs::create_dir_all(parent)?;
-//     }
-//
-//     let listener = UnixListener::bind(socket_path)?;
-//     let (stream, _) = listener.accept()?;
-//
-//     Ok(scuttlebutt::SyncChannel::new(
-//         BufReader::new(stream.try_clone()?),
-//         BufWriter::new(stream),
-//     ))
-// }
-
 
 #[tokio::main]
 async fn main() -> io::Result<()> {

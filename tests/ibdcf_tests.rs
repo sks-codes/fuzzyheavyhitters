@@ -1,4 +1,4 @@
-use counttree::ibDCF::{eval_str, ibDCFKey};
+use counttree::fss::ibdcf::{eval_str, ibDCFKey};
 use counttree::{add_bitstrings, bits_to_u32, u32_to_bits, MSB_u32_to_bits};
 
 #[test]

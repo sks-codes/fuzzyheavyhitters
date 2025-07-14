@@ -86,7 +86,7 @@ pub fn get_args(name: &str, get_server_id: bool, get_n_reqs: bool) -> (Config, i
                 .long("num_requests")
                 .value_name("NUMBER")
                 .help("Number of client requests to generate")
-                .required(true)
+                .required(false)
                 .takes_value(true),
         );
     }
@@ -100,7 +100,7 @@ pub fn get_args(name: &str, get_server_id: bool, get_n_reqs: bool) -> (Config, i
 
     let mut n_reqs = 0;
     if get_n_reqs {
-        n_reqs = flags.value_of("num_requests").unwrap().parse().unwrap();
+        n_reqs = flags.value_of("num_requests").unwrap_or("0").parse().unwrap();
     }
 
     (

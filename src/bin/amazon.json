@@ -1,10 +1,10 @@
 {
   "data_len": 64,
   "n_dims": 2,
-  "ball_size": 8,
+  "ball_size": 5,
   "threshold": 0.005,
-  "server0": "172.31.26.253:2010",
-  "server1": "172.31.16.170:2010",
+  "server0": "172.31.26.253:3000",
+  "server1": "172.31.16.170:3000",
   "addkey_batch_size": 100,
   "sketch_batch_size": 100000,
   "sketch_batch_size_last": 25000,

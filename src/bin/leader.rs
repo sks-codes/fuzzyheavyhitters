@@ -1,4 +1,4 @@
-use counttree::{add_bitstrings, collect, config, fastfield, rpc::{
+use counttree::{add_bitstrings, collect, config, data_structures::fastfield, rpc::{
     AddKeysRequest, FinalSharesRequest, ResetRequest,
     TreeInitRequest,
     TreeCrawlRequest,
@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use futures::try_join;
 use std::io;
-use rand::{thread_rng, Rng};
+use rand::prelude::*;
+use rand::thread_rng;
+use rand_distr::Zipf;
 use rayon::prelude::*;
 use tarpc::{
     client,
@@ -18,13 +20,12 @@ use tarpc::{
     //server::{self, Channel},
 };
 
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
-use counttree::ibDCF::{eval_str, ibDCFKey};
+use counttree::fss::ibdcf::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
-use counttree::sample_covid_data::sample_covid_locations;
-use counttree::sample_driving_data::{sample_start_locations, save_heavy_hitters};
+use counttree::sample_driving_data::{csv_to_bitvecs, save_heavy_hitters};
 
 type IntervalKey = (ibDCFKey, ibDCFKey);
 fn long_context() -> context::Context {
@@ -38,7 +39,7 @@ fn long_context() -> context::Context {
 fn sample_string(len: usize) -> String {
     let mut rng = rand::thread_rng();
     std::iter::repeat(())
-        .map(|()| rng.sample(Alphanumeric))
+        .map(|()| rng.sample(Alphanumeric) as char)
         .take(len / 8)
         .collect()
 }
@@ -47,7 +48,7 @@ fn generate_random_bit_vectors(len: usize, d: usize) -> Vec<Vec<bool>> {
     (0..d)
         .map(|_| {
             let s: String = std::iter::repeat(())
-                .map(|()| rng.sample(Alphanumeric))
+                .map(|()| rng.sample(Alphanumeric) as char)
                 .take((len + 7) / 8) // Round up to ensure enough bits
                 .collect();
             let mut bits = string_to_bits(&s);
@@ -63,16 +64,6 @@ fn generate_strings(cfg: &config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>
             generate_random_bit_vectors(cfg.data_len - aug_len, cfg.n_dims) //leaving space for later per-client augmentation
         })
         .collect::<Vec<Vec<Vec<bool>>>>()
-}
-fn generate_covid_samples(nreq : usize, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
-    let covid_path = "data/COVID-19_Case_Surveillance_Public_Use_Data_with_Geography_20250430.csv";
-    let centroids_path = "data/county_centroids.csv";
-    if aug_len > 0 {
-        sample_covid_locations(&covid_path, &centroids_path, nreq, Some(aug_len as f64)).unwrap()
-    }
-    else{
-        sample_covid_locations(&covid_path, &centroids_path, nreq, None).unwrap()
-    }
 }
 
 fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
@@ -135,15 +126,14 @@ async fn add_fuzzy_keys(
     nreqs: usize,
     aug_len: usize,
 ) -> io::Result<()> {
-    use rand::distributions::Distribution;
     let mut rng = thread_rng();
-    let zipf = zipf::ZipfDistribution::new(cfg.num_sites, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
+    let zipf = Zipf::new(cfg.num_sites as f64, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
 
     let mut addkey0 = Vec::with_capacity(nreqs);
     let mut addkey1 = Vec::with_capacity(nreqs);
 
     for i in 0..nreqs {
-        let sample = zipf.sample(&mut rng) - 1;
+        let sample = (rng.sample(zipf) as usize).saturating_sub(1);
         let key_str = augment_string(strings[sample].clone(), aug_len);
         let (key0, key1) = ibDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
         addkey0.push(key0);
@@ -201,8 +191,8 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlRequest { gc_sender: true };
-    let req1 = TreeCrawlRequest { gc_sender: false };
+    let req0 = TreeCrawlRequest { gc_sender: true , threshold};
+    let req1 = TreeCrawlRequest { gc_sender: false, threshold};
 
     let response0 = client0.tree_crawl(long_context(), req0);
     let response1 = client1.tree_crawl(long_context(), req1);
@@ -216,18 +206,20 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    assert_eq!(vals0.len(), vals1.len());
-    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1);
+    // assert_eq!(vals0.len(), vals1.len());
+    // println!("Share 0: {:?}", vals0);
+    // println!("Share 1: {:?}", vals1);
+    // let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values(nreqs, &threshold, &vals0, &vals1);
 
-    println!("Keep: {:?}", &keep);
+    // println!("Keep: {:?}", &keep);
     let mut ap = 0;
-    for i in keep.clone() {
+    for i in vals1.clone() {
         if i {ap+= 1;};
     }
     println!("Active paths: {:?}", ap);
 
     // Tree prune
-    let req = TreePruneRequest { keep };
+    let req = TreePruneRequest { keep: vals1 };
     let response0 = client0.tree_prune(long_context(), req.clone());
     let response1 = client1.tree_prune(long_context(), req);
     try_join!(response0, response1).unwrap();
@@ -252,8 +244,8 @@ async fn run_level_last(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlLastRequest { gc_sender: true };
-    let req1 = TreeCrawlLastRequest { gc_sender: false };
+    let req0 = TreeCrawlLastRequest { gc_sender: true, threshold: threshold.clone() };
+    let req1 = TreeCrawlLastRequest { gc_sender: false, threshold: threshold };
 
     let response0 = client0.tree_crawl_last(long_context(), req0);
     let response1 = client1.tree_crawl_last(long_context(), req1);
@@ -266,12 +258,12 @@ async fn run_level_last(
         start_time.elapsed().as_secs_f64()
     );
 
-    assert_eq!(vals0.len(), vals1.len());
-    let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values_last(nreqs, &threshold, &vals0, &vals1);
+    // assert_eq!(vals0.len(), vals1.len());
+    // let keep = collect::KeyCollection::<fastfield::FE,FieldElm>::keep_values_last(nreqs, &threshold, &vals0, &vals1);
 
-    println!("Keep: {:?}", keep);
+    println!("Keep: {:?}", vals1);
 
-    let req = TreePruneLastRequest { keep };
+    let req = TreePruneLastRequest { keep: vals1};
     let response0 = client0.tree_prune_last(long_context(), req.clone());
     let response1 = client1.tree_prune_last(long_context(), req);
     try_join!(response0, response1).unwrap();
@@ -290,7 +282,7 @@ async fn final_shares(
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
     for res in &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1) {
         println!("Path = {:?}", res.path);
-        save_heavy_hitters(res.path.as_slice(), "data/ride_heavy_hitters.csv");
+        save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
     }
 
     Ok(())
@@ -302,7 +294,7 @@ async fn main() -> io::Result<()> {
     rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
     env_logger::init();
-    let (cfg, _, nreqs) = config::get_args("Leader", false, true);
+    let (cfg, _, mut nreqs) = config::get_args("Leader", false, true);
     debug_assert_eq!(cfg.data_len % 8, 0);
 
     // XXX WARNING: THERE IS NO TLS HERE!!!
@@ -314,19 +306,18 @@ async fn main() -> io::Result<()> {
         counttree::CollectorClient::new(client::Config::default(),
                                         tcp::connect(cfg.server1, Bincode::default).await?
         ).spawn();
-
-    let start = Instant::now();
-    println!("Generating keys...");
-    let (bench_keys0, bench_keys1) = generate_keys(&cfg);
-    println!("Done.");
-
-    let delta = start.elapsed().as_secs_f64();
-    println!(
-        "Generated {:?} keys in {:?} seconds ({:?} sec/key)",
-        bench_keys0.len(),
-        delta,
-        delta / (bench_keys0.len() as f64)
-    );
+    // let start = Instant::now();
+    // println!("Generating keys...");
+    // let (bench_keys0, bench_keys1) = generate_keys(&cfg);
+    // println!("Done.");
+    //
+    // let delta = start.elapsed().as_secs_f64();
+    // println!(
+    //     "Generated {:?} keys in {:?} seconds ({:?} sec/key)",
+    //     bench_keys0.len(),
+    //     delta,
+    //     delta / (bench_keys0.len() as f64)
+    // );
 
     let aug_len = 8;
     if cfg.distribution.as_str() == "zipf" {
@@ -363,25 +354,16 @@ async fn main() -> io::Result<()> {
             }
         }
     }
-    else{
-        // let mut strings :Vec<Vec<Vec<bool>>> = if cfg.distribution.as_str() == "covid"{
-        //     println!("Covid distribution sampling...");
-        //     generate_covid_samples(nreqs, aug_len)
-        // }
-        // else
-        let strings = if cfg.distribution.as_str() == "rides" {
-            println!("RideAustin distribution sampling...");
-            sample_start_locations("data/RideAustin_Weather.csv", nreqs, Some(42)).expect("ride sample failed")
-        }
-        else{
-            vec![]
-        };
-        println!("Generated {:?} samples", strings.len());
+    else if cfg.distribution.as_str() == "rides" {
+        println!("RideAustin distribution sampling...");
+        let strings = csv_to_bitvecs("data/sample.csv").expect("ride sample failed");
+        nreqs = strings.len();
+        println!("Generated {:?} samples", nreqs);
         let mut addkey0 = Vec::with_capacity(nreqs);
         let mut addkey1 = Vec::with_capacity(nreqs);
 
         for _j in 0..nreqs {
-            let (key0, key1) = ibDCFKey::gen_l_inf_ball_from_coords(strings[_j], cfg.ball_size as i16);
+            let (key0, key1) = ibDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
             addkey0.push(key0);
             addkey1.push(key1);
         }
