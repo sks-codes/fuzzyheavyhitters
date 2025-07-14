@@ -1,7 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 use std::io::{BufReader, BufWriter};
-use crate::{all_bit_vectors, block_to_bits, prg, Group, Share};
-
+use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Group, Share};
 use rayon::prelude::*;
 use scuttlebutt::{AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};

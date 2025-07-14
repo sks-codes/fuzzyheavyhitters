@@ -13,7 +13,6 @@ use crate::data_structures::pair::Pair;
 
 use serde::Deserialize;
 use serde::Serialize;
-use crate::sample_driving_data::i16_to_bitvec;
 
 use rand_core::RngCore; 
 use rand::Rng;
