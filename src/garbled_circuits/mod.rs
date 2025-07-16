@@ -5,3 +5,4 @@
 
 pub mod equality;
 pub mod greater_than;
+pub mod greater_than_full;
