@@ -19,10 +19,14 @@ use tarpc::{
     tokio_serde::formats::Bincode,
     //server::{self, Channel},
 };
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
+use chrono_tz::America::New_York;
 
 use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
+use counttree::data_structures::logexperiments::{log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters, ServerSide};
 use counttree::fss::ibdcf::{eval_str, ibDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
 use counttree::sample_driving_data::{csv_to_bitvecs, save_heavy_hitters};
@@ -179,7 +183,7 @@ async fn run_level(
     level: usize,
     nreqs: usize,
     start_time: Instant,
-) -> io::Result<usize> {
+) -> io::Result<(usize, ServerSide, ServerSide)> {
     let threshold64 = core::cmp::max(1, (cfg.threshold * (nreqs as f64)) as u64);
     let threshold = fastfield::FE::new(threshold64);
 
@@ -197,7 +201,7 @@ async fn run_level(
     let response0 = client0.tree_crawl(long_context(), req0);
     let response1 = client1.tree_crawl(long_context(), req1);
 
-    let (vals0, vals1) = try_join!(response0, response1).unwrap();
+    let ((vals0, server_data0), (vals1, server_data1)) = try_join!(response0, response1).unwrap();
 
     println!(
         "TreeCrawlDone {:?} {:?} {:?}",
@@ -224,7 +228,7 @@ async fn run_level(
     let response1 = client1.tree_prune(long_context(), req);
     try_join!(response0, response1).unwrap();
 
-    Ok(vals0.len())
+    Ok((vals0.len(), server_data0, server_data1))
 }
 
 async fn run_level_last(
@@ -233,7 +237,7 @@ async fn run_level_last(
     client1: &mut counttree::CollectorClient,
     nreqs: usize,
     start_time: Instant,
-) -> io::Result<usize> {
+) -> io::Result<(usize, ServerSide, ServerSide)> {
     let threshold64 = core::cmp::max(1, (cfg.threshold * (nreqs as f64)) as u32);
     let threshold = FieldElm::from(threshold64);
 
@@ -250,7 +254,7 @@ async fn run_level_last(
     let response0 = client0.tree_crawl_last(long_context(), req0);
     let response1 = client1.tree_crawl_last(long_context(), req1);
 
-    let (vals0, vals1) = try_join!(response0, response1).unwrap();
+    let ((vals0, server_data0), (vals1, server_data1)) = try_join!(response0, response1).unwrap();
 
     println!(
         "TreeCrawlDone LAST {:?} {:?}",
@@ -268,24 +272,24 @@ async fn run_level_last(
     let response1 = client1.tree_prune_last(long_context(), req);
     try_join!(response0, response1).unwrap();
 
-    Ok(vals0.len())
+    Ok((vals0.len(), server_data0, server_data1))
 }
 
 async fn final_shares(
     client0: &mut counttree::CollectorClient,
     client1: &mut counttree::CollectorClient,
-) -> io::Result<()> {
-    // Final shares
+) -> io::Result<usize> {
     let req = FinalSharesRequest {};
     let response0 = client0.final_shares(long_context(), req.clone());
     let response1 = client1.final_shares(long_context(), req);
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
-    for res in &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1) {
+    let results = &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1);
+    for res in results{
         println!("Path = {:?}", res.path);
         save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
     }
 
-    Ok(())
+    Ok(results.len())
 }
 
 #[tokio::main]
@@ -318,7 +322,7 @@ async fn main() -> io::Result<()> {
     //     delta,
     //     delta / (bench_keys0.len() as f64)
     // );
-
+    let mut client_data = ClientSide{ key_gen_time_avg_ms: 0.0, key_size_bytes: 0 };
     let aug_len = 8;
     if cfg.distribution.as_str() == "zipf" {
         println!("Zipf distribution sampling...");
@@ -370,6 +374,7 @@ async fn main() -> io::Result<()> {
 
         reset_servers(&mut client0, &mut client1).await?;
 
+        let client_time = Instant::now();
         let mut left_to_go = nreqs;
         let reqs_in_flight = 1000;
         while left_to_go > 0 {
@@ -395,15 +400,22 @@ async fn main() -> io::Result<()> {
                 r.await?;
             }
         }
+        let total_client_time = client_time.elapsed().as_secs_f64();
+        let avg_client_time = total_client_time / nreqs as f64;
+        let serialized_key = bincode::serialize(&vec![addkey0[0].clone(), addkey1[0].clone()]).unwrap();
+        let key_size = serialized_key.len();
+        client_data.key_gen_time_avg_ms = avg_client_time * 1000f64;
+        client_data.key_size_bytes = key_size;
     }
     tree_init(&mut client0, &mut client1).await?;
 
 
     let start = Instant::now();
     let mut active_paths = 0;
+    let mut server_data : Vec<(ServerSide, ServerSide)> = vec![];
     for level in 0..cfg.data_len-1 {
-        active_paths = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
-
+        let (active_paths, server_data0, server_data1) = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
+        server_data.push((server_data0, server_data1));
         println!(
             "Level {:?} {:?}",
             level,
@@ -411,7 +423,8 @@ async fn main() -> io::Result<()> {
         );
     }
 
-    let active_paths = run_level_last(&cfg, &mut client0, &mut client1, nreqs, start).await?;
+    let (active_paths, server_data0, server_data1) = run_level_last(&cfg, &mut client0, &mut client1, nreqs, start).await?;
+    server_data.push((server_data0, server_data1));
     println!(
         "Level {:?} active_paths={:?} {:?}",
         cfg.data_len,
@@ -419,7 +432,22 @@ async fn main() -> io::Result<()> {
         start.elapsed().as_secs_f64()
     );
 
-    final_shares(&mut client0, &mut client1).await?;
+    let num_heavy_hitters = final_shares(&mut client0, &mut client1).await?;
+    let total_time = start.elapsed().as_secs_f64();
+    let utc_now: DateTime<Utc> = Utc::now();
+    let et_now: DateTime<Tz> = utc_now.with_timezone(&New_York);
 
+    let data = Experiment{metadata: Metadata{
+        experiment_id: "RideAustin Busiest Day".to_string(),
+        date: et_now.to_string(),
+    }, parameters: Parameters {
+        num_clients: nreqs,
+        dimensions: cfg.n_dims,
+        string_length: cfg.data_len,
+        threshold: cfg.threshold as usize,
+        ball_radius: cfg.ball_size as u32,
+    }, client_side: client_data, server_side: server_data, experiment_results: ExperimentResults{total_time, num_heavy_hitters}};
+
+    log_experiment_to_json(&data, "data/ride_austin_experiments.json");
     Ok(())
 }

@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::time::Instant;
 use crate::garbled_circuits::greater_than::{multiple_gb_greater_than, multiple_ev_greater_than, BitWidth};
+use crate::data_structures::logexperiments::{ServerSide, TimeBreakdown};
 
 #[derive(Clone)]
 struct TreeNode {
@@ -120,7 +121,7 @@ where
         gc_sender: bool,
         channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>],
         threshold: T
-    ) -> Vec<bool> {//Vec<T> {
+    ) -> (Vec<bool>, ServerSide) {
         println!("Crawl");
         let start = Instant::now();
 
@@ -157,8 +158,8 @@ where
             })
             .collect();
 
-        let non_mpc = start.elapsed();
-        println!("Tree searching and FSS - {:?}", non_mpc);
+        let FSS = start.elapsed();
+        println!("Tree searching and FSS - {:?}", FSS);
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
@@ -229,8 +230,8 @@ where
             results
         }).unwrap();
 
-        let ot = start.elapsed() - non_mpc;
-        println!("Equality Garbled Circuit and OT - {:?}", ot);
+        let GC_and_ot = start.elapsed() - FSS;
+        println!("Equality Garbled Circuit and OT - {:?}", GC_and_ot);
         let results_by_node: Vec<T> = node_client_string
             .par_iter()
             .enumerate()
@@ -251,7 +252,7 @@ where
                 node_sum
             })
             .collect();
-        let fa = start.elapsed() - (ot + non_mpc);
+        let fa = start.elapsed() - (GC_and_ot + FSS);
         println!("Field actions - {:?}", fa);
 
         let final_res = crossbeam::scope(|s| {
@@ -294,13 +295,24 @@ where
             results
         }).unwrap();
 
-        println!("GEQ garbled circuit - {:?}", start.elapsed() - (ot + non_mpc + fa));
+        let GCcomp_time = start.elapsed() - (GC_and_ot + FSS + fa);
+        println!("GEQ garbled circuit - {:?}", GCcomp_time);
 
         println!("...done");
 
         self.frontier = next_frontier;
         // results_by_node
-        final_res
+        (final_res, ServerSide{
+            total_level_time: start.elapsed().as_secs_f64(),
+            time_breakdown: TimeBreakdown {
+                FSS: FSS.as_secs_f64(),
+                GCequality: GC_and_ot.as_secs_f64(),
+                FieldActions: fa.as_secs_f64(),
+                GCCompare: GCcomp_time.as_secs_f64(),
+            },
+            num_threads: channels.len(),
+            nodes_searched: results_by_node.len(),
+        })
     }
 
     pub fn tree_crawl_last(
@@ -308,7 +320,7 @@ where
         gc_sender: bool,
         channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>],
         threshold: U
-    ) -> Vec<bool> {
+    ) -> (Vec<bool>, ServerSide) {
         println!("Crawl");
         let start = Instant::now();
 
@@ -345,8 +357,8 @@ where
             })
             .collect();
 
-        let non_mpc = start.elapsed();
-        println!("Tree searching and FSS - {:?}", non_mpc);
+        let FSS = start.elapsed();
+        println!("Tree searching and FSS - {:?}", FSS);
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
@@ -417,8 +429,8 @@ where
         }).unwrap();
 
 
-        let ot = start.elapsed() - non_mpc;
-        println!("Equality Garbled Circuit and OT - {:?}", ot);
+        let GC_and_ot = start.elapsed() - FSS;
+        println!("Equality Garbled Circuit and OT - {:?}", GC_and_ot);
         let mut results_by_node = Vec::new();
         let mut current_idx = 0;
         for node in &node_client_string {
@@ -426,7 +438,6 @@ where
             let node_results : Vec<U> = all_node_vals[current_idx..current_idx + num_clients].to_vec();
             let mut node_sum = U::zero();
             for (i, v) in node_results.iter().enumerate() {
-                // Add in only live values
                 if self.keys[i].0 {
                     node_sum.add_lazy(v);
                 }
@@ -438,7 +449,7 @@ where
             current_idx += num_clients;
         }
 
-        let fa = start.elapsed() - (ot + non_mpc);
+        let fa = start.elapsed() - (GC_and_ot + FSS);
         println!("Field actions - {:?}", fa);
         let final_res = crossbeam::scope(|s| {
             let mut results = vec![];
@@ -453,15 +464,12 @@ where
                 }
                 let end_idx = std::cmp::min(start_idx + chunk_size, results_by_node.len());
                 let mut chunk = results_by_node[start_idx..end_idx].to_vec();
-                println!("pre conversions");
                 let chunk_bits : Vec<Vec<u16>> = chunk
                     .iter()
                     .map(|b| {
                         let mut x = b.clone();
                         x.reduce();
-                        println!("{:?}", x);
                         let blocks: BlockPair = x.try_into().expect("Conversion failed");
-                        println!("here");
                         let mut bits : Vec<u16> = block_to_bits(blocks.0[0], true).iter().map(|b| *b as u16).collect();
                         let second_half : Vec<u16>= block_to_bits(blocks.0[1], true).iter().map(|b| *b as u16).collect();
                         bits.extend(second_half);
@@ -488,7 +496,8 @@ where
             results
         }).unwrap();
 
-        println!("GEQ garbled circuit - {:?}", start.elapsed() - (ot + non_mpc + fa));
+        let GCcomp_time = start.elapsed() - (GC_and_ot + FSS + fa);
+        println!("GEQ garbled circuit - {:?}", GCcomp_time);
         println!("...done");
         self.frontier_last = next_frontier.par_iter().enumerate().map(|(i,node)| {
                 Result::<U> {
@@ -496,7 +505,18 @@ where
                     value: results_by_node[i].clone(),
                 }
             }).collect::<Vec<Result<U>>>();
-        final_res
+
+        (final_res, ServerSide{
+            total_level_time: start.elapsed().as_secs_f64(),
+            time_breakdown: TimeBreakdown {
+                FSS: FSS.as_secs_f64(),
+                GCequality: GC_and_ot.as_secs_f64(),
+                FieldActions: fa.as_secs_f64(),
+                GCCompare: GCcomp_time.as_secs_f64(),
+            },
+            num_threads: channels.len(),
+            nodes_searched: results_by_node.len(),
+        })
     }
 
     pub fn tree_prune(&mut self, alive_vals: &[bool]) {

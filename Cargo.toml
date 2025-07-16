@@ -34,6 +34,9 @@ num_cpus = "1.16.0"
 memmap2 = "0.9.5"
 blake3 = "1.8.2"
 indicatif = "0.18.0"
+chrono = "0.4"
+chrono-tz = "0.8"
+
 
 [[bin]]
 name = "okvs_benchmark"

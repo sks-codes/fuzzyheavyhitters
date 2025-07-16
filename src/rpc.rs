@@ -4,6 +4,7 @@ use crate::data_structures::fastfield::FE;
 
 use serde::Deserialize;
 use serde::Serialize;
+use crate::data_structures::logexperiments::ServerSide;
 use crate::fss::ibdcf::ibDCFKey;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,8 +61,8 @@ pub trait Collector {
     async fn reset(rst: ResetRequest) -> String;
     async fn add_keys(add: AddKeysRequest) -> String;
     async fn tree_init(req: TreeInitRequest) -> String;
-    async fn tree_crawl(req: TreeCrawlRequest) -> Vec<bool>;
-    async fn tree_crawl_last(req: TreeCrawlLastRequest) -> Vec<bool>;
+    async fn tree_crawl(req: TreeCrawlRequest) -> (Vec<bool>, ServerSide);
+    async fn tree_crawl_last(req: TreeCrawlLastRequest) -> (Vec<bool>, ServerSide);
     async fn tree_prune(req: TreePruneRequest) -> String;
     async fn tree_prune_last(req: TreePruneLastRequest) -> String;
     async fn final_shares(req: FinalSharesRequest) -> Vec<collect::Result<FieldElm>>;

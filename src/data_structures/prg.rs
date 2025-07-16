@@ -106,7 +106,7 @@ impl PrgSeed {
                 seeds: (PrgSeed::zero(), PrgSeed::zero()),
             };
 
-            println!("PRG outputs bits {:?}", out.bits);
+            // println!("PRG outputs bits {:?}", out.bits);
 
             if left {
                 s.fill_bytes(&mut out.seeds.0.key);

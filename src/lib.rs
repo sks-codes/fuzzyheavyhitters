@@ -4,7 +4,6 @@ pub mod collect;
 pub mod config;
 pub mod data_structures;
 pub mod rpc;
-mod logexperiments;
 pub mod fss;
 pub mod garbled_circuits;
 pub mod sample_driving_data;

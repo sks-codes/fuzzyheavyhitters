@@ -34,6 +34,7 @@ use tarpc::{
     tokio_serde::formats::Bincode,
     serde_transport::tcp,
 };
+use counttree::data_structures::logexperiments::ServerSide;
 use counttree::rpc::TreeCrawlLastRequest;
 
 extern crate num_cpus;
@@ -54,8 +55,8 @@ struct CollectorServer {
 impl Collector for CollectorServer {
     type AddKeysFut = Ready<String>;
     type TreeInitFut = Ready<String>;
-    type TreeCrawlFut = Ready<Vec<bool>>;
-    type TreeCrawlLastFut = Ready<Vec<bool>>;
+    type TreeCrawlFut = Ready<(Vec<bool>, ServerSide)>;
+    type TreeCrawlLastFut = Ready<(Vec<bool>, ServerSide)>;
     type TreePruneFut = Ready<String>;
     type TreePruneLastFut = Ready<String>;
     type FinalSharesFut = Ready<Vec<collect::Result<FieldElm>>>;
@@ -82,17 +83,6 @@ impl Collector for CollectorServer {
         future::ready("Done".to_string())
     }
 
-    // fn tree_crawl(self, _: context::Context, _req: TreeCrawlRequest) -> Self::TreeCrawlFut {
-    //
-    //     let mut coll = self.arc.lock().unwrap();
-    //     let results = if let Some(gc_chan) = &self.gc_channel {
-    //         let mut channel = gc_chan.lock().unwrap();
-    //         coll.tree_crawl(_req.gc_sender, Some(&mut *channel))
-    //     } else {
-    //         coll.tree_crawl(_req.gc_sender, None)
-    //     };
-    //     future::ready(results)
-    // }
     fn tree_crawl(
         self,
         _: context::Context,
@@ -100,13 +90,11 @@ impl Collector for CollectorServer {
     ) -> Self::TreeCrawlFut {
         let mut coll = self.arc.lock().unwrap();
 
-        // Lock all channels
         let mut locked_channels: Vec<_> = self.gc_channels
             .iter()
             .map(|c| c.lock().unwrap())
             .collect();
 
-        // Get mutable references to inner channels
         let mut channel_refs: Vec<&mut MyChannel> = locked_channels
             .iter_mut()
             .map(|guard| &mut **guard)
@@ -282,7 +270,6 @@ async fn main() -> io::Result<()> {
                 arc: arc.clone(),
                 gc_channels: gc_channels.clone(),
             };
-
             channel.execute(coll_server.serve())
         })
         .buffer_unordered(100)
