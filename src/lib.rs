@@ -8,6 +8,9 @@ pub mod fss;
 pub mod garbled_circuits;
 pub mod sample_driving_data;
 pub mod share_phase;
+pub mod check_phase;
+pub mod share_phase_lp;
+pub mod check_phase_lp;
 pub mod aes;
 pub mod okvs_f2k;
 

@@ -26,11 +26,6 @@ fn get_bit_width_from_modint(modint: &ModInt) -> usize {
     bit_width
 }
 
-/// Garbler preprocessing for complex comparison: t - y and mod - 1 - y
-/// Returns (z1_values, z2_values, b_values) where:
-/// - z1 = t - y (mod modulus) 
-/// - z2 = modulus - 1 - y
-/// - b = y <= t
 fn garbler_preprocess_complex(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
     assert_eq!(inputs_y.len(), inputs_t.len(), "y and t inputs must have same length");
     
@@ -45,14 +40,15 @@ fn garbler_preprocess_complex(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<
         let bit_width = get_bit_width_from_modint(y);
         
         // z1 = t - y (mod modulus)
-        let z1 = if t.val() >= y.val() {
+        let mut z1 = if t.val() >= y.val() {
             t.val() - y.val()
         } else {
             modulus - (y.val() - t.val())
         };
+        z1 = modulus - 1 - z1;
         
         // z2 = modulus - 1 - y  
-        let z2 = modulus - 1 - y.val();
+        let z2 = y.val();
         
         // b = y <= t
         let b = y.val() <= t.val();
@@ -70,8 +66,7 @@ fn garbler_preprocess_complex(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<
 /// Evaluator preprocessing: mod - 1 - x
 fn evaluator_preprocess_complex(inputs_x: &[ModInt]) -> Vec<u128> {
     inputs_x.iter().map(|x| {
-        let modulus = x.modulus();
-        let z3 = modulus - 1 - x.val();
+        let z3 = x.val();
         println!("x: {}, z3: {}", x.val(), z3);
         z3
     }).collect()
@@ -110,7 +105,7 @@ fn make_value_from_u128(value: u128, bit_width: usize) -> Vec<bool> {
 
 /// Garbler side for complex comparison with threshold
 /// Computes whether (x + y) mod modulus >= t using overflow detection
-/// Circuit: [overflow(z3 + z2) AND (b AND overflow(z3 + z1))] OR [overflow1 AND (overflow2 OR b)]
+/// Circuit: negation of the <= circuit
 /// Where z1 = t - y, z2 = mod - 1 - y, z3 = mod - 1 - x, b = y <= t
 pub fn multiple_gb_complex_comparison<C>(
     rng: &mut AesRng,
@@ -157,7 +152,8 @@ where
 }
 
 /// Core circuit logic: Complex comparison implementing (x + y) mod modulus >= t
-/// Computes: [overflow(z3 + z2) AND (b AND overflow(z3 + z1))] OR [overflow1 AND (overflow2 OR b)]
+/// This is the negation of the <= circuit
+/// Let z1 = (t - y) mod modulus, z2 = (modulus - 1 - y), z3 = (modulus - 1 - x)
 fn fancy_complex_comparison<F>(
     f: &mut F,
     wire_inputs: ComplexComparisonInputs<F::Item>,
@@ -174,23 +170,32 @@ where
         let z3_wires = &wire_inputs.evaluator_z3_wires[i];
         
         // Compute overflow(z3 + z2)
+        // 1 is equivalent to x+y > mod - 1 
+        // 0 is equivalent to x+y <= mod - 1
         let (sum1, carry1) = f.bin_addition(z3_wires, z2_wires)?;
-        let overflow1 = carry1; // This is the overflow bit for z3 + z2
+        let x_plus_y_overflow = carry1; 
+        let x_plus_y_not_overflow = f.negate(&x_plus_y_overflow)?;
         
         // Compute overflow(z3 + z1) 
+        // 1 is equivalent to x > (t-y) mod modulus
+        // 0 is equivalent to x <= (t-y) mod modulus
         let (sum2, carry2) = f.bin_addition(z3_wires, z1_wires)?;
-        let overflow2 = carry2; // This is the overflow bit for z3 + z1
+        let overflow2 = carry2; 
+        let x_lt_t_minus_y = f.negate(&overflow2)?;
         
         // First part: overflow(z3 + z2) AND (b AND overflow(z3 + z1))
-        let b_and_overflow2 = f.and(b_wire, &overflow2)?;
-        let first_part = f.and(&overflow1, &b_and_overflow2)?;
+        let b_and_overflow2 = f.and(b_wire, &x_lt_t_minus_y)?;
+        let first_part = f.and(&x_plus_y_not_overflow, &b_and_overflow2)?;
         
-        // Second part: overflow1 AND (overflow2 OR b_wire)
-        let overflow2_or_b = f.or(&overflow2, b_wire)?;
-        let second_part = f.and(&overflow1, &overflow2_or_b)?;
+        // Second part: not overflow1 AND (overflow2 OR b_wire)
+        let overflow2_or_b = f.or(&x_lt_t_minus_y, b_wire)?;
+        let second_part = f.and(&x_plus_y_overflow, &overflow2_or_b)?;
+
+        // This computes (x + y) mod modulus <= t
+        let le_result = f.or(&first_part, &second_part)?;
         
-        // Final result: first_part OR second_part
-        let final_result = f.or(&first_part, &second_part)?;
+        // For >= t, we need to negate the <= result
+        let final_result = f.negate(&le_result)?;
         
         final_results.push(final_result);
     }

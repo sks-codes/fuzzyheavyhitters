@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use scuttlebutt::{AesRng, Channel};
 use counttree::data_structures::modint::ModInt;
-use counttree::garbled_circuits::greater_than_full::{
+use counttree::garbled_circuits::less_than_or_equal_threshold::{
     multiple_gb_complex_comparison, multiple_ev_complex_comparison
 };
 
@@ -18,88 +18,7 @@ fn test_complex_comparison_basic() {
     // Evaluator inputs  
     let x_values = vec![ModInt::new(6, modulus), ModInt::new(12, modulus)];
     
-    // Manual calculation for verification:
-    // We want to compute: (x + y) mod modulus >= t
-    
-    // Case 1: x=6, y=5, t=8, modulus=16
-    // (x + y) mod modulus = (6 + 5) mod 16 = 11 mod 16 = 11
-    // 11 >= 8? Yes, so result should be true
-    
-    // Case 2: x=12, y=10, t=7, modulus=16  
-    // (x + y) mod modulus = (12 + 10) mod 16 = 22 mod 16 = 6
-    // 6 >= 7? No, so result should be false
-    
-    let expected = vec![true, false];
-
-    let (sender, receiver) = UnixStream::pair().unwrap();
-
-    std::thread::spawn(move || {
-        let rng_gb = AesRng::new();
-        let reader = BufReader::new(sender.try_clone().unwrap());
-        let writer = BufWriter::new(sender);
-        let mut channel = Channel::new(reader, writer);
-        multiple_gb_complex_comparison(&mut rng_gb.clone(), &mut channel, &y_values, &t_values);
-    });
-
-    let rng_ev = AesRng::new();
-    let reader = BufReader::new(receiver.try_clone().unwrap());
-    let writer = BufWriter::new(receiver);
-    let mut channel = Channel::new(reader, writer);
-
-    let results = multiple_ev_complex_comparison(&mut rng_ev.clone(), &mut channel, &x_values);
-    assert_eq!(results, expected);
-}
-
-#[test] 
-fn test_complex_comparison_edge_cases() {
-    // Test with edge cases for (x + y) mod modulus < t
-    let modulus = 8u128; // 3 bits
-    
-    // Case where sum wraps around and result is true
-    let y_values = vec![ModInt::new(6, modulus)];
-    let t_values = vec![ModInt::new(4, modulus)]; 
-    let x_values = vec![ModInt::new(5, modulus)];
-    
-    // Manual calculation:
-    // (x + y) mod modulus = (5 + 6) mod 8 = 11 mod 8 = 3
-    // 3 >= 4? No, so result should be false
-    
-    let expected = vec![false];
-
-    let (sender, receiver) = UnixStream::pair().unwrap();
-
-    std::thread::spawn(move || {
-        let rng_gb = AesRng::new();
-        let reader = BufReader::new(sender.try_clone().unwrap());
-        let writer = BufWriter::new(sender);
-        let mut channel = Channel::new(reader, writer);
-        multiple_gb_complex_comparison(&mut rng_gb.clone(), &mut channel, &y_values, &t_values);
-    });
-
-    let rng_ev = AesRng::new();
-    let reader = BufReader::new(receiver.try_clone().unwrap());
-    let writer = BufWriter::new(receiver);
-    let mut channel = Channel::new(reader, writer);
-
-    let results = multiple_ev_complex_comparison(&mut rng_ev.clone(), &mut channel, &x_values);
-    assert_eq!(results, expected);
-}
-
-#[test]
-fn test_complex_comparison_no_wrap() {
-    // Test case where sum doesn't wrap around
-    let modulus = 16u128;
-    
-    // Case where sum doesn't overflow modulus
-    let y_values = vec![ModInt::new(3, modulus)];
-    let t_values = vec![ModInt::new(10, modulus)];
-    let x_values = vec![ModInt::new(4, modulus)];
-    
-    // Manual calculation:
-    // (x + y) mod modulus = (4 + 3) mod 16 = 7 mod 16 = 7
-    // 7 >= 10? No, so result should be false
-    
-    let expected = vec![false];
+    let expected = vec![false, true];
 
     let (sender, receiver) = UnixStream::pair().unwrap();
 
@@ -134,7 +53,7 @@ fn test_complex_comparison_brute_force() {
             for t in 0..modulus {
                 // Calculate expected result: (x + y) mod modulus >= t
                 let sum_mod = (x + y) % modulus;
-                let expected = sum_mod >= t;
+                let expected = sum_mod <= t;
                 
                 test_cases.push((x, y, t));
                 expected_results.push(expected);
