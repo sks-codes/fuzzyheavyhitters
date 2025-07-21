@@ -16,7 +16,7 @@ use std::thread;
 use scuttlebutt::{AesRng, Channel};
 use crate::share_phase_lp::{SharedLpRange, ShareLpPhase, ShareLpPhaseError};
 use crate::garbled_circuits::less_than_or_equal_threshold::{
-    multiple_gb_complex_comparison, multiple_ev_complex_comparison
+    multiple_gb_less_than_ss, multiple_ev_less_than_ss
 };
 use crate::data_structures::modint::ModInt;
 use serde::{Deserialize, Serialize};
@@ -124,7 +124,7 @@ impl CheckLpPhase {
 
         // Run the garbled circuit (garbler side)
         // The garbler side returns (), but the evaluator will get the results
-        multiple_gb_complex_comparison(rng, channel, &y_values, &t_values);
+        multiple_gb_less_than_ss(rng, channel, &y_values, &t_values);
         
         // Return empty vector as the garbler doesn't get the results directly
         Ok(vec![false; this_server_distances.len()])
@@ -143,7 +143,7 @@ impl CheckLpPhase {
             .collect();
 
         // Run the garbled circuit (evaluator side)
-        let results = multiple_ev_complex_comparison(rng, channel, &x_values);
+        let results = multiple_ev_less_than_ss(rng, channel, &x_values);
         Ok(results)
     }
 

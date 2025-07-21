@@ -183,3 +183,11 @@ impl Into<Block> for ModInt {
         unsafe { std::mem::transmute(self.val) }
     }
 }
+
+/// Convert ModInt to bit width, ensuring it fits in less than 128 bits
+pub fn get_bit_width_from_modint(modint: &ModInt) -> usize {
+    let modulus = modint.modulus();
+    let bit_width = (127 - modulus.leading_zeros()) as usize;
+    assert!(bit_width < 128, "ModInt modulus requires {} bits, must be < 128", bit_width);
+    bit_width
+}

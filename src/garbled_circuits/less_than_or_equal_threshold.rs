@@ -1,3 +1,5 @@
+use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
+
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
     FancyReveal, util,
@@ -5,10 +7,10 @@ use fancy_garbling::{
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng, Channel, Block};
-use crate::data_structures::modint::ModInt;
-use std::fmt::Debug;
+use std::{fmt::Debug, result};
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
+use rand::Rng;
 
 /// Input structure for less than secret sharing comparison
 struct LessThanSSInputs<F> {
@@ -17,14 +19,6 @@ struct LessThanSSInputs<F> {
     pub garbler_b_wires: Vec<F>,                // b bits (y <= t)
     pub garbler_mask_wires: Vec<F>,             // masks for outputs
     pub evaluator_z3_wires: Vec<BinaryBundle<F>>, // mod - 1 - x
-}
-
-/// Convert ModInt to bit width, ensuring it fits in less than 128 bits
-fn get_bit_width_from_modint(modint: &ModInt) -> usize {
-    let modulus = modint.modulus();
-    let bit_width = (127 - modulus.leading_zeros()) as usize;
-    assert!(bit_width < 128, "ModInt modulus requires {} bits, must be < 128", bit_width);
-    bit_width
 }
 
 fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
@@ -41,12 +35,8 @@ fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> 
         let bit_width = get_bit_width_from_modint(y);
         
         // z1 = t - y (mod modulus)
-        let mut z1 = if t.val() >= y.val() {
-            t.val() - y.val()
-        } else {
-            modulus - (y.val() - t.val())
-        };
-        z1 = modulus - 1 - z1;
+        let z1_modint = *t - *y;
+        let z1 = z1_modint.val();
         
         // z2 = modulus - 1 - y  
         let z2 = y.val();
@@ -73,37 +63,6 @@ fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
     }).collect()
 }
 
-/// Convert a Vec<bool> (LSB first) into a single u128 value
-/// Note: Bit width is constrained to be less than 128 for simplicity
-pub fn bool_vec_to_value(bits: &[bool], bit_width: usize) -> u128 {
-    assert!(bit_width > 0, "Bit width must be greater than 0");
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-    assert!(bits.len() == bit_width, "Input length {} doesn't match expected bit width {}", bits.len(), bit_width);
-    
-    let mut value = 0u128;
-    for (i, &b) in bits.iter().enumerate() {
-        if b {
-            value |= 1u128 << i;
-        }
-    }
-    
-    value
-}
-
-/// Convert a u128 to Vec<bool> bits (LSB first)
-/// Note: Bit width is constrained to be less than 128
-pub fn u128_to_bool_bits(x: u128, n: usize) -> Vec<bool> {
-    assert!(n < 128, "Bit width must be less than 128 for this simplified implementation");
-    (0..n).map(|i| ((x >> i) & 1) == 1).collect()
-}
-
-/// Create a value with specified bit width from a single u128
-/// Note: Bit width is constrained to be less than 128
-fn make_value_from_u128(value: u128, bit_width: usize) -> Vec<bool> {
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-    u128_to_bool_bits(value, bit_width)
-}
-
 /// Garbler side for less than secret sharing comparison
 /// Computes whether (x + y) mod modulus <= t using overflow detection
 /// Circuit: [overflow(z3 + z2) AND (b AND overflow(z3 + z1))] OR [overflow1 AND (overflow2 OR b)]
@@ -113,19 +72,72 @@ pub fn multiple_gb_less_than_ss<C>(
     channel: &mut C,
     inputs_y: &[ModInt], // Garbler's y values
     inputs_t: &[ModInt], // Garbler's t values (thresholds)
-) where
+) -> Vec<bool>
+where
     C: AbstractChannel + Clone,
 {
+    assert_eq!(inputs_y.len(), inputs_t.len(), "y and t inputs must have same length");
+
     let (z1_values, z2_values, b_values) = garbler_preprocess_less_than_ss(inputs_y, inputs_t);
     let bit_width = get_bit_width_from_modint(&inputs_y[0]);
     
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    let circuit_wires = gb_set_less_than_ss_inputs(&mut gb, &z1_values, &z2_values, &b_values, bit_width);
-    let results = fancy_less_than_ss(&mut gb, circuit_wires).unwrap();
-    gb.outputs(results.wires()).unwrap();
+
+    // Mask for the output
+    let results = (0..inputs_y.len())
+        .map(|_| rand::rng().random::<bool>())
+        .collect::<Vec<bool>>();
+    let circuit_wires = gb_set_less_than_ss_inputs(&mut gb, &z1_values, &z2_values, &b_values, &results, bit_width);
+
+    let less_than_ss = fancy_less_than_ss(&mut gb, circuit_wires).unwrap();
+    gb.outputs(less_than_ss.wires()).unwrap();
     channel.flush().unwrap();
     let mut ack = [0u8; 1];
     channel.read_bytes(&mut ack).unwrap();
+
+    results
+}
+
+/// Helper to set garbler inputs for less than secret sharing comparison
+fn gb_set_less_than_ss_inputs<F, E>(
+    gb: &mut F,
+    z1_values: &[u128], // t - y values
+    z2_values: &[u128], // mod - 1 - y values  
+    b_values: &[bool],  // y <= t bits
+    results: &[bool], // masks for outputs
+    bit_width: usize,
+) -> LessThanSSInputs<F::Item>
+where
+    F: FancyInput<Item = AllWire, Error = E>,
+    E: Debug,
+{
+    assert!(bit_width > 0, "Bit width must be greater than 0");
+    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
+    assert_eq!(z1_values.len(), z2_values.len(), "z1 and z2 must have same length");
+    assert_eq!(z1_values.len(), b_values.len(), "z1 and b must have same length");
+
+    // Encode garbler's z1 and z2 values
+    let garbler_z1_wires = gb.bin_encode_many(z1_values, bit_width).unwrap();
+    let garbler_z2_wires = gb.bin_encode_many(z2_values, bit_width).unwrap();
+    
+    // Encode garbler's b bits - each as a single bit with modulus 2
+    let b_u16_values: Vec<u16> = b_values.iter().map(|&b| b as u16).collect();
+    let garbler_b_wires = gb.encode_many(&b_u16_values, &vec![2; b_u16_values.len()]).unwrap();
+
+    // Encode garbler's output masks
+    let results_u16: Vec<u16> = results.iter().map(|&r| r as u16).collect();
+    let garbler_mask_wires = gb.encode_many(&results_u16, &vec![2; results_u16.len()]).unwrap();
+    
+    // Receive evaluator's z3 values
+    let evaluator_z3_wires = gb.bin_receive_many(z1_values.len(), bit_width).unwrap();
+
+    LessThanSSInputs {
+        garbler_z1_wires,
+        garbler_z2_wires,
+        garbler_b_wires,
+        garbler_mask_wires,
+        evaluator_z3_wires,
+    }
 }
 
 /// Evaluator side for less than secret sharing comparison
@@ -150,6 +162,41 @@ where
     
     // Convert outputs to boolean results
     outputs.iter().map(|&x| x != 0).collect()
+}
+
+/// Helper to set evaluator inputs for less than secret sharing comparison
+fn ev_set_less_than_ss_inputs<F, E>(
+    ev: &mut F,
+    z3_values: &[u128], // mod - 1 - x values
+    bit_width: usize,
+) -> LessThanSSInputs<F::Item>
+where
+    F: FancyInput<Item = AllWire, Error = E>,
+    E: Debug,
+{
+    assert!(bit_width > 0, "Bit width must be greater than 0");
+    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
+
+    // Receive garbler's z1 and z2 values
+    let garbler_z1_wires = ev.bin_receive_many(z3_values.len(), bit_width).unwrap();
+    let garbler_z2_wires = ev.bin_receive_many(z3_values.len(), bit_width).unwrap();
+    
+    // Receive garbler's b bits 
+    let garbler_b_wires = ev.receive_many(&vec![2; z3_values.len()]).unwrap();
+    
+    // Receive output masks
+    let garbler_mask_wires = ev.receive_many(&vec![2; z3_values.len()]).unwrap();
+    
+    // Encode evaluator's z3 values
+    let evaluator_z3_wires = ev.bin_encode_many(z3_values, bit_width).unwrap();
+
+    LessThanSSInputs {
+        garbler_z1_wires,
+        garbler_z2_wires,
+        garbler_b_wires,
+        garbler_mask_wires,
+        evaluator_z3_wires,
+    }
 }
 
 /// Core circuit logic: Less than secret sharing comparison implementing (x + y) mod modulus <= t
@@ -202,87 +249,6 @@ where
     Ok(BinaryBundle::new(final_results))
 }
 
-/// Helper to set garbler inputs for less than secret sharing comparison
-fn gb_set_less_than_ss_inputs<F, E>(
-    gb: &mut F,
-    z1_values: &[u128], // t - y values
-    z2_values: &[u128], // mod - 1 - y values  
-    b_values: &[bool],  // y <= t bits
-    bit_width: usize,
-) -> LessThanSSInputs<F::Item>
-where
-    F: FancyInput<Item = AllWire, Error = E>,
-    E: Debug,
-{
-    assert!(bit_width > 0, "Bit width must be greater than 0");
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-    assert_eq!(z1_values.len(), z2_values.len(), "z1 and z2 must have same length");
-    assert_eq!(z1_values.len(), b_values.len(), "z1 and b must have same length");
-
-    // Encode garbler's z1 and z2 values
-    let garbler_z1_wires = gb.bin_encode_many(z1_values, bit_width).unwrap();
-    let garbler_z2_wires = gb.bin_encode_many(z2_values, bit_width).unwrap();
-    
-    // Encode garbler's b bits - each as a single bit with modulus 2
-    let b_u16_values: Vec<u16> = b_values.iter().map(|&b| b as u16).collect();
-    let b_moduli: Vec<u16> = vec![2; b_values.len()]; // modulus 2 for each bit
-    let garbler_b_wires = gb.encode_many(&b_u16_values, &b_moduli).unwrap();
-    
-    // Generate masks for outputs
-    let mut output_masks = Vec::<u16>::new();
-    for _ in 0..z1_values.len() {
-        output_masks.push(rand::random::<bool>() as u16);
-    }
-    let garbler_mask_wires = gb.encode_many(&output_masks, &b_moduli).unwrap();
-    
-    // Receive evaluator's z3 values
-    let evaluator_z3_wires = gb.bin_receive_many(z1_values.len(), bit_width).unwrap();
-
-    LessThanSSInputs {
-        garbler_z1_wires,
-        garbler_z2_wires,
-        garbler_b_wires,
-        garbler_mask_wires,
-        evaluator_z3_wires,
-    }
-}
-
-/// Helper to set evaluator inputs for less than secret sharing comparison
-fn ev_set_less_than_ss_inputs<F, E>(
-    ev: &mut F,
-    z3_values: &[u128], // mod - 1 - x values
-    bit_width: usize,
-) -> LessThanSSInputs<F::Item>
-where
-    F: FancyInput<Item = AllWire, Error = E>,
-    E: Debug,
-{
-    assert!(bit_width > 0, "Bit width must be greater than 0");
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-
-    // Receive garbler's z1 and z2 values
-    let garbler_z1_wires = ev.bin_receive_many(z3_values.len(), bit_width).unwrap();
-    let garbler_z2_wires = ev.bin_receive_many(z3_values.len(), bit_width).unwrap();
-    
-    // Receive garbler's b bits 
-    let b_moduli: Vec<u16> = vec![2; z3_values.len()]; // modulus 2 for each bit
-    let garbler_b_wires = ev.receive_many(&b_moduli).unwrap();
-    
-    // Receive output masks
-    let garbler_mask_wires = ev.receive_many(&b_moduli).unwrap();
-    
-    // Encode evaluator's z3 values
-    let evaluator_z3_wires = ev.bin_encode_many(z3_values, bit_width).unwrap();
-
-    LessThanSSInputs {
-        garbler_z1_wires,
-        garbler_z2_wires,
-        garbler_b_wires,
-        garbler_mask_wires,
-        evaluator_z3_wires,
-    }
-}
-
 /// Convert a Block to Vec<bool> bits
 /// Note: This always produces exactly 128 bits, but you can truncate to desired bit_width
 pub fn block_to_bool_bits(block: Block, lsb_first: bool) -> Vec<bool> {
@@ -304,4 +270,35 @@ pub fn block_to_bool_bits(block: Block, lsb_first: bool) -> Vec<bool> {
     }
 
     bits
+}
+
+/// Convert a Vec<bool> (LSB first) into a single u128 value
+/// Note: Bit width is constrained to be less than 128 for simplicity
+pub fn bool_vec_to_value(bits: &[bool], bit_width: usize) -> u128 {
+    assert!(bit_width > 0, "Bit width must be greater than 0");
+    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
+    assert!(bits.len() == bit_width, "Input length {} doesn't match expected bit width {}", bits.len(), bit_width);
+    
+    let mut value = 0u128;
+    for (i, &b) in bits.iter().enumerate() {
+        if b {
+            value |= 1u128 << i;
+        }
+    }
+    
+    value
+}
+
+/// Convert a u128 to Vec<bool> bits (LSB first)
+/// Note: Bit width is constrained to be less than 128
+pub fn u128_to_bool_bits(x: u128, n: usize) -> Vec<bool> {
+    assert!(n < 128, "Bit width must be less than 128 for this simplified implementation");
+    (0..n).map(|i| ((x >> i) & 1) == 1).collect()
+}
+
+/// Create a value with specified bit width from a single u128
+/// Note: Bit width is constrained to be less than 128
+fn make_value_from_u128(value: u128, bit_width: usize) -> Vec<bool> {
+    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
+    u128_to_bool_bits(value, bit_width)
 }

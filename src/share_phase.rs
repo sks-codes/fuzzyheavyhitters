@@ -270,11 +270,11 @@ impl SharePhase {
     ) -> Result<u128, SharePhaseError> {
         match shared_range {
             SharedRange::OKVS { okvs_shares } => {
-                let result = self.evaluate_okvs_at_single_dimension(okvs_shares[dimension], point, dimension)?;
+                let result = self.evaluate_okvs_at_single_dimension(okvs_shares[dimension], point)?;
                 Ok(result)
             }
             SharedRange::IntervalFSS { fss_key } => {
-                self.evaluate_interval_fss_at_single_dimension(fss_key[dim], point, dimension)
+                self.evaluate_interval_fss_at_single_dimension(fss_key[dimension], point)
             }
         }
     }
@@ -284,14 +284,7 @@ impl SharePhase {
         &self,
         okvs_share: Vec<u128>,
         point: u128,
-        dim: usize,
     ) -> Result<u128, SharePhaseError> {
-        if dim >= self.config.dimension {
-            return Err(SharePhaseError::EvaluationError(
-                format!("Dimension {} out of bounds for {} OKVS shares", dim, self.config.dimension)
-            ));
-        }
-
         let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
         point_bits.reverse();
         
@@ -318,16 +311,9 @@ impl SharePhase {
     /// Helper: Evaluate FSS at a single dimension (for backward compatibility) 
     fn evaluate_interval_fss_at_single_dimension(
         &self,
-        fss_keys: &[IntervalFSSKey<1>],
+        fss_key: IntervalFSSKey<1>,
         point: u128,
-        dim: usize
     ) -> Result<u128, SharePhaseError> {
-        if dim >= self.config.dimension {
-            return Err(SharePhaseError::EvaluationError(
-                format!("Dimension {} out of bounds for {} FSS keys", dim, fss_keys.len())
-            ));
-        }
-        
         let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
         point_bits.reverse();
         
@@ -335,7 +321,7 @@ impl SharePhase {
         let modulus = 1u128 << self.config.output_bit_length;
         
         // Evaluate with the FSS key for the specified dimension
-        let result = fss_keys[dim].eval_intervalFSS(&point_bits, modulus);
+        let result = fss_key.eval_intervalFSS(&point_bits, modulus);
         // Return the result value
         Ok(result[0])
     }
