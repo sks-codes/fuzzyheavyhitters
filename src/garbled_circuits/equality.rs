@@ -42,22 +42,12 @@ where
             [input.as_slice(), &[mask as u16]].concat()
         }).collect::<Vec<Vec<u16>>>();
 
-    // let step1_time = start.elapsed();
-    // println!("time: {:?}", step1_time);
-    // println!("Step 2");
-
     let wire_inputs = masked_inputs.into_iter().flatten().collect::<Vec<u16>>();
     let wires = gb_set_fancy_inputs(&mut gb, wire_inputs.as_slice(), inputs.len());
 
-    // let step2_time = start.elapsed() - step1_time;
-    // println!("time: {:?}", step2_time);
-    // println!("Step 3");
-
     let eq = fancy_equality(&mut gb, wires, num_tests).unwrap();
     gb.outputs(eq.wires()).unwrap();
-    // let step3_time = start.elapsed() - step1_time - step2_time;
-    // println!("time: {:?}", step3_time);
-    // println!("Step 4");
+
     channel.flush().unwrap();
     let mut ack = [0u8; 1];
     channel.read_bytes(&mut ack).unwrap();

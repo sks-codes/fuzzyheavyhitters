@@ -26,10 +26,6 @@ use serde::{Deserialize, Serialize};
 pub struct CheckLpConfig {
     /// Number of threshold tests to perform
     pub num_tests: usize,
-    /// Points to evaluate Lp distance at
-    pub evaluation_points: Vec<Vec<u128>>,
-    /// Threshold values for comparison
-    pub thresholds: Vec<u128>,
     /// Modulus for ModInt operations (must be power of 2)
     pub modulus: u128,
     /// Whether this is the garbler side (true) or evaluator side (false)
@@ -74,13 +70,6 @@ impl CheckLpPhase {
             ));
         }
 
-        // Validate input lengths
-        if config.evaluation_points.len() != config.thresholds.len() {
-            return Err(CheckLpPhaseError::InputLengthMismatch(
-                "Evaluation points and thresholds must have the same length".to_string()
-            ));
-        }
-
         Ok(Self { config, share_phase })
     }
 
@@ -90,10 +79,12 @@ impl CheckLpPhase {
     pub fn run_lp_threshold_check(
         &self,
         shared_range: &SharedLpRange,
+        evaluation_points: &[Vec<u128>],
+        thresholds: &[u128],
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<Vec<bool>, CheckLpPhaseError> {
-        if self.config.evaluation_points.len() != self.config.thresholds.len() {
+        if evaluation_points.len() != thresholds.len() {
             return Err(CheckLpPhaseError::InputLengthMismatch(
                 "Evaluation points and thresholds must have the same length".to_string(),
             ));
@@ -101,14 +92,14 @@ impl CheckLpPhase {
 
         // Evaluate the shared range at this server's evaluation points
         let mut this_server_distances = Vec::new();
-        for point in &self.config.evaluation_points {
+        for point in evaluation_points {
             let distance = self.share_phase.evaluate_lp_distance(shared_range, point)?;
             this_server_distances.push(distance);
         }
 
         // Use garbled circuits to compare with the other server's distances
         if self.config.is_garbler_side {
-            self.run_garbler_side_threshold_check(&this_server_distances, channel, rng)
+            self.run_garbler_side_threshold_check(&this_server_distances, thresholds, channel, rng)
         } else {
             self.run_evaluator_side_threshold_check(&this_server_distances, channel, rng)
         }
@@ -118,6 +109,7 @@ impl CheckLpPhase {
     fn run_garbler_side_threshold_check(
         &self,
         this_server_distances: &[u128],
+        thresholds: &[u128],
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<Vec<bool>, CheckLpPhaseError> {
@@ -126,7 +118,7 @@ impl CheckLpPhase {
             .map(|&d| ModInt::new(d % self.config.modulus, self.config.modulus))
             .collect();
 
-        let t_values: Vec<ModInt> = self.config.thresholds.iter()
+        let t_values: Vec<ModInt> = thresholds.iter()
             .map(|&t| ModInt::new(t % self.config.modulus, self.config.modulus))
             .collect();
 
@@ -159,10 +151,18 @@ impl CheckLpPhase {
     pub fn compare_shared_lp_ranges(
         &self,
         shared_range: &SharedLpRange,
+        evaluation_points: &[Vec<u128>],
+        thresholds: &[u128],
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<LpComparisonResult, CheckLpPhaseError> {
-        let threshold_results = self.run_lp_threshold_check(shared_range, channel, rng)?;
+        let threshold_results = self.run_lp_threshold_check(
+            shared_range, 
+            evaluation_points, 
+            thresholds, 
+            channel, 
+            rng
+        )?;
         
         let total_tests = threshold_results.len();
         let within_threshold_count = threshold_results.iter().filter(|&&x| x).count();
@@ -171,7 +171,7 @@ impl CheckLpPhase {
         // Calculate actual distances for this server only
         let mut this_server_distances = Vec::new();
         
-        for point in &self.config.evaluation_points {
+        for point in evaluation_points {
             let distance = self.share_phase.evaluate_lp_distance(shared_range, point)?;
             this_server_distances.push(distance);
         }
@@ -181,8 +181,8 @@ impl CheckLpPhase {
             within_threshold_count,
             outside_threshold_count,
             threshold_results,
-            evaluation_points: self.config.evaluation_points.clone(),
-            thresholds: self.config.thresholds.clone(),
+            evaluation_points: evaluation_points.to_vec(),
+            thresholds: thresholds.to_vec(),
             this_server_distances,
         })
     }
@@ -320,12 +320,6 @@ mod tests {
 
         let check_config = CheckLpConfig {
             num_tests: 3,
-            evaluation_points: vec![
-                vec![10, 20],
-                vec![30, 40],
-                vec![50, 60],
-            ],
-            thresholds: vec![100, 200, 300],
             modulus: 64, // Power of 2
             is_garbler_side: true,
         };
@@ -334,8 +328,6 @@ mod tests {
         let check_phase = CheckLpPhase::new(check_config, share_phase).unwrap();
 
         assert_eq!(check_phase.config.num_tests, 3);
-        assert_eq!(check_phase.config.evaluation_points.len(), 3);
-        assert_eq!(check_phase.config.thresholds.len(), 3);
         assert_eq!(check_phase.config.modulus, 64);
     }
 
@@ -353,8 +345,6 @@ mod tests {
 
         let check_config = CheckLpConfig {
             num_tests: 1,
-            evaluation_points: vec![vec![10, 20]],
-            thresholds: vec![100],
             modulus: 97, // Not a power of 2
             is_garbler_side: true,
         };

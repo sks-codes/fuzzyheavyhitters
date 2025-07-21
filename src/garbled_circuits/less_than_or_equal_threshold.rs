@@ -10,11 +10,12 @@ use std::fmt::Debug;
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 
-/// Input structure for complex comparisons with threshold
-struct ComplexComparisonInputs<F> {
+/// Input structure for less than secret sharing comparison
+struct LessThanSSInputs<F> {
     pub garbler_z1_wires: Vec<BinaryBundle<F>>, // t - y
     pub garbler_z2_wires: Vec<BinaryBundle<F>>, // mod - 1 - y  
     pub garbler_b_wires: Vec<F>,                // b bits (y <= t)
+    pub garbler_mask_wires: Vec<F>,             // masks for outputs
     pub evaluator_z3_wires: Vec<BinaryBundle<F>>, // mod - 1 - x
 }
 
@@ -26,7 +27,7 @@ fn get_bit_width_from_modint(modint: &ModInt) -> usize {
     bit_width
 }
 
-fn garbler_preprocess_complex(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
+fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
     assert_eq!(inputs_y.len(), inputs_t.len(), "y and t inputs must have same length");
     
     let mut z1_values = Vec::new();
@@ -64,7 +65,7 @@ fn garbler_preprocess_complex(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<
 }
 
 /// Evaluator preprocessing: mod - 1 - x
-fn evaluator_preprocess_complex(inputs_x: &[ModInt]) -> Vec<u128> {
+fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
     inputs_x.iter().map(|x| {
         let z3 = x.val();
         println!("x: {}, z3: {}", x.val(), z3);
@@ -103,11 +104,11 @@ fn make_value_from_u128(value: u128, bit_width: usize) -> Vec<bool> {
     u128_to_bool_bits(value, bit_width)
 }
 
-/// Garbler side for complex comparison with threshold
+/// Garbler side for less than secret sharing comparison
 /// Computes whether (x + y) mod modulus <= t using overflow detection
 /// Circuit: [overflow(z3 + z2) AND (b AND overflow(z3 + z1))] OR [overflow1 AND (overflow2 OR b)]
 /// Where z1 = t - y, z2 = mod - 1 - y, z3 = mod - 1 - x, b = y <= t
-pub fn multiple_gb_complex_comparison<C>(
+pub fn multiple_gb_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
     inputs_y: &[ModInt], // Garbler's y values
@@ -115,21 +116,21 @@ pub fn multiple_gb_complex_comparison<C>(
 ) where
     C: AbstractChannel + Clone,
 {
-    let (z1_values, z2_values, b_values) = garbler_preprocess_complex(inputs_y, inputs_t);
+    let (z1_values, z2_values, b_values) = garbler_preprocess_less_than_ss(inputs_y, inputs_t);
     let bit_width = get_bit_width_from_modint(&inputs_y[0]);
     
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    let circuit_wires = gb_set_complex_inputs(&mut gb, &z1_values, &z2_values, &b_values, bit_width);
-    let results = fancy_complex_comparison(&mut gb, circuit_wires).unwrap();
+    let circuit_wires = gb_set_less_than_ss_inputs(&mut gb, &z1_values, &z2_values, &b_values, bit_width);
+    let results = fancy_less_than_ss(&mut gb, circuit_wires).unwrap();
     gb.outputs(results.wires()).unwrap();
     channel.flush().unwrap();
     let mut ack = [0u8; 1];
     channel.read_bytes(&mut ack).unwrap();
 }
 
-/// Evaluator side for complex comparison
+/// Evaluator side for less than secret sharing comparison
 /// Provides x values, circuit computes whether (x + y) mod modulus <= t
-pub fn multiple_ev_complex_comparison<C>(
+pub fn multiple_ev_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
     inputs_x: &[ModInt], // Evaluator's x values
@@ -137,12 +138,12 @@ pub fn multiple_ev_complex_comparison<C>(
 where
     C: AbstractChannel + Clone,
 {
-    let z3_values = evaluator_preprocess_complex(inputs_x);
+    let z3_values = evaluator_preprocess_less_than_ss(inputs_x);
     let bit_width = get_bit_width_from_modint(&inputs_x[0]);
     
     let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    let circuit_wires = ev_set_complex_inputs(&mut ev, &z3_values, bit_width);
-    let results = fancy_complex_comparison(&mut ev, circuit_wires).unwrap();
+    let circuit_wires = ev_set_less_than_ss_inputs(&mut ev, &z3_values, bit_width);
+    let results = fancy_less_than_ss(&mut ev, circuit_wires).unwrap();
     let outputs = ev.outputs(results.wires()).unwrap().unwrap();
     channel.write_bytes(&[1u8]).unwrap();
     channel.flush().unwrap();
@@ -151,11 +152,11 @@ where
     outputs.iter().map(|&x| x != 0).collect()
 }
 
-/// Core circuit logic: Complex comparison implementing (x + y) mod modulus <= t
+/// Core circuit logic: Less than secret sharing comparison implementing (x + y) mod modulus <= t
 /// Let z1 = (t - y) mod modulus, z2 = (modulus - 1 - y), z3 = (modulus - 1 - x)
-fn fancy_complex_comparison<F>(
+fn fancy_less_than_ss<F>(
     f: &mut F,
-    wire_inputs: ComplexComparisonInputs<F::Item>,
+    wire_inputs: LessThanSSInputs<F::Item>,
 ) -> Result<BinaryBundle<F::Item>, F::Error>
 where
     F: FancyReveal + Fancy + BinaryGadgets + FancyBinary + FancyArithmetic,
@@ -166,6 +167,7 @@ where
         let z1_wires = &wire_inputs.garbler_z1_wires[i];
         let z2_wires = &wire_inputs.garbler_z2_wires[i];
         let b_wire = &wire_inputs.garbler_b_wires[i];
+        let mask_wire = &wire_inputs.garbler_mask_wires[i];
         let z3_wires = &wire_inputs.evaluator_z3_wires[i];
         
         // Compute overflow(z3 + z2)
@@ -192,6 +194,7 @@ where
 
         // Final result: first_part OR second_part
         let final_result = f.or(&first_part, &second_part)?;
+        let final_result = f.xor(&final_result, mask_wire)?;
         
         final_results.push(final_result);
     }
@@ -199,14 +202,14 @@ where
     Ok(BinaryBundle::new(final_results))
 }
 
-/// Helper to set garbler inputs for complex comparison
-fn gb_set_complex_inputs<F, E>(
+/// Helper to set garbler inputs for less than secret sharing comparison
+fn gb_set_less_than_ss_inputs<F, E>(
     gb: &mut F,
     z1_values: &[u128], // t - y values
     z2_values: &[u128], // mod - 1 - y values  
     b_values: &[bool],  // y <= t bits
     bit_width: usize,
-) -> ComplexComparisonInputs<F::Item>
+) -> LessThanSSInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -225,23 +228,31 @@ where
     let b_moduli: Vec<u16> = vec![2; b_values.len()]; // modulus 2 for each bit
     let garbler_b_wires = gb.encode_many(&b_u16_values, &b_moduli).unwrap();
     
+    // Generate masks for outputs
+    let mut output_masks = Vec::<u16>::new();
+    for _ in 0..z1_values.len() {
+        output_masks.push(rand::random::<bool>() as u16);
+    }
+    let garbler_mask_wires = gb.encode_many(&output_masks, &b_moduli).unwrap();
+    
     // Receive evaluator's z3 values
     let evaluator_z3_wires = gb.bin_receive_many(z1_values.len(), bit_width).unwrap();
 
-    ComplexComparisonInputs {
+    LessThanSSInputs {
         garbler_z1_wires,
         garbler_z2_wires,
         garbler_b_wires,
+        garbler_mask_wires,
         evaluator_z3_wires,
     }
 }
 
-/// Helper to set evaluator inputs for complex comparison
-fn ev_set_complex_inputs<F, E>(
+/// Helper to set evaluator inputs for less than secret sharing comparison
+fn ev_set_less_than_ss_inputs<F, E>(
     ev: &mut F,
     z3_values: &[u128], // mod - 1 - x values
     bit_width: usize,
-) -> ComplexComparisonInputs<F::Item>
+) -> LessThanSSInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -257,13 +268,17 @@ where
     let b_moduli: Vec<u16> = vec![2; z3_values.len()]; // modulus 2 for each bit
     let garbler_b_wires = ev.receive_many(&b_moduli).unwrap();
     
+    // Receive output masks
+    let garbler_mask_wires = ev.receive_many(&b_moduli).unwrap();
+    
     // Encode evaluator's z3 values
     let evaluator_z3_wires = ev.bin_encode_many(z3_values, bit_width).unwrap();
 
-    ComplexComparisonInputs {
+    LessThanSSInputs {
         garbler_z1_wires,
         garbler_z2_wires,
         garbler_b_wires,
+        garbler_mask_wires,
         evaluator_z3_wires,
     }
 }

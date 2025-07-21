@@ -232,6 +232,7 @@ where
     // Receive evaluator's z3 values
     let evaluator_z3_wires = gb.bin_receive_many(z1_values.len(), bit_width).unwrap();
 
+
     ComplexComparisonInputs {
         garbler_z1_wires,
         garbler_z2_wires,
@@ -260,7 +261,7 @@ where
     // Receive garbler's b bits 
     let b_moduli: Vec<u16> = vec![2; z3_values.len()]; // modulus 2 for each bit
     let garbler_b_wires = ev.receive_many(&b_moduli).unwrap();
-    
+
     // Encode evaluator's z3 values
     let evaluator_z3_wires = ev.bin_encode_many(z3_values, bit_width).unwrap();
 

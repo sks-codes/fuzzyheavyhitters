@@ -25,8 +25,7 @@ fn test_check_phase_creation() {
 
     let check_config = CheckConfig {
         num_tests: 3,
-        evaluation_points: vec![10, 20, 30],
-        evaluation_dimensions: vec![0, 1, 0],
+        num_dimensions: 2,
         is_garbler_side: true,
     };
 
@@ -53,8 +52,7 @@ fn test_check_phase_api_structure() {
 
     let check_config = CheckConfig {
         num_tests: 2,
-        evaluation_points: vec![10, 20],
-        evaluation_dimensions: vec![0, 1],
+        num_dimensions: 2,
         is_garbler_side: true,
     };
 
@@ -75,7 +73,12 @@ fn test_check_phase_api_structure() {
     let mut channel = Channel::new(reader, writer);
 
     // Test that the API accepts the correct parameters
-    let result = check_phase.run_equality_check(&shared_range, &mut channel, &mut rng);
+    let result = check_phase.run_equality_check(
+        &shared_range, 
+        &[10, 20], 
+        &mut channel, 
+        &mut rng
+    );
     
     // This will likely fail due to garbled circuit communication issues,
     // but we're verifying the API structure is correct
