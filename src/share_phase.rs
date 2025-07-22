@@ -11,7 +11,8 @@
 
 use std::sync::Arc;
 use std::cmp::max;
-use rand;
+use rand::Rng;
+use blake3;
 
 use crate::okvs_f2k::{self, RbOkvsF2k};
 use crate::fss::interval::{IntervalFSSKey, IntervalFSSEval};
@@ -59,10 +60,12 @@ pub enum SharedRange {
     /// Each server gets one OKVS per dimension
     OKVS {
         okvs_shares: Vec<Vec<u128>>, // One OKVS encoding per dimension
+        role: bool, // True for server 1, false for server 0
     },
     /// Interval FSS-based sharing (N=1)
     IntervalFSS {
         fss_key: Vec<IntervalFSSKey<1>>,
+        role: bool, // True for server 1, false for server 0
     },
 }
 
@@ -125,6 +128,26 @@ impl SharePhase {
         }
     }
 
+    /// Public method to evaluate at a specific point for a single dimension
+    /// This is for backward compatibility and specific use cases like check_phase
+    pub fn evaluate_at_single_dimension(
+        &self,
+        shared_range: &SharedRange,
+        point: u128,
+        dimension: usize,
+    ) -> Result<u128, SharePhaseError> {
+        match shared_range {
+            SharedRange::OKVS { okvs_shares, role } => {
+                let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point, *role)?;
+                Ok(result)
+            }
+            SharedRange::IntervalFSS { fss_key, role } => {
+                self.evaluate_interval_fss_at_single_dimension(&fss_key[dimension], point, *role)
+            }
+        }
+    }
+
+
     /// Share using OKVS method
     /// For each dimension i, create an OKVS that maps keys in [left_bound[i], right_bound[i]] to output_bit_length-sized vectors
     fn share_with_okvs(
@@ -137,12 +160,13 @@ impl SharePhase {
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut okvs_shares_0 = Vec::new();
         let mut okvs_shares_1 = Vec::new();
+        let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
 
         // Create separate OKVS for each dimension
         for dim in 0..self.config.dimension {
             let left = left_bound[dim];
             let right = right_bound[dim];
-            let x_dim = x[dim];
+            println!("x: {:?}, left: {}, right: {}", x, left, right);
             
             // Create key-value pairs for this dimension's range [left, right]
             let mut keys = Vec::new();
@@ -153,19 +177,21 @@ impl SharePhase {
                 let mut key_bits = u128_to_bits(key, self.config.input_bit_length);
                 key_bits.reverse();
                 
-                // Generate the output_bit_length-sized bool vector
-                // If key == x_dim, set the value to 1 (represented as output_bit_length bits)
-                // Otherwise set to 0
-                let value = if key == x_dim {
-                    // Set to 1 in output_bit_length bits
-                    (1u128 << self.config.output_bit_length) - 1
-                } else {
-                    0u128
-                };
+                let value = rand::rng().random::<u128>() & modulus_mask;
+                // Generate u128 from Blake3 hash of key_bits
+                let key_bits_bytes: Vec<u8> = key_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();
+                let hash = blake3::hash(&key_bits_bytes);
+                let hash_bytes = hash.as_bytes();
+                let value_mask = u128::from_le_bytes([
+                    hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
+                    hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
+                    hash_bytes[8], hash_bytes[9], hash_bytes[10], hash_bytes[11],
+                    hash_bytes[12], hash_bytes[13], hash_bytes[14], hash_bytes[15],
+                ]) & modulus_mask;
                 
                 // For now, use simple secret sharing where both shares are identical
                 let share0 = value;
-                let share1 = 0u128; // share0 XOR share1 = value
+                let share1 = (value + value_mask) & modulus_mask; // share0 XOR share1 = value
                 
                 keys.push(key_bits);
                 values_0.push(share0);
@@ -199,12 +225,62 @@ impl SharePhase {
         Ok((
             SharedRange::OKVS {
                 okvs_shares: okvs_shares_0,
+                role: false, // Server 0
             },
             SharedRange::OKVS {
                 okvs_shares: okvs_shares_1,
+                role: true, // Server 1
             },
         ))
     }
+
+    /// Helper: Evaluate OKVS at a single dimension (for backward compatibility)
+    fn evaluate_okvs_at_single_dimension(
+        &self,
+        okvs_share: &Vec<u128>,
+        point: u128,
+        role: bool,
+    ) -> Result<u128, SharePhaseError> {
+        let mut key_bits = u128_to_bits(point, self.config.input_bit_length);
+        key_bits.reverse();
+        let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
+        
+        match &self.config.data {
+            ShareData::OKVS { r1, r2 } => {
+                let okvs = RbOkvsF2k::<u128>::new(
+                    1,
+                    okvs_share.len(),
+                    55, // Band width
+                    &r1, 
+                    &r2,
+                );
+                let result = okvs.decode(&okvs_share, &[key_bits.clone()]);
+                if result.is_empty() {
+                    Ok(0) // Return 0 if decode fails
+                } else {
+                    if !role {
+                        println!("Server 0 evaluating OKVS at point {}: result = {:?}", point, result);
+                        Ok(result[0])
+                    } else {
+                        println!("Server 1 evaluating OKVS at point {}: result = {:?}", point, result);
+                        // Generate u128 from Blake3 hash of key_bits
+                        let key_bits_bytes: Vec<u8> = key_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();
+                        let hash = blake3::hash(&key_bits_bytes);
+                        let hash_bytes = hash.as_bytes();
+                        let value_mask = u128::from_le_bytes([
+                            hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
+                            hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
+                            hash_bytes[8], hash_bytes[9], hash_bytes[10], hash_bytes[11],
+                            hash_bytes[12], hash_bytes[13], hash_bytes[14], hash_bytes[15],
+                        ]) & modulus_mask;
+                        Ok((result[0] + modulus_mask + 1 - value_mask) & modulus_mask)
+                    }
+                }
+            },
+            _ => return Err(SharePhaseError::InvalidRange("OKVS data not provided".to_string())),
+        }
+    }
+
 
     /// Share using Interval FSS method (N=1)
     fn share_with_interval_fss(
@@ -253,59 +329,13 @@ impl SharePhase {
         Ok((
             SharedRange::IntervalFSS {
                 fss_key: fss_0,
+                role: false, // Server 0
             },
             SharedRange::IntervalFSS {
                 fss_key: fss_1,
+                role: true, // Server 1
             },
         ))
-    }
-
-    /// Public method to evaluate at a specific point for a single dimension
-    /// This is for backward compatibility and specific use cases like check_phase
-    pub fn evaluate_at_single_dimension(
-        &self,
-        shared_range: &SharedRange,
-        point: u128,
-        dimension: usize,
-    ) -> Result<u128, SharePhaseError> {
-        match shared_range {
-            SharedRange::OKVS { okvs_shares } => {
-                let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point)?;
-                Ok(result)
-            }
-            SharedRange::IntervalFSS { fss_key } => {
-                self.evaluate_interval_fss_at_single_dimension(&fss_key[dimension], point)
-            }
-        }
-    }
-
-    /// Helper: Evaluate OKVS at a single dimension (for backward compatibility)
-    fn evaluate_okvs_at_single_dimension(
-        &self,
-        okvs_share: &Vec<u128>,
-        point: u128,
-    ) -> Result<u128, SharePhaseError> {
-        let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
-        point_bits.reverse();
-        
-        match &self.config.data {
-            ShareData::OKVS { r1, r2 } => {
-                let okvs = RbOkvsF2k::<u128>::new(
-                    1,
-                    okvs_share.len(),
-                    55, // Band width
-                    &r1, 
-                    &r2,
-                );
-                let result = okvs.decode(&okvs_share, &[point_bits]);
-                if result.is_empty() {
-                    Ok(0) // Return 0 if decode fails
-                } else {
-                    Ok(result[0])
-                }
-            },
-            _ => return Err(SharePhaseError::InvalidRange("OKVS data not provided".to_string())),
-        }
     }
 
     /// Helper: Evaluate FSS at a single dimension (for backward compatibility) 
@@ -313,6 +343,7 @@ impl SharePhase {
         &self,
         fss_key: &IntervalFSSKey<1>,
         point: u128,
+        role: bool,
     ) -> Result<u128, SharePhaseError> {
         let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
         point_bits.reverse();

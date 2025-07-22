@@ -14,11 +14,11 @@ use rand::Rng;
 
 /// Input structure for less than secret sharing comparison
 struct LessThanSSInputs<F> {
-    pub garbler_z1_wires: Vec<BinaryBundle<F>>, // t - y
-    pub garbler_z2_wires: Vec<BinaryBundle<F>>, // mod - 1 - y  
-    pub garbler_b_wires: Vec<F>,                // b bits (y <= t)
+    pub garbler_z1_wires: Vec<BinaryBundle<F>>, // modulus - 1 - (t - y) mod modulus
+    pub garbler_z2_wires: Vec<BinaryBundle<F>>, // y  
+    pub garbler_b_wires: Vec<F>,                // y <= t
     pub garbler_mask_wires: Vec<F>,             // masks for outputs
-    pub evaluator_z3_wires: Vec<BinaryBundle<F>>, // mod - 1 - x
+    pub evaluator_z3_wires: Vec<BinaryBundle<F>>, // x
 }
 
 fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
@@ -34,11 +34,11 @@ fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> 
         let modulus = y.modulus();
         let bit_width = get_bit_width_from_modint(y);
         
-        // z1 = t - y (mod modulus)
+        // z1 = modulus - 1 - (t - y) mod modulus
         let z1_modint = *t - *y;
-        let z1 = z1_modint.val();
+        let z1 = modulus - 1 - z1_modint.val();
         
-        // z2 = modulus - 1 - y  
+        // z2 = y  
         let z2 = y.val();
         
         // b = y <= t
@@ -54,7 +54,7 @@ fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> 
     (z1_values, z2_values, b_values)
 }
 
-/// Evaluator preprocessing: mod - 1 - x
+/// Evaluator preprocessing: x
 fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
     inputs_x.iter().map(|x| {
         let z3 = x.val();
@@ -63,10 +63,6 @@ fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
     }).collect()
 }
 
-/// Garbler side for less than secret sharing comparison
-/// Computes whether (x + y) mod modulus <= t using overflow detection
-/// Circuit: [overflow(z3 + z2) AND (b AND overflow(z3 + z1))] OR [overflow1 AND (overflow2 OR b)]
-/// Where z1 = t - y, z2 = mod - 1 - y, z3 = mod - 1 - x, b = y <= t
 pub fn multiple_gb_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
@@ -101,8 +97,8 @@ where
 /// Helper to set garbler inputs for less than secret sharing comparison
 fn gb_set_less_than_ss_inputs<F, E>(
     gb: &mut F,
-    z1_values: &[u128], // t - y values
-    z2_values: &[u128], // mod - 1 - y values  
+    z1_values: &[u128], // modulus - 1 - (t - y) mod modulus
+    z2_values: &[u128], // y  
     b_values: &[bool],  // y <= t bits
     results: &[bool], // masks for outputs
     bit_width: usize,
@@ -140,12 +136,10 @@ where
     }
 }
 
-/// Evaluator side for less than secret sharing comparison
-/// Provides x values, circuit computes whether (x + y) mod modulus <= t
 pub fn multiple_ev_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs_x: &[ModInt], // Evaluator's x values
+    inputs_x: &[ModInt], // x
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
@@ -167,7 +161,7 @@ where
 /// Helper to set evaluator inputs for less than secret sharing comparison
 fn ev_set_less_than_ss_inputs<F, E>(
     ev: &mut F,
-    z3_values: &[u128], // mod - 1 - x values
+    z3_values: &[u128], // x
     bit_width: usize,
 ) -> LessThanSSInputs<F::Item>
 where
@@ -199,8 +193,6 @@ where
     }
 }
 
-/// Core circuit logic: Less than secret sharing comparison implementing (x + y) mod modulus <= t
-/// Let z1 = (t - y) mod modulus, z2 = (modulus - 1 - y), z3 = (modulus - 1 - x)
 fn fancy_less_than_ss<F>(
     f: &mut F,
     wire_inputs: LessThanSSInputs<F::Item>,
@@ -231,15 +223,12 @@ where
         let overflow2 = carry2; 
         let x_lt_t_minus_y = f.negate(&overflow2)?;
         
-        // First part: overflow(z3 + z2) AND (b AND overflow(z3 + z1))
         let b_and_overflow2 = f.and(b_wire, &x_lt_t_minus_y)?;
         let first_part = f.and(&x_plus_y_not_overflow, &b_and_overflow2)?;
         
-        // Second part: not overflow1 AND (overflow2 OR b_wire)
         let overflow2_or_b = f.or(&x_lt_t_minus_y, b_wire)?;
         let second_part = f.and(&x_plus_y_overflow, &overflow2_or_b)?;
 
-        // Final result: first_part OR second_part
         let final_result = f.or(&first_part, &second_part)?;
         let final_result = f.xor(&final_result, mask_wire)?;
         
