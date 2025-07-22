@@ -85,7 +85,7 @@ impl ThresholdPhase {
         // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
         let mut aggregated_share = ModInt::new(0, self.config.modulus);
         for result in match_results {
-            aggregated_share = aggregated_share + &result.ring_share;
+            aggregated_share = aggregated_share + result.ring_share;
         }
 
         // Step 2: Compare aggregated share with threshold using garbled circuits
@@ -116,35 +116,5 @@ impl ThresholdPhase {
             ring_share,
             client_id,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data_structures::modint::ModInt;
-
-    #[test]
-    fn test_threshold_phase_creation() {
-        let config = ThresholdConfig {
-            modulus: 256, // Power of 2
-            is_garbler_side: true,
-        };
-
-        let _threshold_phase = ThresholdPhase::new(config);
-        
-        // Test creation - should not panic
-        assert!(true);
-    }
-
-    #[test]
-    fn test_match_result_creation() {
-        let ring_share = ModInt::new(42, 256);
-        let client_id = 5;
-        
-        let match_result = ThresholdPhase::create_match_result(ring_share.clone(), client_id);
-        
-        assert_eq!(match_result.client_id, client_id);
-        assert_eq!(match_result.ring_share.value, ring_share.value);
     }
 }

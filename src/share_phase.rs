@@ -270,11 +270,11 @@ impl SharePhase {
     ) -> Result<u128, SharePhaseError> {
         match shared_range {
             SharedRange::OKVS { okvs_shares } => {
-                let result = self.evaluate_okvs_at_single_dimension(okvs_shares[dimension], point)?;
+                let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point)?;
                 Ok(result)
             }
             SharedRange::IntervalFSS { fss_key } => {
-                self.evaluate_interval_fss_at_single_dimension(fss_key[dimension], point)
+                self.evaluate_interval_fss_at_single_dimension(&fss_key[dimension], point)
             }
         }
     }
@@ -282,7 +282,7 @@ impl SharePhase {
     /// Helper: Evaluate OKVS at a single dimension (for backward compatibility)
     fn evaluate_okvs_at_single_dimension(
         &self,
-        okvs_share: Vec<u128>,
+        okvs_share: &Vec<u128>,
         point: u128,
     ) -> Result<u128, SharePhaseError> {
         let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
@@ -311,7 +311,7 @@ impl SharePhase {
     /// Helper: Evaluate FSS at a single dimension (for backward compatibility) 
     fn evaluate_interval_fss_at_single_dimension(
         &self,
-        fss_key: IntervalFSSKey<1>,
+        fss_key: &IntervalFSSKey<1>,
         point: u128,
     ) -> Result<u128, SharePhaseError> {
         let mut point_bits = u128_to_bits(point, self.config.input_bit_length);

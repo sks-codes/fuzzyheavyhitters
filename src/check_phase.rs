@@ -82,32 +82,27 @@ impl CheckPhase {
         }
 
         // Step 1: For each dimension i from 0 to d-1, evaluate query_point[i] with OKVS for dimension i
-        let mut concatenated_bits = Vec::<bool>::new();
+        let mut all_dimension_eval = Vec::<ModInt>::new();
         
         for dim in 0..self.config.num_dimensions {
             // Evaluate at the specific dimension
             let res = self.share_phase.evaluate_at_single_dimension(shared_range, query_point[dim], dim)?;
-            let res_bits = u128_to_bits(res, self.config.input_bit_length);
-            
-            // Convert u128 values to individual bits and concatenate
-            concatenated_bits.extend(&res_bits);
+            all_dimension_eval.push(ModInt::new(res, 1 << self.config.input_bit_length));
         }
 
         // Step 2: Run equality test with the concatenated boolean vector
-        let equality_input = vec![concatenated_bits];
         let equality_result = if self.config.is_garbler_side {
-            let results = multiple_gb_equality_test(rng, channel, &equality_input);
+            let results = multiple_gb_equality_test(rng, channel, &all_dimension_eval);
             results[0]
         } else {
-            let results = multiple_ev_equality_test(rng, channel, &equality_input);
+            let results = multiple_ev_equality_test(rng, channel, &all_dimension_eval);
             results[0]
         };
         
         // Step 3: Convert boolean result to ring share using OT
-        let modulus = 1u128 << self.share_config().output_bit_length; // 2^output_bit_length
         let ring_share = self.boolean_to_ring_share_modint(
             equality_result,
-            modulus,
+            1 << self.config.output_bit_length,
             channel,
             rng,
             self.config.is_garbler_side,
@@ -129,7 +124,7 @@ impl CheckPhase {
         if is_garbler_side {
             // Garbler side: generate random shares and send via OT
             let r0 = ModInt::random(modulus);
-            let r1 = ModInt::new(r0.value + 1, modulus); // r0 + 1
+            let r1 = r0 + ModInt::one(modulus); // r0 + 1
             
             let r0_block: Block = r0.clone().try_into()
                 .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e)))?;
@@ -160,56 +155,6 @@ impl CheckPhase {
             
             let ring_share = ModInt::try_from(out_blocks[0])
                 .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert Block to ModInt: {:?}", e)))?;
-            
-            Ok(ring_share)
-        }
-    }
-
-    /// Convert boolean share to ring share using OT (similar to collect.rs lines 190-206)
-    /// This completes the check phase by converting the garbled circuit boolean result to ring shares
-    pub fn boolean_to_ring_share(
-        &self,
-        boolean_share: bool,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
-        rng: &mut AesRng,
-        is_garbler_side: bool,
-    ) -> Result<ModInt, CheckPhaseError> 
-    {
-        if is_garbler_side {
-            // Garbler side: generate random shares and send via OT
-            let r0 = T::random();
-            let mut r1 = r0.clone();
-            r1.add(&T::one());
-            
-            let r0_block: Block = r0.clone().try_into()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e)))?;
-            let r1_block: Block = r1.clone().try_into()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r1 to Block: {:?}", e)))?;
-            
-            let shares = if boolean_share {
-                (r0_block, r1_block)
-            } else {
-                (r1_block, r0_block)
-            };
-            
-            let mut ot = OtSender::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e)))?;
-            
-            ot.send(channel, &[shares], rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT send failed: {:?}", e)))?;
-            
-            // Return r1 as the garbler's share
-            Ok(r1)
-        } else {
-            // Receiver side: receive share via OT
-            let mut ot = OtReceiver::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receiver init failed: {:?}", e)))?;
-            
-            let out_blocks = ot.receive(channel, &[boolean_share], rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receive failed: {:?}", e)))?;
-            
-            let ring_share = T::try_from(out_blocks[0])
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert Block to ring share: {:?}", e)))?;
             
             Ok(ring_share)
         }
