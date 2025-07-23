@@ -263,6 +263,7 @@ mod tests {
         const THRESHOLD: u128 = 2;
         const INPUT_BIT_LENGTH: usize = 8;
         const OUTPUT_BIT_LENGTH: usize = 16;
+        const CHECK_BIT_LENGTH: usize = 20;
         
         // Step 1: Set up client points - 3 will match, 1 will not
         let client_points = vec![
@@ -304,12 +305,12 @@ mod tests {
         let mut rng = rand::rng();
         let r0 = rng.random::<u128>() % (1u128 << 10); // Keep it small for testing
         let r1 = rng.random::<u128>() % (1u128 << 10); // Keep it small for testing
-        
+
         println!("Random values: r0={}, r1={}, sum={}", r0, r1, r0 + r1);
 
         // Step 4: Generate IntervalFSS keys for threshold comparison
         // We want to check if count >= threshold, so we create FSS for interval [threshold + r0 + r1, MAX]
-        let fss_input_bits = OUTPUT_BIT_LENGTH + 4; // Extra bits for aggregation
+        let fss_input_bits = CHECK_BIT_LENGTH; // Extra bits for aggregation
         let max_value = (1u128 << fss_input_bits) - 1;
         let masked_threshold = THRESHOLD + r0 + r1;
         
@@ -355,7 +356,7 @@ mod tests {
             // Server 1 operations
             let check_config_garbler = CheckConfig {
                 input_bit_length: OUTPUT_BIT_LENGTH,
-                output_bit_length: OUTPUT_BIT_LENGTH + 4,
+                output_bit_length: CHECK_BIT_LENGTH,
                 num_dimensions: 2,
                 is_garbler_side: true,
             };
@@ -374,11 +375,12 @@ mod tests {
                 ).expect("Check phase should succeed");
                 
                 match_results_server1.push(result);
+                println!("Server 1: Client share match for share {:?} result: {:?}", share, result);
             }
             
             // Run threshold phase using IntervalFSS
             let threshold_config = ThresholdConfig {
-                input_bit_length: OUTPUT_BIT_LENGTH + 4,
+                input_bit_length: CHECK_BIT_LENGTH,
                 is_garbler_side: true,
                 method: ThresholdMethod::IntervalFSS,
                 data: ThresholdData::IntervalFSS {
@@ -407,7 +409,7 @@ mod tests {
         
         let check_config_evaluator = CheckConfig {
             input_bit_length: OUTPUT_BIT_LENGTH,
-            output_bit_length: OUTPUT_BIT_LENGTH + 4,
+            output_bit_length: CHECK_BIT_LENGTH,
             num_dimensions: 2,
             is_garbler_side: false,
         };
@@ -427,26 +429,28 @@ mod tests {
             
             match_results_server0.push(result);
         }
-        
-            // Run threshold phase using IntervalFSS
-            let threshold_config = ThresholdConfig {
-                input_bit_length: OUTPUT_BIT_LENGTH + 4,
-                is_garbler_side: false,
-                method: ThresholdMethod::IntervalFSS,
-                data: ThresholdData::IntervalFSS {
-                    random_value: r0, // Server 2 gets r0
-                },
-            };
+
+        println!("Server 0: Match results: {:?}", match_results_server0);
+
+        // Run threshold phase using IntervalFSS
+        let threshold_config = ThresholdConfig {
+            input_bit_length: CHECK_BIT_LENGTH,
+            is_garbler_side: false,
+            method: ThresholdMethod::IntervalFSS,
+            data: ThresholdData::IntervalFSS {
+                random_value: r0, // Server 2 gets r0
+            },
+        };
             
-            let threshold_phase = ThresholdPhase::new(threshold_config);
+        let threshold_phase = ThresholdPhase::new(threshold_config);
             
-            let evaluator_result = threshold_phase.compare_with_threshold(
-                &match_results_server2,
-                THRESHOLD,
-                Some(&fss_key_2_clone), // FSS key required for IntervalFSS
-                &mut channel,
-                &mut rng,
-            ).expect("IntervalFSS threshold comparison should succeed");        // Wait for garbler thread
+        let evaluator_result = threshold_phase.compare_with_threshold(
+            &match_results_server0,
+            THRESHOLD,
+            Some(&fss_key_0), // FSS key required for IntervalFSS
+            &mut channel,
+            &mut rng,
+        ).expect("IntervalFSS threshold comparison should succeed");        // Wait for garbler thread
         garbler_handle.join().expect("Garbler thread should complete successfully");
         let (match_results_server1, garbler_result) = receiver.recv()
             .expect("Should receive results from garbler");
@@ -469,15 +473,14 @@ mod tests {
         println!("Total matches: {}, Threshold: {}", actual_matches, THRESHOLD);
         println!("Server 0 FSS result: {}", evaluator_result);
         println!("Server 1 FSS result: {}", garbler_result);
-        
-        // Both servers should get the same result since they evaluate the same FSS function
-        assert_eq!(evaluator_result, garbler_result, 
-            "Both servers should get same IntervalFSS result");
+
+        let final_result = evaluator_result ^ garbler_result;
+        println!("Final IntervalFSS result: {}", final_result);
         
         // The result should be true if actual_matches >= threshold
         let expected_result = actual_matches >= THRESHOLD as usize;
-        assert_eq!(evaluator_result, expected_result,
-            "IntervalFSS result should be {} (matches={} >= threshold={})",
+        assert_eq!(final_result, expected_result,
+            "IntervalFSS threshold result should be {} (actual_matches={} >= threshold={})",
             expected_result, actual_matches, THRESHOLD);
             
         println!("✅ IntervalFSS threshold test passed!");

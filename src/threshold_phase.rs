@@ -10,7 +10,7 @@ use crate::{Share, Group};
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::convert::TryInto;
-use scuttlebutt::{AesRng, Channel, Block};
+use scuttlebutt::{AesRng, Channel, Block, AbstractChannel};
 use serde::{Deserialize, Serialize};
 
 /// Method for threshold comparison
@@ -114,11 +114,11 @@ impl ThresholdPhase {
     /// 3. Each server adds their random value to their aggregated share and sends to the other server
     /// 4. Each server evaluates the reconstructed count using their FSS key for interval [threshold + r0 + r1, MAX]
     /// 5. Returns the FSS evaluation result (1 if count >= threshold, 0 otherwise)
-    pub fn compare_with_threshold_intervalfss<const N: usize>(
+    pub fn compare_with_threshold_intervalfss(
         &self,
         match_results: &[ModInt],
         threshold: u128,
-        fss_key: &IntervalFSSKey<N>,
+        fss_key: &IntervalFSSKey<1>,
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
     ) -> Result<bool, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.input_bit_length;
@@ -138,20 +138,30 @@ impl ThresholdPhase {
             aggregated_share = aggregated_share + *result;
         }
 
+        println!("Aggregated share before masking: {}", aggregated_share.val());
+
         // Step 2: Add random value to aggregated share and exchange with other server
         let masked_share = aggregated_share + ModInt::new(random_value, modulus);
+
+        println!("Masked share: {}", masked_share.val());
         
         let reconstructed_masked_count = if self.config.is_garbler_side {
             // Server 1 (garbler) sends first, then receives
             let share_bytes = masked_share.val().to_le_bytes();
             channel.write_bytes(&share_bytes)
                 .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
+            channel.flush()
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+
+            println!("Successfully sent masked share: {}", masked_share.val());
             
             let mut received_bytes = [0u8; 16];
             channel.read_bytes(&mut received_bytes)
                 .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
             let other_masked_share = u128::from_le_bytes(received_bytes);
             let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+
+            println!("Received masked share: {}", other_masked_share_modint.val());
             
             masked_share + other_masked_share_modint
         } else {
@@ -165,6 +175,8 @@ impl ThresholdPhase {
             let share_bytes = masked_share.val().to_le_bytes();
             channel.write_bytes(&share_bytes)
                 .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
+            channel.flush()
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
             
             masked_share + other_masked_share_modint
         };
@@ -178,6 +190,8 @@ impl ThresholdPhase {
         // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
         // we need to check if actual_count + r0 + r1 >= threshold + r0 + r1
         let fss_result = fss_key.eval_intervalFSS(&count_bits, 2); // modulus 2 for binary output
+
+        println!("FSS evaluation result: {:?}", fss_result);
         
         // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
         // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)
@@ -190,11 +204,11 @@ impl ThresholdPhase {
     /// Common function to compare with threshold using the configured method
     /// 
     /// This function dispatches to either garbled circuits or IntervalFSS based on the config
-    pub fn compare_with_threshold<const N: usize>(
+    pub fn compare_with_threshold(
         &self,
         match_results: &[ModInt],
         threshold: u128,
-        fss_key: Option<&IntervalFSSKey<N>>,
+        fss_key: Option<&IntervalFSSKey<1>>,
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<bool, ThresholdPhaseError> {
