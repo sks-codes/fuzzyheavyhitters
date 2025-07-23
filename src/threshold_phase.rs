@@ -1,8 +1,11 @@
 //! Threshold Phase Implementation
-//!
-//! This module provides functionality for the threshold phase of the fuzzy matching protocol.
-//! It aggregates ring shares from multiple clients and compares the sum with a threshold
-//! using garbled circuits.
+use crate::garbled_circuits::greater_than_or_equal_threshold::{
+    multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
+use crate::data_structures::modint::ModInt;
+use crate::data_structures::payload::RingVec;
+use crate::fss::interval::IntervalFSSKey;
+use crate::share_phase::u128_to_bits;
+use crate::{Share, Group};
 
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
@@ -10,19 +13,37 @@ use std::convert::TryInto;
 use scuttlebutt::{AesRng, Channel, Block};
 use serde::{Deserialize, Serialize};
 
-use crate::garbled_circuits::less_than_or_equal_threshold::{
-    multiple_gb_less_than_ss, multiple_ev_less_than_ss
-};
-use crate::data_structures::modint::ModInt;
-use crate::{Share, Group};
+/// Method for threshold comparison
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ThresholdMethod {
+    /// Use garbled circuits for threshold comparison
+    GarbledCircuits,
+    /// Use IntervalFSS for threshold comparison
+    IntervalFSS,
+}
+
+/// Data for threshold phase configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ThresholdData {
+    /// No additional data needed for garbled circuits
+    GarbledCircuits,
+    /// Random values for IntervalFSS privacy
+    IntervalFSS {
+        /// Random value for this server (r0 for server 0, r1 for server 1)
+        random_value: u128,
+    },
+}
 
 /// Configuration for the threshold phase
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThresholdConfig {
-    /// Modulus for ring operations (must be power of 2)
-    pub modulus: u128,
+    pub input_bit_length: usize,
     /// Whether this is the garbler side (true) or evaluator side (false)
     pub is_garbler_side: bool,
+    /// Method to use for threshold comparison
+    pub method: ThresholdMethod,
+    /// Additional data based on the method
+    pub data: ThresholdData,
 }
 
 /// Error types for threshold phase operations
@@ -38,24 +59,6 @@ pub enum ThresholdPhaseError {
     GarbledCircuitError(String),
 }
 
-/// Match result from the check phase for a client
-#[derive(Debug, Clone)]
-pub struct MatchResult<T> {
-    /// Ring share representing the match result
-    pub ring_share: T,
-    /// Client identifier
-    pub client_id: usize,
-}
-
-/// Result of the threshold comparison
-#[derive(Debug, Clone)]
-pub struct ThresholdResult {
-    /// Whether the aggregated matches exceed the threshold
-    pub exceeds_threshold: bool,
-    /// Total number of clients processed
-    pub total_clients: usize,
-}
-
 /// Threshold phase handler
 pub struct ThresholdPhase {
     config: ThresholdConfig,
@@ -67,54 +70,161 @@ impl ThresholdPhase {
         Self { config }
     }
 
-    /// Aggregate match results and compare with threshold
+    /// Aggregate match results and compare with threshold using garbled circuits
     /// 
     /// This method:
     /// 1. Takes ring shares from the check phase for all clients: b^1, b^2, ..., b^n
     /// 2. Aggregates them: sum = b^1 + b^2 + ... + b^n (number of clients that "match")
     /// 3. Compares aggregated sum with threshold using garbled circuits
     /// 4. Returns whether matches exceed threshold
-    pub fn compare_with_threshold(
+    pub fn compare_with_threshold_gc(
         &self,
-        match_results: &[MatchResult<ModInt>],
+        match_results: &[ModInt],
         threshold: ModInt,
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
-    ) -> Result<ThresholdResult, ThresholdPhaseError> {
+    ) -> Result<bool, ThresholdPhaseError> {
+        let modulus = 1u128 << self.config.input_bit_length;
         // Step 1: Aggregate all ring shares
         // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
-        let mut aggregated_share = ModInt::new(0, self.config.modulus);
+        let mut aggregated_share = ModInt::new(0, modulus);
         for result in match_results {
-            aggregated_share = aggregated_share + result.ring_share;
+            aggregated_share = aggregated_share + *result;
         }
 
         // Step 2: Compare aggregated share with threshold using garbled circuits
         // Both aggregated_share and threshold are already ModInt, so we can use them directly
         let comparison_result = if self.config.is_garbler_side {
-            multiple_gb_less_than_ss(rng, channel, &[aggregated_share], &[threshold]);
-            false // Garbler doesn't see the result
+            let results = multiple_gb_greater_than_ss(rng, channel, &[aggregated_share], &[threshold]);
+            results[0]
         } else {
             // Evaluator side - gets the actual comparison result
-            let results = multiple_ev_less_than_ss(rng, channel, &[aggregated_share]);
+            let results = multiple_ev_greater_than_ss(rng, channel, &[aggregated_share]);
             results[0]
         };
 
-        Ok(ThresholdResult {
-            exceeds_threshold: comparison_result,
-            total_clients: match_results.len(),
-        })
+        Ok(comparison_result)
+    }
+
+    /// Compare with threshold using IntervalFSS approach
+    /// 
+    /// This method:
+    /// 1. Takes ring shares from the check phase for all clients: b^1, b^2, ..., b^n
+    /// 2. Aggregates them: sum = b^1 + b^2 + ... + b^n (number of clients that "match")
+    /// 3. Each server adds their random value to their aggregated share and sends to the other server
+    /// 4. Each server evaluates the reconstructed count using their FSS key for interval [threshold + r0 + r1, MAX]
+    /// 5. Returns the FSS evaluation result (1 if count >= threshold, 0 otherwise)
+    pub fn compare_with_threshold_intervalfss<const N: usize>(
+        &self,
+        match_results: &[ModInt],
+        threshold: u128,
+        fss_key: &IntervalFSSKey<N>,
+        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+    ) -> Result<bool, ThresholdPhaseError> {
+        let modulus = 1u128 << self.config.input_bit_length;
+        
+        // Extract random value from config
+        let random_value = match &self.config.data {
+            ThresholdData::IntervalFSS { random_value } => *random_value,
+            _ => return Err(ThresholdPhaseError::InvalidConfig(
+                "IntervalFSS method requires IntervalFSS data with random value".to_string()
+            )),
+        };
+        
+        // Step 1: Aggregate all ring shares locally
+        // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
+        let mut aggregated_share = ModInt::new(0, modulus);
+        for result in match_results {
+            aggregated_share = aggregated_share + *result;
+        }
+
+        // Step 2: Add random value to aggregated share and exchange with other server
+        let masked_share = aggregated_share + ModInt::new(random_value, modulus);
+        
+        let reconstructed_masked_count = if self.config.is_garbler_side {
+            // Server 1 (garbler) sends first, then receives
+            let share_bytes = masked_share.val().to_le_bytes();
+            channel.write_bytes(&share_bytes)
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
+            
+            let mut received_bytes = [0u8; 16];
+            channel.read_bytes(&mut received_bytes)
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
+            let other_masked_share = u128::from_le_bytes(received_bytes);
+            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+            
+            masked_share + other_masked_share_modint
+        } else {
+            // Server 0 (evaluator) receives first, then sends
+            let mut received_bytes = [0u8; 16];
+            channel.read_bytes(&mut received_bytes)
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
+            let other_masked_share = u128::from_le_bytes(received_bytes);
+            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+            
+            let share_bytes = masked_share.val().to_le_bytes();
+            channel.write_bytes(&share_bytes)
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
+            
+            masked_share + other_masked_share_modint
+        };
+
+        // Step 3: Evaluate the reconstructed masked count using FSS key for interval [threshold + r0 + r1, MAX]
+        // The reconstructed_masked_count = actual_count + r0 + r1
+        // Convert count to bit representation
+        let count_bits = u128_to_bits(reconstructed_masked_count.val(), self.config.input_bit_length);
+        
+        // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
+        // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
+        // we need to check if actual_count + r0 + r1 >= threshold + r0 + r1
+        let fss_result = fss_key.eval_intervalFSS(&count_bits, 2); // modulus 2 for binary output
+        
+        // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
+        // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)
+        // - If actual_count + r0 + r1 is outside [threshold + r0 + r1, MAX], FSS output is 0
+        let threshold_exceeded = fss_result.val()[0] == 1;
+
+        Ok(threshold_exceeded)
+    }
+
+    /// Common function to compare with threshold using the configured method
+    /// 
+    /// This function dispatches to either garbled circuits or IntervalFSS based on the config
+    pub fn compare_with_threshold<const N: usize>(
+        &self,
+        match_results: &[ModInt],
+        threshold: u128,
+        fss_key: Option<&IntervalFSSKey<N>>,
+        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        rng: &mut AesRng,
+    ) -> Result<bool, ThresholdPhaseError> {
+        match self.config.method {
+            ThresholdMethod::GarbledCircuits => {
+                // Verify we have the right config data
+                match &self.config.data {
+                    ThresholdData::GarbledCircuits => {},
+                    _ => return Err(ThresholdPhaseError::InvalidConfig(
+                        "GarbledCircuits method requires GarbledCircuits data".to_string()
+                    )),
+                }
+                
+                let modulus = 1u128 << self.config.input_bit_length;
+                let threshold_modint = ModInt::new(threshold, modulus);
+                self.compare_with_threshold_gc(match_results, threshold_modint, channel, rng)
+            }
+            ThresholdMethod::IntervalFSS => {
+                let fss_key = fss_key.ok_or_else(|| {
+                    ThresholdPhaseError::InvalidConfig(
+                        "FSS key is required for IntervalFSS method".to_string()
+                    )
+                })?;
+                self.compare_with_threshold_intervalfss(match_results, threshold, fss_key, channel)
+            }
+        }
     }
 
     /// Get the configuration
     pub fn config(&self) -> &ThresholdConfig {
         &self.config
-    }
-
-    /// Create match result for a client
-    pub fn create_match_result(ring_share: ModInt, client_id: usize) -> MatchResult<ModInt> {
-        MatchResult {
-            ring_share,
-            client_id,
-        }
     }
 }

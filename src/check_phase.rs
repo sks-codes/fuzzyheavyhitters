@@ -1,16 +1,3 @@
-//! Check Phase Implementation
-//!
-//! This module provides functionality for checking the outputs from the share phase
-//! using garbled circuit equality tests from equality.rs
-//!
-//! ## Protocol Flow:
-//! 1. Client shares a secret value x using SharePhase
-//! 2. Server 1 has evaluation points y1 and evaluates the shared range at these points
-//! 3. Server 2 has evaluation points y2 and evaluates the shared range at these points  
-//! 4. The two servers use garbled circuits to compare their evaluation results
-//!    without revealing the actual values to each other
-//! 5. The result indicates whether their evaluations are equal at corresponding positions
-
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::convert::{TryFrom, TryInto};

@@ -12,8 +12,6 @@ pub mod check_phase;
 pub mod share_phase_lp;
 pub mod check_phase_lp;
 pub mod threshold_phase;
-pub mod fuzzy_match;
-pub mod fuzzy_match_example;
 pub mod aes;
 pub mod okvs_f2k;
 

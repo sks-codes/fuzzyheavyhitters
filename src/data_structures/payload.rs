@@ -77,6 +77,11 @@ impl<const N: usize> RingVec<N> {
     pub fn modulus(&self) -> u128 {
         self.modulus
     }
+
+    /// Returns the value array of this RingVec.
+    pub fn val(&self) -> &[u128; N] {
+        &self.val
+    }
 }
 
 // --- RingVec-to-RingVec Operations ---
