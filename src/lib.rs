@@ -13,6 +13,8 @@ pub mod share_phase_lp;
 pub mod check_phase_lp;
 pub mod aes;
 pub mod okvs_f2k;
+pub mod protocol;
+pub mod cli_config;
 
 #[macro_use]
 extern crate lazy_static;

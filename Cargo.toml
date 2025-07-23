@@ -45,3 +45,7 @@ path = "benchmark/okvs_timing.rs"
 [[bin]]
 name = "okvs_parallel_stress_test"
 path = "benchmark/parallel_stress_test.rs"
+
+[[bin]]
+name = "fhh_cli"
+path = "src/bin/fhh_cli.rs"
