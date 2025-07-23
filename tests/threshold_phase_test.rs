@@ -1,7 +1,7 @@
 use counttree::{
-    share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, u128_to_bits},
-    check_phase::{CheckPhase, CheckConfig},
-    threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
+    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, u128_to_bits},
+    fuzzy_match::check_phase::{CheckPhase, CheckConfig},
+    fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
     data_structures::{modint::ModInt, payload::RingVec},
     fss::interval::IntervalFSSKey,
 };

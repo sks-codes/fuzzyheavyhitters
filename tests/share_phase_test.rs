@@ -1,4 +1,4 @@
-use counttree::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, SharePhaseError};
+use counttree::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, SharePhaseError};
 
 #[cfg(test)]
 mod tests {

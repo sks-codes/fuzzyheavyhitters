@@ -1,6 +1,6 @@
 use counttree::{
-    share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange},
-    check_phase::{CheckPhase, CheckConfig},
+    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange},
+    fuzzy_match::check_phase::{CheckPhase, CheckConfig},
     data_structures::modint::ModInt,
 };
 use scuttlebutt::{AesRng, Channel};

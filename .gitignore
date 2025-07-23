@@ -12,4 +12,10 @@ Cargo.lock
 script
 .*.swp
 
+# Data files and generated synthetic data
 /data/
+data/synthetic/
+*.json
+!data/*_config.json
+!src/bin/amazon.json
+!src/bin/config.json

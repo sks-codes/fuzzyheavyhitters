@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::convert::{TryFrom, TryInto};
 use scuttlebutt::{AesRng, Channel, Block};
-use crate::share_phase::{u128_to_bits, SharePhase, SharePhaseError, SharedRange};
+use crate::fuzzy_match::share_phase::{u128_to_bits, SharePhase, SharePhaseError, SharedRange};
 use crate::garbled_circuits::equality_full::{multiple_gb_equality_test, multiple_ev_equality_test};
 use crate::data_structures::modint::ModInt;
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};

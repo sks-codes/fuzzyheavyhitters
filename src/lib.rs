@@ -7,11 +7,10 @@ pub mod rpc;
 pub mod fss;
 pub mod garbled_circuits;
 pub mod sample_driving_data;
-pub mod share_phase;
-pub mod check_phase;
+pub mod synthetic_data;
+pub mod fuzzy_match;
 pub mod share_phase_lp;
 pub mod check_phase_lp;
-pub mod threshold_phase;
 pub mod aes;
 pub mod okvs_f2k;
 
