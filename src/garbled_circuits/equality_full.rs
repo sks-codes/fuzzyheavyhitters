@@ -27,7 +27,7 @@ use rand::Rng;
 /// wires. This structure simplifies the API of the garbled circuit.
 struct EQInputs<F> {
     pub garbler_wires: Vec<BinaryBundle<F>>,
-    pub results_wires: Vec<F>,
+    pub results_wire: F, // Single wire instead of vector
     pub evaluator_wires: Vec<BinaryBundle<F>>,
 }
 
@@ -39,19 +39,18 @@ pub fn multiple_gb_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
     inputs: &[ModInt]
-) -> Vec<bool>
+) -> bool
 where
     C: AbstractChannel + Clone,
 {
+    println!("Garbler gb equality test modulo: {}", inputs[0].modulus());
     let x_values = garbler_preprocess_equality_test(inputs);
     let bit_width = get_bit_width_from_modint(&inputs[0]);
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
 
-    // Mask for the output
-    let results = (0..x_values.len())
-        .map(|_| rand::rng().random::<bool>())
-        .collect::<Vec<bool>>();
-    let wires = gb_set_fancy_inputs(&mut gb, &x_values, &results, bit_width);
+    // Mask for the output - now just one boolean since we're ANDing everything
+    let result = rand::rng().random::<bool>();
+    let wires = gb_set_fancy_inputs(&mut gb, &x_values, result, bit_width);
 
     let eq = fancy_equality(&mut gb, wires).unwrap();
     gb.outputs(eq.wires()).unwrap();
@@ -59,11 +58,11 @@ where
     channel.flush().unwrap();
     let mut ack = [0u8; 1];
     channel.read_bytes(&mut ack).unwrap();
-    results
+    result // Return single boolean
 }
 
 /// The garbler's wire exchange method
-fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u128], results: &[bool], bit_width: usize) -> EQInputs<F::Item>
+fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u128], result: bool, bit_width: usize) -> EQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -71,16 +70,15 @@ where
     // The garbler encodes their input into binary wires
     let garbler_wires: Vec<BinaryBundle<F::Item>> = gb.bin_encode_many(input, bit_width).unwrap();
 
-    // Encode the result masks into binary wires
-    let results_u16 = results.iter().map(|&r| r as u16).collect::<Vec<u16>>();
-    let results_wires: Vec<F::Item> = gb.encode_many(&results_u16, &vec![2; results.len()]).unwrap();
+    // Encode the single result mask into a binary wire
+    let result_wire: F::Item = gb.encode(result as u16, 2).unwrap();
 
     // The evaluator receives their input labels using Oblivious Transfer (OT)
     let evaluator_wires: Vec<BinaryBundle<F::Item>> = gb.bin_receive_many(input.len(), bit_width).unwrap();
 
     EQInputs {
         garbler_wires,
-        results_wires,
+        results_wire: result_wire, // Single result wire
         evaluator_wires,
     }
 }
@@ -93,7 +91,7 @@ pub fn multiple_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
     inputs: &[ModInt]
-) -> Vec<bool>
+) -> bool
 where
     C: AbstractChannel + Clone,
 {
@@ -103,12 +101,12 @@ where
     let wires = ev_set_fancy_inputs(&mut ev, &y_values, bit_width);
     let eq = fancy_equality(&mut ev, wires).unwrap();
     let output = ev.outputs(eq.wires()).unwrap().unwrap();
-    let results = output.iter().map(|r| *r == 1).collect();
+    let result = output[0] == 1; // Single boolean result
 
     channel.write_bytes(&[1u8]).unwrap();
     channel.flush().unwrap();
 
-    results
+    result
 }
 
 /// The evaluator's wire exchange method
@@ -119,14 +117,14 @@ where
 {
     // The evaluator receives the garblers input labels.
     let garbler_wires: Vec<BinaryBundle<F::Item>> = ev.bin_receive_many(input.len(), bit_width).unwrap();
-    // The evaluator receives the results masks
-    let results_wires: Vec<F::Item> = ev.receive_many(&vec![2; input.len()]).unwrap();
+    // The evaluator receives the single result mask
+    let result_wire: F::Item = ev.receive(2).unwrap();
     // The evaluator receives their input labels using Oblivious Transfer (OT).
     let evaluator_wires: Vec<BinaryBundle<F::Item>> = ev.bin_encode_many(input, bit_width).unwrap();
 
     EQInputs {
         garbler_wires,
-        results_wires,
+        results_wire: result_wire, // Single result wire
         evaluator_wires,
     }
 }
@@ -139,17 +137,21 @@ where
     F: FancyReveal + Fancy + BinaryGadgets + FancyBinary + FancyArithmetic,
 {
     let garbler_wires = wire_inputs.garbler_wires;
-    let results_wires = wire_inputs.results_wires;
+    let result_wire = &wire_inputs.results_wire; // Single result wire
     let evaluator_wires = wire_inputs.evaluator_wires;
 
-    let mut final_results = Vec::new();
+    let mut equality_results = Vec::new();
 
     for i in 0..garbler_wires.len() {
         // Perform equality check for each garbler wire against the evaluator wire
         let eq = f.bin_eq_bundles(&garbler_wires[i], &evaluator_wires[i])?;
-        let final_result = f.xor(&eq, &results_wires[i])?;
-        final_results.push(final_result);
+        equality_results.push(eq);
     }
 
-    Ok(BinaryBundle::new(final_results))
+    let and_result = f.and_many(&equality_results)?;
+
+    // XOR with the result mask
+    let final_result = f.xor(&and_result, result_wire)?;
+
+    Ok(BinaryBundle::new(vec![final_result]))
 }
