@@ -7,11 +7,15 @@ use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, Shar
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::data_structures::modint::ModInt;
+use crate::data_structures::payload::RingVec;
 use crate::fss::interval::IntervalFSSKey;
+use crate::util::{send_bool_vec, receive_bool_vec};
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
 use std::io::{BufReader, BufWriter};
 use serde::{Deserialize, Serialize};
+use rand::Rng;
+    
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,17 +30,6 @@ pub struct ProtocolConfig {
     pub threshold: u128,
     /// The delta value for fuzzy matching (L-infinity distance)
     pub delta: u128,
-}
-
-/// Results from running the protocol
-#[derive(Debug, Clone)]
-pub struct ProtocolResult {
-    /// Whether the threshold was exceeded for each query point
-    pub threshold_exceeded: Vec<bool>,
-    /// Number of matches for each query point (for debugging)
-    pub match_counts: Vec<usize>,
-    /// Details about which clients matched for each query (for debugging)
-    pub client_matches: Vec<Vec<bool>>,
 }
 
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
@@ -79,21 +72,18 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
-        fss_keys: Option<&[IntervalFSSKey<1>]>,
+        threshold_data_list: &[ThresholdData],
         stream: UnixStream,
-    ) -> Result<ProtocolResult, String> {
+    ) -> Result<Vec<bool>, String> {
+        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
         let mut rng = AesRng::new();
-        let reader = BufReader::new(stream.try_clone().unwrap());
-        let writer = BufWriter::new(stream);
-        let mut channel = Channel::new(reader, writer);
-
-        let check_phase = CheckPhase::new(self.config.check_config.clone(), self.share_phase.clone());
+        
+        let share_phase = SharePhase::new(self.config.share_config.clone());
+        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
         let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
-
-        let mut threshold_exceeded = Vec::new();
-        let mut match_counts = Vec::new();
-        let mut client_matches = Vec::new();
-
+        
+        let mut server0_bits = Vec::new();
+        
         for (query_idx, query_point) in query_points.iter().enumerate() {
             // Run check phase for all client shares
             let mut match_results = Vec::new();
@@ -110,42 +100,31 @@ impl FuzzyHeavyHittersProtocol {
             }
 
             // Run threshold phase
-            let fss_key = if let Some(keys) = fss_keys {
-                Some(&keys[query_idx])
-            } else {
-                None
-            };
-
             let server_bit = threshold_phase.compare_with_threshold(
                 &match_results,
                 self.config.threshold,
-                fss_key,
+                &threshold_data_list[query_idx],
                 &mut channel,
                 &mut rng,
             ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-
-            // For debugging, we'll store intermediate results
-            // Note: In a real deployment, you wouldn't reconstruct these for privacy
-            let mut client_match_results = Vec::new();
-            let mut actual_matches = 0;
             
-            // This is just for debugging - normally you wouldn't reconstruct intermediate results
-            for result in &match_results {
-                // We can't actually reconstruct without the other server's shares
-                // This is just a placeholder for the structure
-                client_match_results.push(false); // Placeholder
-            }
-
-            threshold_exceeded.push(server_bit);
-            match_counts.push(actual_matches);
-            client_matches.push(client_match_results);
+            server0_bits.push(server_bit);
         }
 
-        Ok(ProtocolResult {
-            threshold_exceeded,
-            match_counts,
-            client_matches,
-        })
+        // Exchange threshold bits with server 1
+        // Send our bits to server 1
+        send_bool_vec(&mut channel, &server0_bits).map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
+        
+        // Receive bits from server 1
+        let server1_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
+        
+        // Compute final results (XOR the bits)
+        let final_results: Vec<bool> = server0_bits.iter()
+            .zip(server1_bits.iter())
+            .map(|(bit0, bit1)| bit0 ^ bit1)
+            .collect();
+
+        Ok(final_results)
     }
 
     /// Run the protocol as server 1 (garbler)
@@ -153,20 +132,17 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
-        fss_keys: Option<&[IntervalFSSKey<1>]>,
+        threshold_data_list: &[ThresholdData],
         stream: UnixStream,
-    ) -> Result<ProtocolResult, String> {
+    ) -> Result<Vec<bool>, String> {
+        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
         let mut rng = AesRng::new();
-        let reader = BufReader::new(stream.try_clone().unwrap());
-        let writer = BufWriter::new(stream);
-        let mut channel = Channel::new(reader, writer);
-
-        let check_phase = CheckPhase::new(self.config.check_config.clone(), self.share_phase.clone());
+        
+        let share_phase = SharePhase::new(self.config.share_config.clone());
+        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
         let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
-
-        let mut threshold_exceeded = Vec::new();
-        let mut match_counts = Vec::new();
-        let mut client_matches = Vec::new();
+        
+        let mut server1_bits = Vec::new();
 
         for (query_idx, query_point) in query_points.iter().enumerate() {
             // Run check phase for all client shares
@@ -184,41 +160,31 @@ impl FuzzyHeavyHittersProtocol {
             }
 
             // Run threshold phase
-            let fss_key = if let Some(keys) = fss_keys {
-                Some(&keys[query_idx])
-            } else {
-                None
-            };
-
             let server_bit = threshold_phase.compare_with_threshold(
                 &match_results,
                 self.config.threshold,
-                fss_key,
+                &threshold_data_list[query_idx],
                 &mut channel,
                 &mut rng,
             ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-
-            // For debugging, we'll store intermediate results
-            let mut client_match_results = Vec::new();
-            let mut actual_matches = 0;
             
-            // This is just for debugging - normally you wouldn't reconstruct intermediate results
-            for result in &match_results {
-                // We can't actually reconstruct without the other server's shares
-                // This is just a placeholder for the structure
-                client_match_results.push(false); // Placeholder
-            }
-
-            threshold_exceeded.push(server_bit);
-            match_counts.push(actual_matches);
-            client_matches.push(client_match_results);
+            server1_bits.push(server_bit);
         }
 
-        Ok(ProtocolResult {
-            threshold_exceeded,
-            match_counts,
-            client_matches,
-        })
+        // Exchange threshold bits with server 0
+        // Receive bits from server 0 first
+        let server0_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
+        
+        // Send our bits to server 0
+        send_bool_vec(&mut channel, &server1_bits).map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
+        
+        // Compute final results (XOR the bits)
+        let final_results: Vec<bool> = server0_bits.iter()
+            .zip(server1_bits.iter())
+            .map(|(bit0, bit1)| bit0 ^ bit1)
+            .collect();
+
+        Ok(final_results)
     }
 }
 
@@ -226,23 +192,25 @@ impl FuzzyHeavyHittersProtocol {
 /// This simulates a trusted dealer generating FSS keys
 pub fn generate_fss_keys_for_threshold(
     threshold: u128,
-    random_values: (u128, u128), // (r0, r1) - random values for each server
     bit_length: usize,
     num_queries: usize,
-) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>), String> {
+) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>, Vec<(u128, u128)>), String> {
     let modulus = 1u128 << bit_length;
-    let (r0, r1) = random_values;
     
     let mut keys_server0 = Vec::new();
     let mut keys_server1 = Vec::new();
-    
-    // Check if threshold + r0 + r1 would wrap around
-    let sum = threshold + r0 + r1;
-    let wraps_around = sum >= modulus;
-    
-    use crate::data_structures::payload::RingVec;
+    let mut random_pairs = Vec::new();
     
     for _ in 0..num_queries {
+        // Generate random pair (r0, r1) for this query using standard rand
+        let mut std_rng = rand::thread_rng();
+        let r0 = std_rng.gen_range(0..modulus);
+        let r1 = std_rng.gen_range(0..modulus);
+        random_pairs.push((r0, r1));
+        
+        // Check if threshold + r0 + r1 would wrap around
+        let sum = threshold + r0 + r1;
+        let wraps_around = sum >= modulus;
         let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
             // Wrap-around case: interval [threshold+r0+r1 mod modulus, r0+r1]
             // Return 1 in the middle, 0 on left and right
@@ -296,5 +264,5 @@ pub fn generate_fss_keys_for_threshold(
         keys_server1.push(key1);
     }
     
-    Ok((keys_server0, keys_server1))
+    Ok((keys_server0, keys_server1, random_pairs))
 }

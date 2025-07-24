@@ -7,6 +7,7 @@ use crate::fss::interval::IntervalFSSKey;
 use crate::fuzzy_match::share_phase::u128_to_bits;
 use crate::{Share, Group};
 
+
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::convert::TryInto;
@@ -27,8 +28,10 @@ pub enum ThresholdMethod {
 pub enum ThresholdData {
     /// No additional data needed for garbled circuits
     GarbledCircuits,
-    /// Random values for IntervalFSS privacy
+    /// FSS key and random value for IntervalFSS privacy
     IntervalFSS {
+        /// FSS key for this server
+        fss_key: IntervalFSSKey<1>,
         /// Random value for this server (r0 for server 0, r1 for server 1)
         random_value: u128,
     },
@@ -42,8 +45,6 @@ pub struct ThresholdConfig {
     pub is_garbler_side: bool,
     /// Method to use for threshold comparison
     pub method: ThresholdMethod,
-    /// Additional data based on the method
-    pub data: ThresholdData,
 }
 
 /// Error types for threshold phase operations
@@ -118,18 +119,11 @@ impl ThresholdPhase {
         &self,
         match_results: &[ModInt],
         threshold: u128,
+        random_value: u128,
         fss_key: &IntervalFSSKey<1>,
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
     ) -> Result<bool, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.input_bit_length;
-        
-        // Extract random value from config
-        let random_value = match &self.config.data {
-            ThresholdData::IntervalFSS { random_value } => *random_value,
-            _ => return Err(ThresholdPhaseError::InvalidConfig(
-                "IntervalFSS method requires IntervalFSS data with random value".to_string()
-            )),
-        };
         
         // Step 1: Aggregate all ring shares locally
         // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
@@ -208,14 +202,14 @@ impl ThresholdPhase {
         &self,
         match_results: &[ModInt],
         threshold: u128,
-        fss_key: Option<&IntervalFSSKey<1>>,
+        threshold_data: &ThresholdData,
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<bool, ThresholdPhaseError> {
         match self.config.method {
             ThresholdMethod::GarbledCircuits => {
-                // Verify we have the right config data
-                match &self.config.data {
+                // Verify we have the right data
+                match threshold_data {
                     ThresholdData::GarbledCircuits => {},
                     _ => return Err(ThresholdPhaseError::InvalidConfig(
                         "GarbledCircuits method requires GarbledCircuits data".to_string()
@@ -227,12 +221,14 @@ impl ThresholdPhase {
                 self.compare_with_threshold_gc(match_results, threshold_modint, channel, rng)
             }
             ThresholdMethod::IntervalFSS => {
-                let fss_key = fss_key.ok_or_else(|| {
-                    ThresholdPhaseError::InvalidConfig(
-                        "FSS key is required for IntervalFSS method".to_string()
-                    )
-                })?;
-                self.compare_with_threshold_intervalfss(match_results, threshold, fss_key, channel)
+                let (fss_key, random_value) = match threshold_data {
+                    ThresholdData::IntervalFSS { fss_key, random_value } => (fss_key, *random_value),
+                    _ => return Err(ThresholdPhaseError::InvalidConfig(
+                        "IntervalFSS method requires IntervalFSS data with FSS key and random value".to_string()
+                    )),
+                };
+                
+                self.compare_with_threshold_intervalfss(match_results, threshold, random_value, fss_key, channel)
             }
         }
     }

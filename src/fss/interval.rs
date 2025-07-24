@@ -17,7 +17,7 @@ use std::cell::RefCell;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, serde::Serialize, serde::Deserialize)]
 pub struct IntervalFSSCW<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], 
                 [u8; AES_BLOCK_SIZE]),
@@ -37,7 +37,7 @@ pub struct IntervalFSSData<const N: usize> {
     pub y_bits: (Pair<ModInt>, Pair<ModInt>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IntervalFSSKey<const N: usize> {
     pub key_idx: bool,
     pub root_seed: [u8; AES_BLOCK_SIZE],

@@ -1,7 +1,7 @@
 use std::ops::{Add, Sub, Mul, BitXor, BitAnd}; // Import all necessary traits
 
 /// A generic struct to represent a pair of values of type `T`.
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Pair<T> {
     pub first: T,
     pub second: T,

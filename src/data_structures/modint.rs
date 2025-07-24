@@ -4,7 +4,7 @@ use scuttlebutt::Block;
 use crate::{Group, Share};
 use rand::Rng;
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub struct ModInt {
     pub val: u128,
     modulus: u128,

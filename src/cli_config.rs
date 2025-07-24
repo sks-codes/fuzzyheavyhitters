@@ -34,6 +34,8 @@ pub struct ProtocolParameters {
     pub input_bit_length: usize,
     /// Output bit length (for ring operations)
     pub output_bit_length: usize,
+    /// Check phase output bit length (for aggregation)
+    pub check_output_bit_length: usize,
     /// Number of dimensions
     pub dimensions: usize,
     /// Share phase method ("OKVS" or other)
@@ -42,8 +44,6 @@ pub struct ProtocolParameters {
     pub threshold_method: String,
     /// OKVS parameters (if using OKVS sharing)
     pub okvs: Option<OkvsConfig>,
-    /// IntervalFSS parameters (if using IntervalFSS threshold)
-    pub interval_fss: Option<IntervalFssConfig>,
 }
 
 /// OKVS-specific configuration
@@ -53,15 +53,6 @@ pub struct OkvsConfig {
     pub r1: [u8; 16],
     /// Random seed 2 for OKVS  
     pub r2: [u8; 16],
-}
-
-/// IntervalFSS-specific configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IntervalFssConfig {
-    /// Random value for server 0
-    pub random_value_server0: u128,
-    /// Random value for server 1
-    pub random_value_server1: u128,
 }
 
 /// Network configuration
@@ -121,38 +112,23 @@ impl CliConfig {
         };
 
         // Convert threshold method and data
-        let (threshold_method, threshold_data) = match self.protocol.threshold_method.as_str() {
-            "GarbledCircuits" => (ThresholdMethod::GarbledCircuits, ThresholdData::GarbledCircuits),
-            "IntervalFSS" => {
-                let fss_config = self.protocol.interval_fss.as_ref()
-                    .ok_or("IntervalFSS configuration required for IntervalFSS threshold method")?;
-                
-                let random_value = if is_server1 {
-                    fss_config.random_value_server1
-                } else {
-                    fss_config.random_value_server0
-                };
-
-                (
-                    ThresholdMethod::IntervalFSS,
-                    ThresholdData::IntervalFSS { random_value }
-                )
-            },
+        let threshold_method = match self.protocol.threshold_method.as_str() {
+            "GarbledCircuits" => ThresholdMethod::GarbledCircuits,
+            "IntervalFSS" => ThresholdMethod::IntervalFSS,
             other => return Err(format!("Unsupported threshold method: {}", other)),
         };
 
         let check_config = CheckConfig {
             input_bit_length: self.protocol.output_bit_length,
-            output_bit_length: self.protocol.output_bit_length + 4, // Extra bits for aggregation
+            output_bit_length: self.protocol.check_output_bit_length,
             num_dimensions: self.protocol.dimensions,
             is_garbler_side: is_server1,
         };
 
         let threshold_config = ThresholdConfig {
-            input_bit_length: self.protocol.output_bit_length + 4,
+            input_bit_length: self.protocol.check_output_bit_length,
             is_garbler_side: is_server1,
             method: threshold_method,
-            data: threshold_data,
         };
 
         Ok(ProtocolConfig {

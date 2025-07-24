@@ -15,6 +15,7 @@ pub mod aes;
 pub mod okvs_f2k;
 pub mod protocol;
 pub mod cli_config;
+pub mod util;
 
 #[macro_use]
 extern crate lazy_static;
