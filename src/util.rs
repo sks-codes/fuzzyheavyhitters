@@ -103,6 +103,16 @@ pub fn receive_bool_vec(
     Ok(bits)
 }
 
+/// Convert a u128 value to a vector of bits with specified bit length
+/// Bits are returned in LSB-first order (bit 0 is the least significant bit)
+pub fn u128_to_bits(value: u128, bit_length: usize) -> Vec<bool> {
+    let mut bits = Vec::with_capacity(bit_length);
+    for i in 0..bit_length {
+        bits.push((value >> i) & 1 == 1);
+    }
+    bits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +147,24 @@ mod tests {
         let packed = pack_bits_to_bytes(&bits);
         let unpacked = unpack_bytes_to_bits(&packed, bits.len());
         assert_eq!(bits, unpacked);
+    }
+
+    #[test]
+    fn test_u128_to_bits() {
+        // Test basic conversion
+        let bits = u128_to_bits(5, 4); // 5 = 0101 in binary (LSB first)
+        assert_eq!(bits, vec![true, false, true, false]); // LSB first: [1, 0, 1, 0]
+        
+        // Test with zero
+        let bits = u128_to_bits(0, 4);
+        assert_eq!(bits, vec![false, false, false, false]);
+        
+        // Test with all ones
+        let bits = u128_to_bits(15, 4); // 15 = 1111 in binary
+        assert_eq!(bits, vec![true, true, true, true]);
+        
+        // Test larger number
+        let bits = u128_to_bits(170, 8); // 170 = 10101010 in binary
+        assert_eq!(bits, vec![false, true, false, true, false, true, false, true]);
     }
 }

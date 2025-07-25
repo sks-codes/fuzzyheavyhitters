@@ -1,7 +1,8 @@
 use counttree::{
-    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange},
+    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType},
     fuzzy_match::check_phase::{CheckPhase, CheckConfig},
     data_structures::modint::ModInt,
+    util::u128_to_bits,
 };
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
@@ -22,6 +23,7 @@ mod tests {
         // Set up configuration for OKVS sharing
         let share_config = ShareConfig {
             method: ShareMethod::OKVS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 16, // v = 16 for output values
             dimension: 2,
@@ -83,9 +85,14 @@ mod tests {
 
                 let check_phase_garbler = CheckPhase::new(check_config_garbler, share_phase_clone);
                 
+                // Convert query point from u128 to Vec<bool>
+                let query_point_bits: Vec<Vec<bool>> = query_point_clone.iter()
+                    .map(|&point| u128_to_bits(point, 8))
+                    .collect();
+                
                 let result = check_phase_garbler.run_fuzzy_match_check(
                     &share2_clone, // Server 1 gets share2
-                    &query_point_clone,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 );
@@ -108,9 +115,14 @@ mod tests {
 
             let check_phase_evaluator = CheckPhase::new(check_config_evaluator, share_phase.clone());
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+                .map(|&point| u128_to_bits(point, 8))
+                .collect();
+            
             let evaluator_result = check_phase_evaluator.run_fuzzy_match_check(
                 &share1, // Server 0 gets share1
-                &query_point,
+                &query_point_bits,
                 &mut channel,
                 &mut rng,
             );
@@ -154,6 +166,7 @@ mod tests {
         // Set up configuration for IntervalFSS sharing
         let share_config = ShareConfig {
             method: ShareMethod::IntervalFSS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 16, // v = 16 for output values
             dimension: 2,
@@ -204,9 +217,14 @@ mod tests {
 
                 let check_phase_garbler = CheckPhase::new(check_config_garbler, share_phase_clone);
                 
+                // Convert query point from u128 to Vec<bool>
+                let query_point_bits: Vec<Vec<bool>> = query_point_clone.iter()
+                    .map(|&point| u128_to_bits(point, 8))
+                    .collect();
+                
                 let result = check_phase_garbler.run_fuzzy_match_check(
                     &share2_clone,
-                    &query_point_clone,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 );
@@ -229,9 +247,14 @@ mod tests {
 
             let check_phase_evaluator = CheckPhase::new(check_config_evaluator, share_phase.clone());
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+                .map(|&point| u128_to_bits(point, 8))
+                .collect();
+            
             let evaluator_result = check_phase_evaluator.run_fuzzy_match_check(
                 &share1,
-                &query_point,
+                &query_point_bits,
                 &mut channel,
                 &mut rng,
             );

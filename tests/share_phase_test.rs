@@ -1,4 +1,4 @@
-use counttree::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, SharePhaseError};
+use counttree::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, SharePhaseError, DictionaryType};
 
 #[cfg(test)]
 mod tests {
@@ -9,6 +9,7 @@ mod tests {
         // Create OKVS configuration
         let config = ShareConfig {
             method: ShareMethod::OKVS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 20,
             dimension: 2,
@@ -45,8 +46,9 @@ mod tests {
         // Brute force test: evaluate at all points from 0 to 255 for all dimensions 0 to 1
         for dim in 0..=1 {
             for test_point in 0u128..=255u128 {
-                let result1 = share_phase.evaluate_at_single_dimension(&share1, test_point, dim);
-                let result2 = share_phase.evaluate_at_single_dimension(&share2, test_point, dim);
+                let test_point_bits = counttree::util::u128_to_bits(test_point, 8);
+                let result1 = share_phase.evaluate_at_single_dimension(&share1, &test_point_bits, dim);
+                let result2 = share_phase.evaluate_at_single_dimension(&share2, &test_point_bits, dim);
                 
                 assert!(result1.is_ok(), "Evaluation of first share should succeed for point {} dim {}", test_point, dim);
                 assert!(result2.is_ok(), "Evaluation of second share should succeed for point {} dim {}", test_point, dim);
@@ -78,6 +80,7 @@ mod tests {
         // Create Interval FSS configuration
         let config = ShareConfig {
             method: ShareMethod::IntervalFSS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 20, // v = 8, for output values
             dimension: 2,
@@ -108,8 +111,9 @@ mod tests {
         // Brute force test: evaluate at all points from 0 to 255 for all dimensions 0 to 1
         for dim in 0..=1 {
             for test_point in 0u128..=255u128 {
-                let result1 = share_phase.evaluate_at_single_dimension(&share1, test_point, dim);
-                let result2 = share_phase.evaluate_at_single_dimension(&share2, test_point, dim);
+                let test_point_bits = counttree::util::u128_to_bits(test_point, 8);
+                let result1 = share_phase.evaluate_at_single_dimension(&share1, &test_point_bits, dim);
+                let result2 = share_phase.evaluate_at_single_dimension(&share2, &test_point_bits, dim);
                 
                 assert!(result1.is_ok(), "Evaluation of first share should succeed for point {} dim {}", test_point, dim);
                 assert!(result2.is_ok(), "Evaluation of second share should succeed for point {} dim {}", test_point, dim);

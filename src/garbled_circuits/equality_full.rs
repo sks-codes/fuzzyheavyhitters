@@ -43,7 +43,6 @@ pub fn multiple_gb_equality_test<C>(
 where
     C: AbstractChannel + Clone,
 {
-    println!("Garbler gb equality test modulo: {}", inputs[0].modulus());
     let x_values = garbler_preprocess_equality_test(inputs);
     let bit_width = get_bit_width_from_modint(&inputs[0]);
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();

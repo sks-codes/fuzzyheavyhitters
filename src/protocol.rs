@@ -3,13 +3,13 @@
 //! This module provides a high-level interface for running the complete fuzzy heavy hitters protocol
 //! including share phase, check phase, and threshold phase.
 
-use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange};
+use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType};
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::data_structures::modint::ModInt;
 use crate::data_structures::payload::RingVec;
 use crate::fss::interval::IntervalFSSKey;
-use crate::util::{send_bool_vec, receive_bool_vec};
+use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits};
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
 use std::io::{BufReader, BufWriter};
@@ -88,10 +88,15 @@ impl FuzzyHeavyHittersProtocol {
             // Run check phase for all client shares
             let mut match_results = Vec::new();
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+                .map(|&point| u128_to_bits(point, self.config.share_config.input_bit_length))
+                .collect();
+            
             for share in client_shares {
                 let result = check_phase.run_fuzzy_match_check(
                     share,
-                    query_point,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -148,10 +153,15 @@ impl FuzzyHeavyHittersProtocol {
             // Run check phase for all client shares
             let mut match_results = Vec::new();
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+                .map(|&point| u128_to_bits(point, self.config.share_config.input_bit_length))
+                .collect();
+            
             for share in client_shares {
                 let result = check_phase.run_fuzzy_match_check(
                     share,
-                    query_point,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -185,6 +195,239 @@ impl FuzzyHeavyHittersProtocol {
             .collect();
 
         Ok(final_results)
+    }
+
+    /// Run the protocol for unknown dictionary case using binary search approach
+    /// This method finds the "frontier" of prefixes that exceed the threshold
+    /// Uses iterative extension: start with empty prefixes, then extend each heavy hitter by one bit at a time
+    /// 
+    /// # Parameters
+    /// * `client_shares_server0` - Client shares for server 0
+    /// * `client_shares_server1` - Client shares for server 1  
+    /// * `threshold_data_server0` - Threshold data for server 0
+    /// * `threshold_data_server1` - Threshold data for server 1
+    /// * `stream` - Communication stream between servers
+    /// * `is_server1` - True if this is server 1 (garbler), false if server 0 (evaluator)
+    pub fn run_unknown_dictionary_search(
+        &self,
+        client_shares_server0: &[SharedRange],
+        client_shares_server1: &[SharedRange],
+        threshold_data_server0: &[ThresholdData],
+        threshold_data_server1: &[ThresholdData],
+        stream: UnixStream,
+        is_server1: bool,
+    ) -> Result<Vec<Vec<bool>>, String> {
+        if self.config.share_config.dictionary_type != DictionaryType::Unknown {
+            return Err("This method requires Unknown dictionary type configuration".to_string());
+        }
+
+        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
+        let mut rng = AesRng::new();
+        
+        let share_phase = SharePhase::new(self.config.share_config.clone());
+        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
+        let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
+        
+        // Select the appropriate shares and threshold data based on server role
+        let (client_shares, threshold_data) = if is_server1 {
+            (client_shares_server1, threshold_data_server1)
+        } else {
+            (client_shares_server0, threshold_data_server0)
+        };
+
+        let max_bit_length = self.config.share_config.input_bit_length;
+        let dimension = self.config.share_config.dimension;
+
+        // Initialize with empty prefix for each dimension
+        let mut current_heavy_hitters = vec![vec![vec![]; dimension]];
+        let mut final_heavy_hitters = Vec::new();
+
+        // Iteratively extend prefixes until we reach maximum length
+        while !current_heavy_hitters.is_empty() {
+            let mut candidate_prefix_sets = Vec::new();
+
+            // Collect all potential next heavy hitters
+            for prefix_set in &current_heavy_hitters {
+                // Try extending each dimension that hasn't reached max length
+                for dim in 0..dimension {
+                    if prefix_set[dim].len() < max_bit_length {
+                        // Try both 0 and 1 for this dimension
+                        for bit_value in [false, true] {
+                            let mut extended_prefix_set = prefix_set.clone();
+                            extended_prefix_set[dim].push(bit_value);
+                            candidate_prefix_sets.push(extended_prefix_set);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Batch process all candidates
+            let exceeds_threshold_results = self.batch_test_prefix_sets_threshold(
+                &candidate_prefix_sets,
+                client_shares,
+                &threshold_data[0], // For simplicity, using same threshold data for all tests
+                &check_phase,
+                &threshold_phase,
+                &mut channel,
+                &mut rng,
+                is_server1,
+            )?;
+
+            // Collect the next heavy hitters based on results
+            let mut next_heavy_hitters = Vec::new();
+            for (candidate, exceeds_threshold) in candidate_prefix_sets.iter().zip(exceeds_threshold_results.iter()) {
+                if *exceeds_threshold {
+                    next_heavy_hitters.push(candidate.clone());
+                }
+            }
+
+            current_heavy_hitters = next_heavy_hitters;
+        }
+
+        Ok(final_heavy_hitters)
+    }
+
+    /// Batch test if multiple prefix sets exceed the threshold when evaluated against all client shares
+    /// This processes all candidates in a batch and exchanges results efficiently
+    fn batch_test_prefix_sets_threshold(
+        &self,
+        prefix_sets: &[Vec<Vec<bool>>],
+        client_shares: &[SharedRange],
+        threshold_data: &ThresholdData,
+        check_phase: &CheckPhase,
+        threshold_phase: &ThresholdPhase,
+        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        rng: &mut AesRng,
+        is_server1: bool,
+    ) -> Result<Vec<bool>, String> {
+        let mut server_bits = Vec::new();
+
+        // Process each prefix set and collect our server's results
+        for prefix_set in prefix_sets {
+            // Run check phase for all client shares with this prefix set
+            let mut match_results = Vec::new();
+            
+            for share in client_shares {
+                let result = check_phase.run_fuzzy_match_check(
+                    share,
+                    prefix_set,
+                    channel,
+                    rng,
+                ).map_err(|e| format!("Check phase failed: {:?}", e))?;
+                
+                match_results.push(result);
+            }
+
+            // Run threshold phase to check if results exceed threshold
+            let server_bit = threshold_phase.compare_with_threshold(
+                &match_results,
+                self.config.threshold,
+                threshold_data,
+                channel,
+                rng,
+            ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
+
+            server_bits.push(server_bit);
+        }
+
+        // Batch exchange bits between servers to get final results
+        let final_results = if is_server1 {
+            // Server 1: receive bits from server 0, then send our bits
+            let server0_bits = receive_bool_vec(channel)
+                .map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
+            send_bool_vec(channel, &server_bits)
+                .map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
+            
+            if server0_bits.len() != server_bits.len() {
+                return Err(format!("Mismatch in batch size: expected {}, got {}", server_bits.len(), server0_bits.len()));
+            }
+            
+            server0_bits.iter()
+                .zip(server_bits.iter())
+                .map(|(bit0, bit1)| bit0 ^ bit1)
+                .collect()
+        } else {
+            // Server 0: send our bits, then receive from server 1
+            send_bool_vec(channel, &server_bits)
+                .map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
+            let server1_bits = receive_bool_vec(channel)
+                .map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
+            
+            if server1_bits.len() != server_bits.len() {
+                return Err(format!("Mismatch in batch size: expected {}, got {}", server_bits.len(), server1_bits.len()));
+            }
+            
+            server_bits.iter()
+                .zip(server1_bits.iter())
+                .map(|(bit0, bit1)| bit0 ^ bit1)
+                .collect()
+        };
+
+        Ok(final_results)
+    }
+
+    /// Test if a prefix set exceeds the threshold when evaluated against all client shares
+    fn test_prefix_set_threshold(
+        &self,
+        prefix_set: &[Vec<bool>],
+        client_shares: &[SharedRange],
+        threshold_data: &ThresholdData,
+        check_phase: &CheckPhase,
+        threshold_phase: &ThresholdPhase,
+        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        rng: &mut AesRng,
+        is_server1: bool,
+    ) -> Result<bool, String> {
+        // Run check phase for all client shares with this prefix set
+        let mut match_results = Vec::new();
+        
+        for share in client_shares {
+            let result = check_phase.run_fuzzy_match_check(
+                share,
+                prefix_set,
+                channel,
+                rng,
+            ).map_err(|e| format!("Check phase failed: {:?}", e))?;
+            
+            match_results.push(result);
+        }
+
+        // Run threshold phase to check if results exceed threshold
+        let server_bit = threshold_phase.compare_with_threshold(
+            &match_results,
+            self.config.threshold,
+            threshold_data,
+            channel,
+            rng,
+        ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
+
+        // Exchange bits between servers to get final result
+        if is_server1 {
+            // Server 1: receive bit from server 0, then send our bit
+            let server0_bit = self.receive_single_bit(channel)?;
+            self.send_single_bit(channel, server_bit)?;
+            Ok(server0_bit ^ server_bit)
+        } else {
+            // Server 0: send our bit, then receive from server 1
+            self.send_single_bit(channel, server_bit)?;
+            let server1_bit = self.receive_single_bit(channel)?;
+            Ok(server_bit ^ server1_bit)
+        }
+    }
+
+    /// Helper method to send a single bit
+    fn send_single_bit(&self, channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>, bit: bool) -> Result<(), String> {
+        send_bool_vec(channel, &[bit]).map_err(|e| format!("Failed to send bit: {:?}", e))
+    }
+
+    /// Helper method to receive a single bit
+    fn receive_single_bit(&self, channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>) -> Result<bool, String> {
+        let bits = receive_bool_vec(channel).map_err(|e| format!("Failed to receive bit: {:?}", e))?;
+        if bits.len() != 1 {
+            return Err(format!("Expected 1 bit, got {}", bits.len()));
+        }
+        Ok(bits[0])
     }
 }
 

@@ -1,5 +1,6 @@
 use counttree::{
-    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, u128_to_bits},
+    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, DictionaryType},
+    util::u128_to_bits,
     fuzzy_match::check_phase::{CheckPhase, CheckConfig},
     fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
     data_structures::{modint::ModInt, payload::RingVec},
@@ -60,6 +61,7 @@ mod tests {
         // Step 3: Generate shares for all clients using SharePhase (only once)
         let share_config = ShareConfig {
             method: ShareMethod::OKVS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: INPUT_BIT_LENGTH,
             output_bit_length: OUTPUT_BIT_LENGTH,
             dimension: 2,
@@ -123,10 +125,15 @@ mod tests {
                 // Run check phase for all client shares
                 let mut match_results_server1 = Vec::new();
                 
+                // Convert query point from u128 to Vec<bool>
+                let query_point_bits: Vec<Vec<bool>> = query_point_clone.iter()
+                    .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
+                    .collect();
+                
                 for share in &all_shares_server1_clone {
                     let result = check_phase_garbler.run_fuzzy_match_check(
                         share,
-                        &query_point_clone,
+                        &query_point_bits,
                         &mut channel,
                         &mut rng,
                     ).expect("Check phase should succeed");
@@ -139,15 +146,15 @@ mod tests {
                     input_bit_length: OUTPUT_BIT_LENGTH + 4,
                     is_garbler_side: true,
                     method: ThresholdMethod::GarbledCircuits,
-                    data: ThresholdData::GarbledCircuits,
                 };
                 
                 let threshold_phase = ThresholdPhase::new(threshold_config);
+                let threshold_data = ThresholdData::GarbledCircuits;
                 
                 let garbler_bit = threshold_phase.compare_with_threshold(
                     &match_results_server1,
                     THRESHOLD,
-                    None, // No FSS key needed for garbled circuits
+                    &threshold_data,
                     &mut channel,
                     &mut rng,
                 ).expect("Threshold comparison should succeed");
@@ -173,10 +180,15 @@ mod tests {
             // Run check phase for all client shares
             let mut match_results_server0 = Vec::new();
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+                .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
+                .collect();
+            
             for share in &all_shares_server0 {
                 let result = check_phase_evaluator.run_fuzzy_match_check(
                     share,
-                    &query_point,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 ).expect("Check phase should succeed");
@@ -189,15 +201,15 @@ mod tests {
                 input_bit_length: OUTPUT_BIT_LENGTH + 4,
                 is_garbler_side: false,
                 method: ThresholdMethod::GarbledCircuits,
-                data: ThresholdData::GarbledCircuits,
             };
             
             let threshold_phase = ThresholdPhase::new(threshold_config);
+            let threshold_data = ThresholdData::GarbledCircuits;
             
             let evaluator_bit = threshold_phase.compare_with_threshold(
                 &match_results_server0,
                 THRESHOLD,
-                None, // No FSS key needed for garbled circuits
+                &threshold_data,
                 &mut channel,
                 &mut rng,
             ).expect("Threshold comparison should succeed");
@@ -279,6 +291,7 @@ mod tests {
         // Step 2: Generate shares for all clients
         let share_config = ShareConfig {
             method: ShareMethod::OKVS,
+            dictionary_type: DictionaryType::Known,
             input_bit_length: INPUT_BIT_LENGTH,
             output_bit_length: OUTPUT_BIT_LENGTH,
             dimension: 2,
@@ -366,10 +379,15 @@ mod tests {
             // Run check phase for all client shares
             let mut match_results_server1 = Vec::new();
             
+            // Convert query point from u128 to Vec<bool>
+            let query_point_bits: Vec<Vec<bool>> = query_point_clone.iter()
+                .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
+                .collect();
+            
             for share in &all_shares_server1_clone {
                 let result = check_phase_garbler.run_fuzzy_match_check(
                     share,
-                    &query_point_clone,
+                    &query_point_bits,
                     &mut channel,
                     &mut rng,
                 ).expect("Check phase should succeed");
@@ -383,17 +401,18 @@ mod tests {
                 input_bit_length: CHECK_BIT_LENGTH,
                 is_garbler_side: true,
                 method: ThresholdMethod::IntervalFSS,
-                data: ThresholdData::IntervalFSS {
-                    random_value: r1, // Server 1 gets r1
-                },
             };
             
             let threshold_phase = ThresholdPhase::new(threshold_config);
+            let threshold_data = ThresholdData::IntervalFSS {
+                fss_key: fss_key_1_clone,
+                random_value: r1,
+            };
             
             let garbler_result = threshold_phase.compare_with_threshold(
                 &match_results_server1,
                 THRESHOLD,
-                Some(&fss_key_1_clone), // FSS key required for IntervalFSS
+                &threshold_data,
                 &mut channel,
                 &mut rng,
             ).expect("IntervalFSS threshold comparison should succeed");
@@ -419,10 +438,15 @@ mod tests {
         // Run check phase for all client shares
         let mut match_results_server0 = Vec::new();
         
+        // Convert query point from u128 to Vec<bool>
+        let query_point_bits: Vec<Vec<bool>> = query_point.iter()
+            .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
+            .collect();
+        
         for share in &all_shares_server0 {
             let result = check_phase_evaluator.run_fuzzy_match_check(
                 share,
-                &query_point,
+                &query_point_bits,
                 &mut channel,
                 &mut rng,
             ).expect("Check phase should succeed");
@@ -437,17 +461,18 @@ mod tests {
             input_bit_length: CHECK_BIT_LENGTH,
             is_garbler_side: false,
             method: ThresholdMethod::IntervalFSS,
-            data: ThresholdData::IntervalFSS {
-                random_value: r0, // Server 2 gets r0
-            },
         };
             
         let threshold_phase = ThresholdPhase::new(threshold_config);
+        let threshold_data = ThresholdData::IntervalFSS {
+            fss_key: fss_key_0,
+            random_value: r0,
+        };
             
         let evaluator_result = threshold_phase.compare_with_threshold(
             &match_results_server0,
             THRESHOLD,
-            Some(&fss_key_0), // FSS key required for IntervalFSS
+            &threshold_data,
             &mut channel,
             &mut rng,
         ).expect("IntervalFSS threshold comparison should succeed");        // Wait for garbler thread

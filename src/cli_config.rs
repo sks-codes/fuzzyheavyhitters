@@ -3,7 +3,7 @@
 //! This module defines configuration structures for the CLI application
 
 use serde::{Deserialize, Serialize};
-use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData};
+use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData, DictionaryType};
 use crate::fuzzy_match::check_phase::CheckConfig;
 use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::protocol::ProtocolConfig;
@@ -38,8 +38,10 @@ pub struct ProtocolParameters {
     pub check_output_bit_length: usize,
     /// Number of dimensions
     pub dimensions: usize,
-    /// Share phase method ("OKVS" or other)
+    /// Share phase method ("OKVS" or "IntervalFSS")
     pub share_method: String,
+    /// Dictionary type ("Known" or "Unknown")
+    pub dictionary_type: String,
     /// Threshold phase method ("GarbledCircuits" or "IntervalFSS")
     pub threshold_method: String,
     /// OKVS parameters (if using OKVS sharing)
@@ -103,8 +105,16 @@ impl CliConfig {
             other => return Err(format!("Unsupported share method: {}", other)),
         };
 
+        // Convert dictionary type
+        let dictionary_type = match self.protocol.dictionary_type.as_str() {
+            "Known" => DictionaryType::Known,
+            "Unknown" => DictionaryType::Unknown,
+            other => return Err(format!("Unsupported dictionary type: {}", other)),
+        };
+
         let share_config = ShareConfig {
             method: share_method,
+            dictionary_type,
             input_bit_length: self.protocol.input_bit_length,
             output_bit_length: self.protocol.output_bit_length,
             dimension: self.protocol.dimensions,

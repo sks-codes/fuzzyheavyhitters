@@ -11,12 +11,14 @@
 
 use std::sync::Arc;
 use std::cmp::max;
+use std::collections::HashSet;
 use rand::Rng;
 use blake3;
 
 use crate::okvs_f2k::{self, RbOkvsF2k};
 use crate::fss::interval::{IntervalFSSKey, IntervalFSSEval};
 use crate::data_structures::{field::FieldElm, payload::RingVec};
+use crate::util::u128_to_bits;
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of different sharing methods available
@@ -26,6 +28,15 @@ pub enum ShareMethod {
     OKVS,
     /// Use Interval FSS for sharing
     IntervalFSS,
+}
+
+/// Enumeration of dictionary types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DictionaryType {
+    /// Known dictionary case - exact values in range
+    Known,
+    /// Unknown dictionary case - all prefixes of values in range
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +54,8 @@ pub enum ShareData {
 pub struct ShareConfig {
     /// The sharing method to use
     pub method: ShareMethod,
+    /// The dictionary type (known or unknown)
+    pub dictionary_type: DictionaryType,
     /// Number of bits for representing input values (u)
     pub input_bit_length: usize,
     /// Number of bits for representing output values (v)
@@ -119,12 +132,23 @@ impl SharePhase {
             ShareMethod::OKVS => {
                 match self.config.data {
                     ShareData::OKVS { r1, r2 } => {
-                        self.share_with_okvs(&x, &left_bound, &right_bound, &r1, &r2)
+                        match self.config.dictionary_type {
+                            DictionaryType::Known => {
+                                self.share_with_okvs_known(&x, &left_bound, &right_bound, &r1, &r2)
+                            },
+                            DictionaryType::Unknown => {
+                                self.share_with_okvs_unknown(&x, &left_bound, &right_bound, &r1, &r2)
+                            },
+                        }
                     },
                     _ => return Err(SharePhaseError::InvalidRange("OKVS data not provided".to_string())),
                 }
             },
-            ShareMethod::IntervalFSS => self.share_with_interval_fss(&left_bound, &right_bound),
+            ShareMethod::IntervalFSS => {
+                // IntervalFSS method is the same for both known and unknown dictionary
+                // since FSS already handles evaluating on prefixes
+                self.share_with_interval_fss(&left_bound, &right_bound)
+            },
         }
     }
 
@@ -133,24 +157,24 @@ impl SharePhase {
     pub fn evaluate_at_single_dimension(
         &self,
         shared_range: &SharedRange,
-        point: u128,
+        point_bits: &[bool],
         dimension: usize,
     ) -> Result<u128, SharePhaseError> {
         match shared_range {
             SharedRange::OKVS { okvs_shares, role } => {
-                let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point, *role)?;
+                let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point_bits, *role)?;
                 Ok(result)
             }
             SharedRange::IntervalFSS { fss_key, role } => {
-                self.evaluate_interval_fss_at_single_dimension(&fss_key[dimension], point, *role)
+                self.evaluate_interval_fss_at_single_dimension(&fss_key[dimension], point_bits, *role)
             }
         }
     }
 
 
-    /// Share using OKVS method
+    /// Share using OKVS method for known dictionary
     /// For each dimension i, create an OKVS that maps keys in [left_bound[i], right_bound[i]] to output_bit_length-sized vectors
-    fn share_with_okvs(
+    fn share_with_okvs_known(
         &self, 
         x: &[u128], // The original d-dimensional vector
         left_bound: &Vec<u128>, 
@@ -238,10 +262,10 @@ impl SharePhase {
     fn evaluate_okvs_at_single_dimension(
         &self,
         okvs_share: &Vec<u128>,
-        point: u128,
+        point_bits: &[bool],
         role: bool,
     ) -> Result<u128, SharePhaseError> {
-        let mut key_bits = u128_to_bits(point, self.config.input_bit_length);
+        let mut key_bits = point_bits.to_vec();
         key_bits.reverse();
         let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
         
@@ -259,10 +283,8 @@ impl SharePhase {
                     Ok(0) // Return 0 if decode fails
                 } else {
                     if !role {
-                        println!("Server 0 evaluating OKVS at point {}: result = {:?}", point, result);
                         Ok(result[0])
                     } else {
-                        println!("Server 1 evaluating OKVS at point {}: result = {:?}", point, result);
                         // Generate u128 from Blake3 hash of key_bits
                         let key_bits_bytes: Vec<u8> = key_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();
                         let hash = blake3::hash(&key_bits_bytes);
@@ -279,6 +301,105 @@ impl SharePhase {
             },
             _ => return Err(SharePhaseError::InvalidRange("OKVS data not provided".to_string())),
         }
+    }
+
+    /// Share using OKVS method for unknown dictionary
+    /// For each dimension i, create an OKVS that maps all prefixes of keys in [left_bound[i], right_bound[i]] to output_bit_length-sized vectors
+    fn share_with_okvs_unknown(
+        &self, 
+        x: &[u128], // The original d-dimensional vector
+        left_bound: &Vec<u128>, 
+        right_bound: &Vec<u128>,
+        r1: &[u8; 16],
+        r2: &[u8; 16],
+    ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
+        let mut okvs_shares_0 = Vec::new();
+        let mut okvs_shares_1 = Vec::new();
+        let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
+
+        // Create separate OKVS for each dimension
+        for dim in 0..self.config.dimension {
+            let left = left_bound[dim];
+            let right = right_bound[dim];
+            println!("Unknown dictionary - x: {:?}, left: {}, right: {}", x, left, right);
+            
+            // Create key-value pairs for all prefixes of values in this dimension's range [left, right]
+            let mut keys = Vec::new();
+            let mut values_0 = Vec::new();
+            let mut values_1 = Vec::new();
+
+            // Use HashSet to efficiently collect distinct prefixes
+            let mut distinct_prefixes = HashSet::new();
+
+            // Generate all distinct prefixes for values in the range [left, right]
+            for value in left..=right {
+                for prefix_len in 1..=self.config.input_bit_length {
+                    let prefix = value >> (self.config.input_bit_length - prefix_len);
+                    // Create a compact representation for the prefix with its length
+                    distinct_prefixes.insert((prefix, prefix_len));
+                }
+            }
+
+            // Convert distinct prefixes to keys and generate corresponding values
+            for (prefix, prefix_len) in distinct_prefixes {
+                let mut prefix_bits = u128_to_bits(prefix, prefix_len);
+                prefix_bits.reverse();
+                
+                let value = rand::rng().random::<u128>() & modulus_mask;
+                // Generate u128 from Blake3 hash of prefix_bits
+                let prefix_bits_bytes: Vec<u8> = prefix_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();
+                let hash = blake3::hash(&prefix_bits_bytes);
+                let hash_bytes = hash.as_bytes();
+                let value_mask = u128::from_le_bytes([
+                    hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
+                    hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
+                    hash_bytes[8], hash_bytes[9], hash_bytes[10], hash_bytes[11],
+                    hash_bytes[12], hash_bytes[13], hash_bytes[14], hash_bytes[15],
+                ]) & modulus_mask;
+                
+                // For now, use simple secret sharing where both shares are identical
+                let share0 = value;
+                let share1 = (value + value_mask) & modulus_mask; // share0 XOR share1 = value
+                
+                keys.push(prefix_bits);
+                values_0.push(share0);
+                values_1.push(share1);
+            }
+
+            if keys.is_empty() {
+                // If no keys for this dimension, create empty OKVS
+                okvs_shares_0.push(Vec::new());
+                okvs_shares_1.push(Vec::new());
+                continue;
+            }
+
+            let columns = max((keys.len() as f64 * 1.1) as usize, 60);
+            let band_width = 55;
+            let okvs = RbOkvsF2k::<u128>::new(
+                keys.len(),
+                columns,
+                band_width,
+                &r1, 
+                &r2,
+            );
+
+            let encoding_0 = okvs.encode(&keys, &values_0)?;
+            let encoding_1 = okvs.encode(&keys, &values_1)?;
+
+            okvs_shares_0.push(encoding_0);
+            okvs_shares_1.push(encoding_1);
+        }
+
+        Ok((
+            SharedRange::OKVS {
+                okvs_shares: okvs_shares_0,
+                role: false, // Server 0
+            },
+            SharedRange::OKVS {
+                okvs_shares: okvs_shares_1,
+                role: true, // Server 1
+            },
+        ))
     }
 
 
@@ -342,29 +463,20 @@ impl SharePhase {
     fn evaluate_interval_fss_at_single_dimension(
         &self,
         fss_key: &IntervalFSSKey<1>,
-        point: u128,
+        point_bits: &[bool],
         role: bool,
     ) -> Result<u128, SharePhaseError> {
-        let mut point_bits = u128_to_bits(point, self.config.input_bit_length);
-        point_bits.reverse();
+        let mut point_bits_rev = point_bits.to_vec();
+        point_bits_rev.reverse();
         
         // Use output_bit_length to determine the modulus
         let modulus = 1u128 << self.config.output_bit_length;
         
         // Evaluate with the FSS key for the specified dimension
-        let result = fss_key.eval_intervalFSS(&point_bits, modulus);
+        let result = fss_key.eval_intervalFSS(&point_bits_rev, modulus);
         // Return the result value
         Ok(result[0])
     }
-}
-
-/// Convert a u128 value to a vector of bits with specified bit length
-pub fn u128_to_bits(value: u128, bit_length: usize) -> Vec<bool> {
-    let mut bits = Vec::with_capacity(bit_length);
-    for i in 0..bit_length {
-        bits.push((value >> i) & 1 == 1);
-    }
-    bits
 }
 
 /// Errors that can occur during the share phase

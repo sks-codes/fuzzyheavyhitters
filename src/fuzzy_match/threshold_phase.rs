@@ -4,7 +4,7 @@ use crate::garbled_circuits::greater_than_or_equal_threshold::{
 use crate::data_structures::modint::ModInt;
 use crate::data_structures::payload::RingVec;
 use crate::fss::interval::IntervalFSSKey;
-use crate::fuzzy_match::share_phase::u128_to_bits;
+use crate::util::u128_to_bits;
 use crate::{Share, Group};
 
 

@@ -10,6 +10,7 @@ use rand;
 use crate::okvs_f2k::{self, RbOkvsF2k};
 use crate::fss::distance::{DistanceFSSKey};
 use crate::data_structures::{field::FieldElm, payload::RingVec};
+use crate::util::u128_to_bits;
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of different Lp sharing methods available
@@ -361,16 +362,6 @@ impl ShareLpPhase {
     }
 }
 
-/// Convert u128 to bit vector (LSB first)
-fn u128_to_bits(mut value: u128, bit_length: usize) -> Vec<bool> {
-    let mut bits = Vec::with_capacity(bit_length);
-    for _ in 0..bit_length {
-        bits.push((value & 1) == 1);
-        value >>= 1;
-    }
-    bits
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,11 +397,5 @@ mod tests {
 
         let result = ShareLpPhase::new(config);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_u128_to_bits() {
-        let bits = u128_to_bits(5, 4); // 5 = 0101 in binary
-        assert_eq!(bits, vec![true, false, true, false]); // LSB first
     }
 }

@@ -2,7 +2,7 @@ use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::convert::{TryFrom, TryInto};
 use scuttlebutt::{AesRng, Channel, Block};
-use crate::fuzzy_match::share_phase::{u128_to_bits, SharePhase, SharePhaseError, SharedRange};
+use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
 use crate::garbled_circuits::equality_full::{multiple_gb_equality_test, multiple_ev_equality_test};
 use crate::data_structures::modint::ModInt;
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
@@ -55,10 +55,11 @@ impl CheckPhase {
 
     /// Run fuzzy match check for a d-dimensional query point against a shared range
     /// This is specifically designed for the fuzzy matching protocol
+    /// Input: query_point is now a slice of Vec<bool> where each Vec<bool> represents the bits for one dimension
     pub fn run_fuzzy_match_check(
         &self,
         shared_range: &SharedRange,
-        query_point: &[u128],
+        query_point: &[Vec<bool>],
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
     ) -> Result<ModInt, CheckPhaseError> {
@@ -72,12 +73,13 @@ impl CheckPhase {
         let mut all_dimension_eval = Vec::<ModInt>::new();
         
         for dim in 0..self.config.num_dimensions {
+            // Use the bits directly from query_point
+            let point_bits = &query_point[dim];
+            
             // Evaluate at the specific dimension
-            let res = self.share_phase.evaluate_at_single_dimension(shared_range, query_point[dim], dim)?;
+            let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
             all_dimension_eval.push(ModInt::new(res, 1 << self.config.input_bit_length));
         }
-
-        println!("Done evaluating all dimensions");
 
         // Step 2: Run equality test with the concatenated boolean vector
         let equality_result = if self.config.is_garbler_side {
@@ -96,8 +98,6 @@ impl CheckPhase {
             rng,
             self.config.is_garbler_side,
         )?;
-
-        println!("Ring share modulo: {}", ring_share.modulus());
         
         Ok(ring_share)
     }
