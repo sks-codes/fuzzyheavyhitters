@@ -31,7 +31,7 @@ pub enum ShareMethod {
 }
 
 /// Enumeration of dictionary types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DictionaryType {
     /// Known dictionary case - exact values in range
     Known,
@@ -160,6 +160,11 @@ impl SharePhase {
         point_bits: &[bool],
         dimension: usize,
     ) -> Result<u128, SharePhaseError> {
+        // Return 0 if point_bits is empty
+        if point_bits.is_empty() {
+            return Ok(0);
+        }
+        
         match shared_range {
             SharedRange::OKVS { okvs_shares, role } => {
                 let result = self.evaluate_okvs_at_single_dimension(&okvs_shares[dimension], point_bits, *role)?;
@@ -266,7 +271,6 @@ impl SharePhase {
         role: bool,
     ) -> Result<u128, SharePhaseError> {
         let mut key_bits = point_bits.to_vec();
-        key_bits.reverse();
         let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
         
         match &self.config.data {
@@ -313,6 +317,8 @@ impl SharePhase {
         r1: &[u8; 16],
         r2: &[u8; 16],
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
+        println!("Creating OKVS for unknown dictionary with bounds: left={:?}, right={:?}", left_bound, right_bound);
+
         let mut okvs_shares_0 = Vec::new();
         let mut okvs_shares_1 = Vec::new();
         let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
@@ -344,6 +350,8 @@ impl SharePhase {
             for (prefix, prefix_len) in distinct_prefixes {
                 let mut prefix_bits = u128_to_bits(prefix, prefix_len);
                 prefix_bits.reverse();
+
+                println!("Prefix bits: {:?}", prefix_bits);
                 
                 let value = rand::rng().random::<u128>() & modulus_mask;
                 // Generate u128 from Blake3 hash of prefix_bits
@@ -466,14 +474,13 @@ impl SharePhase {
         point_bits: &[bool],
         role: bool,
     ) -> Result<u128, SharePhaseError> {
-        let mut point_bits_rev = point_bits.to_vec();
-        point_bits_rev.reverse();
+        let key_bits = point_bits.to_vec();
         
         // Use output_bit_length to determine the modulus
         let modulus = 1u128 << self.config.output_bit_length;
         
         // Evaluate with the FSS key for the specified dimension
-        let result = fss_key.eval_intervalFSS(&point_bits_rev, modulus);
+        let result = fss_key.eval_intervalFSS(&key_bits, modulus);
         // Return the result value
         Ok(result[0])
     }

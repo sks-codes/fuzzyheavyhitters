@@ -9,7 +9,7 @@ use counttree::{
     cli_config::CliConfig,
 };
 use clap::{App, Arg, SubCommand};
-use std::process;
+use std::{char::MAX, process};
 use std::thread;
 use std::os::unix::net::UnixStream;
 use std::fs;
@@ -247,7 +247,7 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     });
     
     // Run server 0 in main thread
-    let heavy_hitter_prefixes = protocol_server0.run_unknown_dictionary_search(
+    let heavy_hitter_values = protocol_server0.run_unknown_dictionary_search(
         &shares_server0,
         &shares_server1,
         &threshold_data_list_server0,
@@ -261,7 +261,7 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
         .map_err(|e| format!("Server 1 thread failed: {:?}", e))??;
     
     // Display results
-    display_unknown_dictionary_results(&cli_config, &client_points, &heavy_hitter_prefixes)?;
+    display_unknown_dictionary_results(&cli_config, &client_points, &heavy_hitter_values)?;
     
     Ok(())
 }
@@ -370,109 +370,339 @@ fn display_known_dictionary_results(
 fn display_unknown_dictionary_results(
     cli_config: &CliConfig,
     client_points: &[Vec<u128>],
-    heavy_hitter_prefixes: &[Vec<Vec<bool>>],
+    heavy_hitter_values: &[Vec<u128>],
 ) -> Result<(), String> {
     println!("=== Unknown Dictionary Search Results ===");
-    println!("Found {} heavy hitter prefixes", heavy_hitter_prefixes.len());
+    println!("Found {} heavy hitter values", heavy_hitter_values.len());
     
-    if heavy_hitter_prefixes.is_empty() {
-        println!("No heavy hitters found in the search space.");
-        return Ok(());
+    // Display the heavy hitter values
+    for (i, value_set) in heavy_hitter_values.iter().enumerate() {
+        println!("\nHeavy Hitter Value {}: {:?}", i + 1, value_set);
     }
     
-    // Convert prefixes back to readable format and display
-    for (i, prefix_set) in heavy_hitter_prefixes.iter().enumerate() {
-        println!("\nHeavy Hitter Prefix {}: ", i + 1);
-        for (dim, prefix) in prefix_set.iter().enumerate() {
-            let prefix_str: String = prefix.iter().map(|&b| if b { '1' } else { '0' }).collect();
-            println!("  Dimension {}: {} (length: {})", dim, prefix_str, prefix.len());
-        }
+    // Manual verification: run brute-force search on plaintext to find all fuzzy heavy hitters
+    println!("\n=== Manual Verification (Brute-Force Ground Truth) ===");
+    
+    // Find all actual fuzzy heavy hitters by brute-force search
+    let actual_heavy_hitters = find_fuzzy_heavy_hitters_bruteforce(
+        client_points, 
+        cli_config.protocol.delta as u128, 
+        cli_config.protocol.threshold as usize,
+        cli_config.protocol.input_bit_length
+    );
+    
+    println!("Brute-force found {} actual fuzzy heavy hitters:", actual_heavy_hitters.len());
+    // for (i, heavy_hitter) in actual_heavy_hitters.iter().enumerate() {
+    //     println!("  {}: {:?}", i + 1, heavy_hitter);
+    // }
+    
+    // Compare protocol results with ground truth
+    println!("\n=== Protocol vs Ground Truth Comparison ===");
+    
+    let mut protocol_correct = 0;
+    let mut protocol_false_positives = 0;
+    
+    // Check each protocol result
+    for heavy_hitter in heavy_hitter_values {
+        let is_actual_heavy_hitter = actual_heavy_hitters.iter().any(|actual| {
+            // Check if this protocol result matches any actual heavy hitter
+            actual.len() == heavy_hitter.len() && 
+            actual.iter().zip(heavy_hitter.iter()).all(|(a, b)| a == b)
+        });
         
-        // Estimate how many points this prefix could represent
-        let total_bits = cli_config.protocol.input_bit_length;
-        let mut remaining_space = 1u128;
-        for prefix in prefix_set {
-            let remaining_bits = total_bits - prefix.len();
-            remaining_space *= 1u128 << remaining_bits;
-        }
-        println!("  Represents up to {} possible points", remaining_space);
-    }
-    
-    // Calculate some statistics about the discovered prefixes
-    let mut total_prefix_bits = 0;
-    let mut min_prefix_length = usize::MAX;
-    let mut max_prefix_length = 0;
-    
-    for prefix_set in heavy_hitter_prefixes {
-        for prefix in prefix_set {
-            total_prefix_bits += prefix.len();
-            min_prefix_length = min_prefix_length.min(prefix.len());
-            max_prefix_length = max_prefix_length.max(prefix.len());
-        }
-    }
-    
-    if !heavy_hitter_prefixes.is_empty() {
-        let avg_prefix_length = total_prefix_bits as f64 / (heavy_hitter_prefixes.len() * cli_config.protocol.dimensions) as f64;
-        println!("\n=== Prefix Statistics ===");
-        println!("Average prefix length per dimension: {:.1} bits", avg_prefix_length);
-        println!("Min prefix length: {} bits", min_prefix_length);
-        println!("Max prefix length: {} bits", max_prefix_length);
-        println!("Total space explored: {:.1}%", 
-            (total_prefix_bits as f64 / (heavy_hitter_prefixes.len() * cli_config.protocol.dimensions * cli_config.protocol.input_bit_length) as f64) * 100.0);
-    }
-    
-    // Manual verification: check how many actual client points fall under these prefixes
-    println!("\n=== Manual Verification ===");
-    let mut verified_count = 0;
-    
-    for prefix_set in heavy_hitter_prefixes {
-        let mut count_for_this_prefix = 0;
-        
-        // Check each client point to see if it matches this prefix
-        for client_point in client_points {
-            let mut matches_prefix = true;
-            
-            for (dim, prefix) in prefix_set.iter().enumerate() {
-                if dim >= client_point.len() {
-                    continue;
-                }
-                
-                // Convert client point coordinate to binary and check prefix match
-                let point_bits = format!("{:0width$b}", client_point[dim], width = cli_config.protocol.input_bit_length);
-                let point_binary: Vec<bool> = point_bits.chars().rev().map(|c| c == '1').collect();
-                
-                // Check if the prefix matches
-                for (bit_idx, &prefix_bit) in prefix.iter().enumerate() {
-                    if bit_idx >= point_binary.len() || point_binary[bit_idx] != prefix_bit {
-                        matches_prefix = false;
-                        break;
-                    }
-                }
-                
-                if !matches_prefix {
-                    break;
-                }
-            }
-            
-            if matches_prefix {
-                count_for_this_prefix += 1;
-            }
-        }
-        
-        if count_for_this_prefix >= cli_config.protocol.threshold as usize {
-            verified_count += 1;
-            println!("Prefix matches {} client points (≥ threshold of {}): ✓", 
-                count_for_this_prefix, cli_config.protocol.threshold);
+        if is_actual_heavy_hitter {
+            protocol_correct += 1;
+            println!("Protocol result {:?}: ✓ (correctly identified)", heavy_hitter);
         } else {
-            println!("Prefix matches {} client points (< threshold of {}): ✗", 
-                count_for_this_prefix, cli_config.protocol.threshold);
+            protocol_false_positives += 1;
+            println!("Protocol result {:?}: ✗ (false positive)", heavy_hitter);
         }
     }
     
-    println!("Verification: {}/{} prefixes correctly exceed threshold", 
-        verified_count, heavy_hitter_prefixes.len());
+    // Check for missed heavy hitters
+    let mut missed_heavy_hitters = 0;
+    for actual_hh in &actual_heavy_hitters {
+        let found_by_protocol = heavy_hitter_values.iter().any(|protocol_hh| {
+            actual_hh.len() == protocol_hh.len() && 
+            actual_hh.iter().zip(protocol_hh.iter()).all(|(a, b)| a == b)
+        });
+        
+        if !found_by_protocol {
+            missed_heavy_hitters += 1;
+            // println!("Missed heavy hitter: {:?} (false negative)", actual_hh);
+        }
+    }
+    
+    println!("\n=== Final Verification Summary ===");
+    println!("Protocol found: {} heavy hitters", heavy_hitter_values.len());
+    println!("Ground truth: {} heavy hitters", actual_heavy_hitters.len());
+    println!("Correctly identified: {} / {}", protocol_correct, actual_heavy_hitters.len());
+    println!("False positives: {}", protocol_false_positives);
+    println!("False negatives: {}", missed_heavy_hitters);
+    
+    let precision = if heavy_hitter_values.is_empty() { 
+        1.0 
+    } else { 
+        protocol_correct as f64 / heavy_hitter_values.len() as f64 
+    };
+    let recall = if actual_heavy_hitters.is_empty() { 
+        1.0 
+    } else { 
+        protocol_correct as f64 / actual_heavy_hitters.len() as f64 
+    };
+    
+    println!("Precision: {:.1}%", precision * 100.0);
+    println!("Recall: {:.1}%", recall * 100.0);
 
     Ok(())
+}
+
+/// Brute-force search to find all fuzzy heavy hitters in plaintext
+/// This serves as ground truth for verification
+fn find_fuzzy_heavy_hitters_bruteforce(
+    client_points: &[Vec<u128>],
+    delta: u128,
+    threshold: usize,
+    input_bit_length: usize,
+) -> Vec<Vec<u128>> {
+    if client_points.is_empty() {
+        return Vec::new();
+    }
+    
+    let dimensions = client_points[0].len();
+    let max_value = (1u128 << input_bit_length) - 1;
+    let total_space_size = (1u128 << input_bit_length).pow(dimensions as u32);
+    
+    println!("Running brute-force search over {}^{} = {} possible points...", 
+        1u128 << input_bit_length, dimensions, total_space_size);
+    
+    // Use prefix search if space is too large (> 1M points), otherwise brute force
+    if total_space_size > 1_000_000_000 {
+        println!("Space too large, using prefix-based search for efficiency...");
+        find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length)
+    } else {
+        println!("Using full brute-force search...");
+        let brute_force_result = find_heavy_hitters_full_search(client_points, delta, threshold, max_value, dimensions);
+        
+        println!("Also running prefix search for comparison...");
+        let prefix_result = find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length);
+            
+        println!("Brute force found {} heavy hitters", brute_force_result.len());
+        println!("Prefix search found {} heavy hitters", prefix_result.len());
+            
+        // Check if results match
+        let mut matches = 0;
+        for bf_hh in &brute_force_result {
+            if prefix_result.iter().any(|pr_hh| bf_hh == pr_hh) {
+                matches += 1;
+            }
+        }
+        println!("Methods agree on {} out of {} heavy hitters", matches, brute_force_result.len().max(prefix_result.len()));
+            
+        if brute_force_result.len() != prefix_result.len() || matches != brute_force_result.len() {
+            println!("WARNING: Brute force and prefix search results differ!");
+        }
+        
+        brute_force_result
+    }
+}
+
+/// Full brute-force search over all possible points
+fn find_heavy_hitters_full_search(
+    client_points: &[Vec<u128>],
+    delta: u128,
+    threshold: usize,
+    max_value: u128,
+    dimensions: usize,
+) -> Vec<Vec<u128>> {
+    let mut heavy_hitters = Vec::new();
+    let mut current_point = vec![0u128; dimensions];
+    let mut points_checked = 0;
+    
+    loop {
+        // Count how many client points are within delta distance of current_point
+        let mut count = 0;
+        for client_point in client_points {
+            // Calculate L-infinity distance
+            let mut l_inf_distance = 0;
+            for dim in 0..dimensions {
+                let diff = if current_point[dim] > client_point[dim] {
+                    current_point[dim] - client_point[dim]
+                } else {
+                    client_point[dim] - current_point[dim]
+                };
+                l_inf_distance = l_inf_distance.max(diff);
+            }
+            
+            if l_inf_distance <= delta {
+                count += 1;
+            }
+        }
+        
+        // If count meets threshold, this is a heavy hitter
+        if count >= threshold {
+            heavy_hitters.push(current_point.clone());
+        }
+        
+        points_checked += 1;
+        if points_checked % 100_000 == 0 {
+            println!("  Checked {} points, found {} heavy hitters so far...", points_checked, heavy_hitters.len());
+        }
+        
+        // Generate next point (increment like a counter in base (max_value + 1))
+        let mut carry = 1;
+        for dim in 0..dimensions {
+            current_point[dim] += carry;
+            if current_point[dim] > max_value {
+                current_point[dim] = 0;
+                carry = 1;
+            } else {
+                carry = 0;
+                break;
+            }
+        }
+        
+        // If we've wrapped around all dimensions, we're done
+        if carry == 1 {
+            break;
+        }
+    }
+    
+    println!("Full search completed. Checked {} points total.", points_checked);
+    heavy_hitters
+}
+
+/// Prefix-based search for large input spaces
+/// Uses a branch-and-bound approach: if a prefix can't possibly be a heavy hitter,
+/// don't explore its extensions
+fn find_heavy_hitters_prefix_search(
+    client_points: &[Vec<u128>],
+    delta: u128,
+    threshold: usize,
+    input_bit_length: usize,
+) -> Vec<Vec<u128>> {
+    let dimensions = client_points[0].len();
+    let mut heavy_hitters = Vec::new();
+    let mut prefixes_to_explore = vec![vec![vec![]; dimensions]]; // Start with empty prefixes
+    let mut prefixes_checked = 0;
+    
+    while !prefixes_to_explore.is_empty() {
+        let mut next_prefixes = Vec::new();
+        
+        for prefix_set in prefixes_to_explore {
+            prefixes_checked += 1;
+            if prefixes_checked % 10_000 == 0 {
+                println!("  Checked {} prefixes, found {} heavy hitters so far...", 
+                    prefixes_checked, heavy_hitters.len());
+            }
+            
+            // Check if this prefix set represents complete points
+            let is_complete = prefix_set.iter().all(|prefix| prefix.len() == input_bit_length);
+            
+            if is_complete {
+                // Convert prefix to actual point and check if it's a heavy hitter
+                let point: Vec<u128> = prefix_set.iter().map(|prefix| {
+                    // Convert from bit vector to u128 (MSB first, like brute-force search)
+                    prefix.iter().enumerate().fold(0u128, |acc, (i, &bit)| {
+                        if bit { acc | (1u128 << (input_bit_length - 1 - i)) } else { acc }
+                    })
+                }).collect();
+                
+                let count = count_nearby_points(client_points, &point, delta);
+                if count >= threshold {
+                    heavy_hitters.push(point);
+                }
+            } else {
+                // Get upper bound estimate for this prefix
+                let upper_bound = estimate_max_nearby_count_for_prefix(client_points, &prefix_set, delta, input_bit_length);
+                
+                if upper_bound >= threshold {
+                    // This prefix might lead to heavy hitters, so extend it
+                    // Find the first dimension that can be extended
+                    for dim in 0..dimensions {
+                        if prefix_set[dim].len() < input_bit_length {
+                            // Try extending with both 0 and 1
+                            for bit_value in [false, true] {
+                                let mut extended_prefix = prefix_set.clone();
+                                extended_prefix[dim].push(bit_value);
+                                next_prefixes.push(extended_prefix);
+                            }
+                            break; // Only extend one dimension at a time
+                        }
+                    }
+                }
+                // If upper_bound < threshold, we prune this branch
+            }
+        }
+        
+        prefixes_to_explore = next_prefixes;
+    }
+    
+    println!("Prefix search completed. Checked {} prefixes total.", prefixes_checked);
+    heavy_hitters
+}
+
+/// Count how many client points are within delta distance of a given point
+fn count_nearby_points(client_points: &[Vec<u128>], point: &[u128], delta: u128) -> usize {
+    client_points.iter().filter(|client_point| {
+        let mut l_inf_distance = 0;
+        for dim in 0..point.len() {
+            let diff = if point[dim] > client_point[dim] {
+                point[dim] - client_point[dim]
+            } else {
+                client_point[dim] - point[dim]
+            };
+            l_inf_distance = l_inf_distance.max(diff);
+        }
+        l_inf_distance <= delta
+    }).count()
+}
+
+/// Estimate the maximum number of nearby points for any complete point that extends this prefix
+/// This provides an upper bound for pruning
+fn estimate_max_nearby_count_for_prefix(
+    client_points: &[Vec<u128>],
+    prefix_set: &[Vec<bool>],
+    delta: u128,
+    input_bit_length: usize,
+) -> usize {
+    // For each client point, check if it could possibly be within delta of some extension of this prefix
+    client_points.iter().filter(|client_point| {
+        // For each dimension, check if the client point coordinate could be within delta
+        // of some value that extends the current prefix
+        prefix_set.iter().enumerate().all(|(dim, prefix)| {
+            if dim >= client_point.len() {
+                return true;
+            }
+            
+            // Convert current prefix to min and max possible values (MSB first)
+            let prefix_value = prefix.iter().enumerate().fold(0u128, |acc, (i, &bit)| {
+                if bit { acc | (1u128 << (input_bit_length - 1 - i)) } else { acc }
+            });
+            
+            let remaining_bits = input_bit_length - prefix.len();
+            let min_possible = prefix_value;
+            let max_possible = prefix_value | ((1u128 << remaining_bits) - 1);
+            
+            // Check if client point could be within delta of the range [min_possible, max_possible]
+            let client_coord = client_point[dim];
+            
+            // Check if there's any overlap between [client_coord - delta, client_coord + delta] 
+            // and [min_possible, max_possible]
+            let client_min = if client_coord >= delta {
+                client_coord - delta
+            } else {
+                0 // Can't go below 0
+            };
+            let client_max = if client_coord + delta <= (1u128 << input_bit_length) - 1 {
+                client_coord + delta
+            } else {
+                (1u128 << input_bit_length) - 1 // Can't exceed max value
+            };
+
+            !(client_max < min_possible || client_min > max_possible)
+        })
+    }).count()
 }
 
 /// Generate a sample configuration file

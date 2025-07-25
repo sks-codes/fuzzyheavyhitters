@@ -13,6 +13,7 @@ use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits};
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
 use std::io::{BufReader, BufWriter};
+use std::thread::current;
 use serde::{Deserialize, Serialize};
 use rand::Rng;
     
@@ -155,7 +156,11 @@ impl FuzzyHeavyHittersProtocol {
             
             // Convert query point from u128 to Vec<bool>
             let query_point_bits: Vec<Vec<bool>> = query_point.iter()
-                .map(|&point| u128_to_bits(point, self.config.share_config.input_bit_length))
+                .map(|&point| {
+                    let mut key_bits = u128_to_bits(point, self.config.share_config.input_bit_length);
+                    key_bits.reverse(); // Reverse bits to match server 0's order
+                    key_bits
+                })
                 .collect();
             
             for share in client_shares {
@@ -216,7 +221,7 @@ impl FuzzyHeavyHittersProtocol {
         threshold_data_server1: &[ThresholdData],
         stream: UnixStream,
         is_server1: bool,
-    ) -> Result<Vec<Vec<bool>>, String> {
+    ) -> Result<Vec<Vec<u128>>, String> {
         if self.config.share_config.dictionary_type != DictionaryType::Unknown {
             return Err("This method requires Unknown dictionary type configuration".to_string());
         }
@@ -240,7 +245,6 @@ impl FuzzyHeavyHittersProtocol {
 
         // Initialize with empty prefix for each dimension
         let mut current_heavy_hitters = vec![vec![vec![]; dimension]];
-        let mut final_heavy_hitters = Vec::new();
 
         // Iteratively extend prefixes until we reach maximum length
         while !current_heavy_hitters.is_empty() {
@@ -260,6 +264,13 @@ impl FuzzyHeavyHittersProtocol {
                         break;
                     }
                 }
+            }
+
+            println!("Candidate prefixes to test: {:?}", candidate_prefix_sets);
+
+            if candidate_prefix_sets.is_empty() {
+                // No more prefixes to extend, we are done
+                break;
             }
 
             // Batch process all candidates
@@ -282,8 +293,21 @@ impl FuzzyHeavyHittersProtocol {
                 }
             }
 
+            println!("Next heavy hitters found: {:?}", next_heavy_hitters);
+
             current_heavy_hitters = next_heavy_hitters;
         }
+
+        let final_heavy_hitters = current_heavy_hitters.into_iter()
+            .map(|prefix_set| {
+                // Convert each prefix set back to u128 representation
+                prefix_set.iter()
+                    .map(|bits| {
+                        bits.iter().fold(0u128, |acc, &bit| (acc << 1) | if bit { 1 } else { 0 })
+                    })
+                    .collect::<Vec<u128>>()
+            })
+            .collect();
 
         Ok(final_heavy_hitters)
     }
