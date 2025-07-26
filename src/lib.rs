@@ -9,8 +9,6 @@ pub mod garbled_circuits;
 pub mod sample_driving_data;
 pub mod synthetic_data;
 pub mod fuzzy_match;
-pub mod share_phase_lp;
-pub mod check_phase_lp;
 pub mod aes;
 pub mod okvs_f2k;
 pub mod protocol;
