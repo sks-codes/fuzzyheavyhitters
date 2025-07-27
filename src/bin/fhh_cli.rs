@@ -4,8 +4,11 @@
 //! with both servers in the same process for testing purposes.
 
 use counttree::{
-    protocol::{FuzzyHeavyHittersProtocol, generate_fss_keys_for_threshold},
-    fuzzy_match::threshold_phase::ThresholdData,
+    protocol::{FuzzyHeavyHittersProtocol, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
+    fuzzy_match::{
+        threshold_phase::ThresholdData,
+        check_phase::{CheckData, CheckMethod},
+    },
     cli_config::CliConfig,
 };
 use clap::{App, Arg, SubCommand};
@@ -76,6 +79,50 @@ fn run_known_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
     let protocol_config_server0 = cli_config.to_protocol_config(false)?;
     let protocol_config_server1 = cli_config.to_protocol_config(true)?;
 
+    let protocol_server0 = FuzzyHeavyHittersProtocol::new(protocol_config_server0);
+    let protocol_server1 = FuzzyHeavyHittersProtocol::new(protocol_config_server1);
+
+    let estimated_num_check = query_points.len() * client_points.len();
+    let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
+    let (check_data_list_server0, check_data_list_server1) = if cli_config.protocol.check_method == "Linf" {
+        let check_data_list_0 = vec![CheckData::Linf; estimated_num_check];
+        let check_data_list_1 = vec![CheckData::Linf; estimated_num_check];
+        (check_data_list_0, check_data_list_1)
+    } else if cli_config.protocol.check_method == "LpGarbledCircuits" {
+        let check_data_list_0 = vec![CheckData::LpGarbledCircuits {threshold: distance_threshold}; estimated_num_check];
+        let check_data_list_1 = vec![CheckData::LpGarbledCircuits {threshold: distance_threshold}; estimated_num_check];
+        (check_data_list_0, check_data_list_1)
+    } else if cli_config.protocol.check_method == "LpIntervalFSS" {
+        let (keys0, keys1, random_pairs) = generate_fss_keys_for_check(
+            distance_threshold,
+            cli_config.protocol.output_bit_length,
+            cli_config.protocol.check_output_bit_length,
+            estimated_num_check,
+        )?;
+        println!("Generated {} check FSS key pairs for LpIntervalFSS", keys0.len());
+        
+        // Create check data for each check using corresponding random pairs
+        let mut check_data_list_0 = Vec::new();
+        let mut check_data_list_1 = Vec::new();
+        
+        for ((fss_key_0, fss_key_1), (r0, r1)) in keys0.iter().zip(keys1.iter()).zip(random_pairs.iter()) {
+            check_data_list_0.push(CheckData::LpIntervalFSS {
+                threshold: distance_threshold,
+                fss_key: fss_key_0.clone(),
+                random_value: *r0,
+            });
+            check_data_list_1.push(CheckData::LpIntervalFSS {
+                threshold: distance_threshold,
+                fss_key: fss_key_1.clone(),
+                random_value: *r1,
+            });
+        }
+        
+        (check_data_list_0, check_data_list_1)
+    } else {
+        return Err(format!("Unsupported check method: {}", cli_config.protocol.check_method));
+    };
+
     // Generate FSS keys and create threshold data if using IntervalFSS
     let (threshold_data_list_server0, threshold_data_list_server1) = if cli_config.protocol.threshold_method == "IntervalFSS" {
         println!("Generating FSS keys for IntervalFSS...");
@@ -126,24 +173,30 @@ fn run_known_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
         .map_err(|e| format!("Failed to create Unix socket pair: {}", e))?;
     
     // Run server 1 in a separate thread
+    let protocol_server1_clone = protocol_server1.clone();
     let shares_server1_clone = shares_server1.clone();
     let query_points_clone = query_points.clone();
     let threshold_data_list_server1_clone = threshold_data_list_server1.clone();
+    let check_data_list_server1_clone = check_data_list_server1.clone();
     
     let server1_handle = thread::spawn(move || {
-        protocol_server1.run_server1(
+        protocol_server1_clone.run_server_known_dictionary(
+            1,
             &shares_server1_clone,
             &query_points_clone,
             &threshold_data_list_server1_clone,
+            &check_data_list_server1_clone,
             stream1,
         )
     });
     
     // Run server 0 in main thread
-    let final_results = protocol_server0.run_server0(
+    let final_results = protocol_server0.run_server_known_dictionary(
+        0,
         &shares_server0,
         &query_points,
         &threshold_data_list_server0,
+        &check_data_list_server0,
         stream2,
     )?;
     
@@ -266,6 +319,93 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     Ok(())
 }
 
+/// Calculate distance between two points based on the distance metric
+fn calculate_distance(point1: &[u128], point2: &[u128], distance_metric: &str) -> u128 {
+    match distance_metric {
+        "Linf" => {
+            // L-infinity distance (max coordinate difference)
+            let mut l_inf_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l_inf_distance = l_inf_distance.max(diff);
+            }
+            l_inf_distance
+        },
+        "L1" => {
+            // L1 distance (Manhattan distance)
+            let mut l1_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l1_distance += diff;
+            }
+            l1_distance
+        },
+        "L2" => {
+            // L2 distance squared (to avoid sqrt)
+            let mut sum_of_squares = 0u128;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                sum_of_squares += diff * diff;
+            }
+            sum_of_squares
+        },
+        "L3" => {
+            // L3 distance (sum of cubes)^(1/3), but we return cubes for efficiency
+            let mut sum_of_cubes = 0u128;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                sum_of_cubes += diff * diff * diff;
+            }
+            sum_of_cubes
+        },
+        _ => {
+            // Default to L-infinity for unknown methods
+            let mut l_inf_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l_inf_distance = l_inf_distance.max(diff);
+            }
+            l_inf_distance
+        }
+    }
+}
+
+/// Get the distance threshold for comparison based on the distance metric
+fn get_distance_threshold(delta: u128, distance_metric: &str) -> u128 {
+    match distance_metric {
+        "Linf" | "L1" => delta,
+        "L2" => {
+            // For L2, we use squared distance, so threshold is delta^2
+            delta * delta
+        },
+        "L3" => {
+            // For L3, we use cubed distance, so threshold is delta^3
+            delta * delta * delta
+        },
+        _ => delta, // Default to delta for unknown methods
+    }
+}
+
 /// Display results for known dictionary protocol
 fn display_known_dictionary_results(
     cli_config: &CliConfig,
@@ -299,6 +439,8 @@ fn display_known_dictionary_results(
     
     // Calculate expected results manually for comparison
     println!("\n=== Expected Results (Manual Calculation) ===");
+    println!("Using distance metric: {}", cli_config.protocol.distance_metric);
+    let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
     let mut expected_heavy_hitters = 0;
     
     for (i, query_point) in query_points.iter().enumerate() {
@@ -306,18 +448,9 @@ fn display_known_dictionary_results(
         
         // Count client points within delta distance of this query point
         for client_point in client_points {
-            // Calculate L-infinity distance (max coordinate difference)
-            let mut l_inf_distance = 0;
-            for dim in 0..query_point.len() {
-                let diff = if query_point[dim] > client_point[dim] {
-                    query_point[dim] - client_point[dim]
-                } else {
-                    client_point[dim] - query_point[dim]
-                };
-                l_inf_distance = l_inf_distance.max(diff);
-            }
+            let distance = calculate_distance(query_point, client_point, &cli_config.protocol.distance_metric);
             
-            if l_inf_distance <= cli_config.protocol.delta as u128 {
+            if distance <= distance_threshold {
                 count += 1;
             }
         }
@@ -344,17 +477,10 @@ fn display_known_dictionary_results(
     println!("Expected Summary: {}/{} query points are heavy hitters", expected_heavy_hitters, query_points.len());
     
     let matches = query_points.iter().enumerate().filter(|(i, _)| {
+        let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
         let count = client_points.iter().filter(|client_point| {
-            let mut l_inf_distance = 0;
-            for dim in 0..query_points[*i].len() {
-                let diff = if query_points[*i][dim] > client_point[dim] {
-                    query_points[*i][dim] - client_point[dim]
-                } else {
-                    client_point[dim] - query_points[*i][dim]
-                };
-                l_inf_distance = l_inf_distance.max(diff);
-            }
-            l_inf_distance <= cli_config.protocol.delta as u128
+            let distance = calculate_distance(&query_points[*i], client_point, &cli_config.protocol.distance_metric);
+            distance <= distance_threshold
         }).count();
         let expected = count >= cli_config.protocol.threshold as usize;
         expected == final_results[*i]
@@ -388,7 +514,8 @@ fn display_unknown_dictionary_results(
         client_points, 
         cli_config.protocol.delta as u128, 
         cli_config.protocol.threshold as usize,
-        cli_config.protocol.input_bit_length
+        cli_config.protocol.input_bit_length,
+        &cli_config.protocol.distance_metric,
     );
     
     println!("Brute-force found {} actual fuzzy heavy hitters:", actual_heavy_hitters.len());
@@ -464,6 +591,7 @@ fn find_fuzzy_heavy_hitters_bruteforce(
     delta: u128,
     threshold: usize,
     input_bit_length: usize,
+    distance_metric: &str,
 ) -> Vec<Vec<u128>> {
     if client_points.is_empty() {
         return Vec::new();
@@ -479,13 +607,13 @@ fn find_fuzzy_heavy_hitters_bruteforce(
     // Use prefix search if space is too large (> 1M points), otherwise brute force
     if total_space_size > 1_000_000_000 {
         println!("Space too large, using prefix-based search for efficiency...");
-        find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length)
+        find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length, distance_metric)
     } else {
         println!("Using full brute-force search...");
-        let brute_force_result = find_heavy_hitters_full_search(client_points, delta, threshold, max_value, dimensions);
+        let brute_force_result = find_heavy_hitters_full_search(client_points, delta, threshold, max_value, dimensions, distance_metric);
         
         println!("Also running prefix search for comparison...");
-        let prefix_result = find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length);
+        let prefix_result = find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length, distance_metric);
             
         println!("Brute force found {} heavy hitters", brute_force_result.len());
         println!("Prefix search found {} heavy hitters", prefix_result.len());
@@ -514,6 +642,7 @@ fn find_heavy_hitters_full_search(
     threshold: usize,
     max_value: u128,
     dimensions: usize,
+    distance_metric: &str,
 ) -> Vec<Vec<u128>> {
     let mut heavy_hitters = Vec::new();
     let mut current_point = vec![0u128; dimensions];
@@ -522,19 +651,11 @@ fn find_heavy_hitters_full_search(
     loop {
         // Count how many client points are within delta distance of current_point
         let mut count = 0;
+        let distance_threshold = get_distance_threshold(delta, distance_metric);
         for client_point in client_points {
-            // Calculate L-infinity distance
-            let mut l_inf_distance = 0;
-            for dim in 0..dimensions {
-                let diff = if current_point[dim] > client_point[dim] {
-                    current_point[dim] - client_point[dim]
-                } else {
-                    client_point[dim] - current_point[dim]
-                };
-                l_inf_distance = l_inf_distance.max(diff);
-            }
+            let distance = calculate_distance(&current_point, client_point, distance_metric);
             
-            if l_inf_distance <= delta {
+            if distance <= distance_threshold {
                 count += 1;
             }
         }
@@ -580,6 +701,7 @@ fn find_heavy_hitters_prefix_search(
     delta: u128,
     threshold: usize,
     input_bit_length: usize,
+    distance_metric: &str,
 ) -> Vec<Vec<u128>> {
     let dimensions = client_points[0].len();
     let mut heavy_hitters = Vec::new();
@@ -713,13 +835,15 @@ fn generate_config(output_path: &str) -> Result<(), String> {
         protocol: counttree::cli_config::ProtocolParameters {
             delta: 5,
             threshold: 3,
-            input_bit_length: 8,
+            input_bit_length: 10,
             output_bit_length: 16,
             check_output_bit_length: 20, // output_bit_length + 4 for aggregation
             dimensions: 2,
             share_method: "OKVS".to_string(), // Can also be "IntervalFSS"
             dictionary_type: "Known".to_string(), // Can also be "Unknown"
             threshold_method: "GarbledCircuits".to_string(), // Can also be "IntervalFSS"
+            check_method: "Linf".to_string(), // Can also be "LpGarbledCircuits" or "LpIntervalFSS"
+            distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
             okvs: Some(counttree::cli_config::OkvsConfig {
                 r1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
                 r2: [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],

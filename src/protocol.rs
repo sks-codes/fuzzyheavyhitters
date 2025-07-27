@@ -4,7 +4,7 @@
 //! including share phase, check phase, and threshold phase.
 
 use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType};
-use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig};
+use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::data_structures::modint::ModInt;
 use crate::data_structures::payload::RingVec;
@@ -68,12 +68,14 @@ impl FuzzyHeavyHittersProtocol {
         Ok((shares_server0, shares_server1))
     }
 
-    /// Run the protocol as server 0 (evaluator)
-    pub fn run_server0(
+    /// Run the protocol as a specific server (0 or 1)
+    pub fn run_server_known_dictionary(
         &self,
+        server_id: u8,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
         threshold_data_list: &[ThresholdData],
+        check_data_list: &[CheckData],
         stream: UnixStream,
     ) -> Result<Vec<bool>, String> {
         let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
@@ -83,73 +85,8 @@ impl FuzzyHeavyHittersProtocol {
         let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
         let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
         
-        let mut server0_bits = Vec::new();
+        let mut server_bits = Vec::new();
         
-        for (query_idx, query_point) in query_points.iter().enumerate() {
-            // Run check phase for all client shares
-            let mut match_results = Vec::new();
-            
-            // Convert query point from u128 to Vec<bool>
-            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
-                .map(|&point| u128_to_bits(point, self.config.share_config.input_bit_length))
-                .collect();
-            
-            for share in client_shares {
-                let result = check_phase.run_fuzzy_match_check(
-                    share,
-                    &query_point_bits,
-                    &mut channel,
-                    &mut rng,
-                ).map_err(|e| format!("Check phase failed: {:?}", e))?;
-                
-                match_results.push(result);
-            }
-
-            // Run threshold phase
-            let server_bit = threshold_phase.compare_with_threshold(
-                &match_results,
-                self.config.threshold,
-                &threshold_data_list[query_idx],
-                &mut channel,
-                &mut rng,
-            ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-            
-            server0_bits.push(server_bit);
-        }
-
-        // Exchange threshold bits with server 1
-        // Send our bits to server 1
-        send_bool_vec(&mut channel, &server0_bits).map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
-        
-        // Receive bits from server 1
-        let server1_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
-        
-        // Compute final results (XOR the bits)
-        let final_results: Vec<bool> = server0_bits.iter()
-            .zip(server1_bits.iter())
-            .map(|(bit0, bit1)| bit0 ^ bit1)
-            .collect();
-
-        Ok(final_results)
-    }
-
-    /// Run the protocol as server 1 (garbler)
-    pub fn run_server1(
-        &self,
-        client_shares: &[SharedRange],
-        query_points: &[Vec<u128>],
-        threshold_data_list: &[ThresholdData],
-        stream: UnixStream,
-    ) -> Result<Vec<bool>, String> {
-        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
-        let mut rng = AesRng::new();
-        
-        let share_phase = SharePhase::new(self.config.share_config.clone());
-        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
-        let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
-        
-        let mut server1_bits = Vec::new();
-
         for (query_idx, query_point) in query_points.iter().enumerate() {
             // Run check phase for all client shares
             let mut match_results = Vec::new();
@@ -158,7 +95,9 @@ impl FuzzyHeavyHittersProtocol {
             let query_point_bits: Vec<Vec<bool>> = query_point.iter()
                 .map(|&point| {
                     let mut key_bits = u128_to_bits(point, self.config.share_config.input_bit_length);
-                    key_bits.reverse(); // Reverse bits to match server 0's order
+                    if server_id == 1 {
+                        key_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+                    }
                     key_bits
                 })
                 .collect();
@@ -167,6 +106,7 @@ impl FuzzyHeavyHittersProtocol {
                 let result = check_phase.run_fuzzy_match_check(
                     share,
                     &query_point_bits,
+                    &check_data_list[query_idx],
                     &mut channel,
                     &mut rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -183,21 +123,31 @@ impl FuzzyHeavyHittersProtocol {
                 &mut rng,
             ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
             
-            server1_bits.push(server_bit);
+            server_bits.push(server_bit);
         }
 
-        // Exchange threshold bits with server 0
-        // Receive bits from server 0 first
-        let server0_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
-        
-        // Send our bits to server 0
-        send_bool_vec(&mut channel, &server1_bits).map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
-        
-        // Compute final results (XOR the bits)
-        let final_results: Vec<bool> = server0_bits.iter()
-            .zip(server1_bits.iter())
-            .map(|(bit0, bit1)| bit0 ^ bit1)
-            .collect();
+        // Exchange threshold bits between servers
+        let final_results = if server_id == 0 {
+            // Server 0: send bits first, then receive
+            send_bool_vec(&mut channel, &server_bits).map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
+            let server1_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
+            
+            // Compute final results (XOR the bits)
+            server_bits.iter()
+                .zip(server1_bits.iter())
+                .map(|(bit0, bit1)| bit0 ^ bit1)
+                .collect()
+        } else {
+            // Server 1: receive bits first, then send
+            let server0_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
+            send_bool_vec(&mut channel, &server_bits).map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
+            
+            // Compute final results (XOR the bits)
+            server0_bits.iter()
+                .zip(server_bits.iter())
+                .map(|(bit0, bit1)| bit0 ^ bit1)
+                .collect()
+        };
 
         Ok(final_results)
     }
@@ -213,12 +163,11 @@ impl FuzzyHeavyHittersProtocol {
     /// * `threshold_data_server1` - Threshold data for server 1
     /// * `stream` - Communication stream between servers
     /// * `is_server1` - True if this is server 1 (garbler), false if server 0 (evaluator)
-    pub fn run_unknown_dictionary_search(
+    pub fn run_server_unknown_dictionary(
         &self,
-        client_shares_server0: &[SharedRange],
-        client_shares_server1: &[SharedRange],
-        threshold_data_server0: &[ThresholdData],
-        threshold_data_server1: &[ThresholdData],
+        client_shares_list: &[SharedRange],
+        check_data_list: &[CheckData],
+        threshold_data_list: &[ThresholdData],
         stream: UnixStream,
         is_server1: bool,
     ) -> Result<Vec<Vec<u128>>, String> {
@@ -233,18 +182,13 @@ impl FuzzyHeavyHittersProtocol {
         let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
         let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
         
-        // Select the appropriate shares and threshold data based on server role
-        let (client_shares, threshold_data) = if is_server1 {
-            (client_shares_server1, threshold_data_server1)
-        } else {
-            (client_shares_server0, threshold_data_server0)
-        };
-
         let max_bit_length = self.config.share_config.input_bit_length;
         let dimension = self.config.share_config.dimension;
 
         // Initialize with empty prefix for each dimension
         let mut current_heavy_hitters = vec![vec![vec![]; dimension]];
+        let mut check_data_count = 0;
+        let mut threshold_data_count = 0;
 
         // Iteratively extend prefixes until we reach maximum length
         while !current_heavy_hitters.is_empty() {
@@ -296,6 +240,8 @@ impl FuzzyHeavyHittersProtocol {
             println!("Next heavy hitters found: {:?}", next_heavy_hitters);
 
             current_heavy_hitters = next_heavy_hitters;
+            check_data_count += candidate_prefix_sets.len() * client_shares.len();
+            threshold_data_count += candidate_prefix_sets.len();
         }
 
         let final_heavy_hitters = current_heavy_hitters.into_iter()
@@ -336,6 +282,7 @@ impl FuzzyHeavyHittersProtocol {
                 let result = check_phase.run_fuzzy_match_check(
                     share,
                     prefix_set,
+                    &check_data,
                     channel,
                     rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -410,6 +357,7 @@ impl FuzzyHeavyHittersProtocol {
             let result = check_phase.run_fuzzy_match_check(
                 share,
                 prefix_set,
+                &check_data,
                 channel,
                 rng,
             ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -492,9 +440,9 @@ pub fn generate_fss_keys_for_threshold(
                 .collect();
             
             // For wrap-around: left=0, middle=1, right=0
-            let a = RingVec::<1>::new([0], modulus); // left
-            let b = RingVec::<1>::new([1], modulus); // middle
-            let c = RingVec::<1>::new([0], modulus); // right
+            let a = RingVec::<1>::new([0], 2); // left
+            let b = RingVec::<1>::new([1], 2); // middle
+            let c = RingVec::<1>::new([0], 2); // right
             
             (alpha_bits, beta_bits, a, b, c)
         } else {
@@ -511,9 +459,9 @@ pub fn generate_fss_keys_for_threshold(
                 .collect();
             
             // For no wrap-around: left=1, middle=0, right=1
-            let a = RingVec::<1>::new([1], modulus); // left
-            let b = RingVec::<1>::new([0], modulus); // middle
-            let c = RingVec::<1>::new([1], modulus); // right
+            let a = RingVec::<1>::new([1], 2); // left
+            let b = RingVec::<1>::new([0], 2); // middle
+            let c = RingVec::<1>::new([1], 2); // right
             
             (alpha_bits, beta_bits, a, b, c)
         };
@@ -521,9 +469,90 @@ pub fn generate_fss_keys_for_threshold(
         let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
             &alpha_bits,
             &beta_bits,
-            a,
-            b,
-            c,
+            &a,
+            &b,
+            &c,
+            modulus,
+        );
+        
+        keys_server0.push(key0);
+        keys_server1.push(key1);
+    }
+    
+    Ok((keys_server0, keys_server1, random_pairs))
+}
+
+/// Generate FSS keys for check phase comparison (Lp distance with IntervalFSS)
+/// This simulates a trusted dealer generating FSS keys for distance threshold comparison
+pub fn generate_fss_keys_for_check(
+    distance_threshold: u128,
+    input_bit_length: usize,
+    output_bit_length: usize,
+    num_checks: usize,
+) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>, Vec<(u128, u128)>), String> {
+    let in_modulus = 1u128 << input_bit_length;
+    let out_modulus = 1u128 << output_bit_length;
+    
+    let mut keys_server0 = Vec::new();
+    let mut keys_server1 = Vec::new();
+    let mut random_pairs = Vec::new();
+    
+    for _ in 0..num_checks {
+        // Generate random pair (r0, r1) for this check using standard rand
+        let mut std_rng = rand::thread_rng();
+        let r0 = std_rng.gen_range(0..in_modulus);
+        let r1 = std_rng.gen_range(0..in_modulus);
+        random_pairs.push((r0, r1));
+        
+        // Check if distance_threshold + r0 + r1 would wrap around
+        let sum = distance_threshold + r0 + r1;
+        let wraps_around = sum >= in_modulus;
+        let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
+            // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
+            // Return 0 in the middle, 1 on left and right
+            let interval_start = sum % in_modulus;
+            let interval_end = (r0 + r1) % in_modulus;
+            
+            let alpha_bits: Vec<bool> = (0..input_bit_length)
+                .map(|i| ((interval_start >> i) & 1) == 1)
+                .collect();
+            let beta_bits: Vec<bool> = (0..input_bit_length)
+                .map(|i| ((interval_end >> i) & 1) == 1)
+                .collect();
+            
+            // For wrap-around: left=1, middle=0, right=1
+            let a = RingVec::<1>::new([1], out_modulus); // left
+            let b = RingVec::<1>::new([0], out_modulus); // middle
+            let c = RingVec::<1>::new([1], out_modulus); // right
+
+            (alpha_bits, beta_bits, a, b, c)
+        } else {
+            // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
+            // Return 1 inside interval (distance <= threshold), 0 outside
+            let interval_start = (r0 + r1) % in_modulus;
+            let interval_end = sum;
+
+            let alpha_bits: Vec<bool> = (0..input_bit_length)
+                .map(|i| ((interval_start >> i) & 1) == 1)
+                .collect();
+            let beta_bits: Vec<bool> = (0..input_bit_length)
+                .map(|i| ((interval_end >> i) & 1) == 1)
+                .collect();
+            
+            // For no wrap-around: left=0, middle=1, right=0
+            let a = RingVec::<1>::new([0], out_modulus); // left
+            let b = RingVec::<1>::new([1], out_modulus); // middle
+            let c = RingVec::<1>::new([0], out_modulus); // right
+
+            (alpha_bits, beta_bits, a, b, c)
+        };
+        
+        let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
+            &alpha_bits,
+            &beta_bits,
+            &a,
+            &b,
+            &c,
             modulus,
         );
         

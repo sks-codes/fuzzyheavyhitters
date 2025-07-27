@@ -3,10 +3,11 @@
 //! This module defines configuration structures for the CLI application
 
 use serde::{Deserialize, Serialize};
-use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData, DictionaryType};
-use crate::fuzzy_match::check_phase::CheckConfig;
-use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod, ThresholdData};
+use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData, DictionaryType, DistanceMetric};
+use crate::fuzzy_match::check_phase::{CheckConfig, CheckMethod};
+use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod};
 use crate::protocol::ProtocolConfig;
+use crate::Share;
 
 /// CLI configuration that combines all protocol parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +45,10 @@ pub struct ProtocolParameters {
     pub dictionary_type: String,
     /// Threshold phase method ("GarbledCircuits" or "IntervalFSS")
     pub threshold_method: String,
+    /// Check phase method ("Linf", "LpGarbledCircuits", or "LpIntervalFSS")
+    pub check_method: String,
+    /// Distance metric ("Linf", "L1", "L2", "L3")
+    pub distance_metric: String,
     /// OKVS parameters (if using OKVS sharing)
     pub okvs: Option<OkvsConfig>,
 }
@@ -98,10 +103,9 @@ impl CliConfig {
                 
                 (ShareMethod::OKVS, share_data)
             },
-            "IntervalFSS" => {
-                let share_data = ShareData::IntervalFSS {};
-                (ShareMethod::IntervalFSS, share_data)
-            },
+            "FSS" => {
+                (ShareMethod::FSS, ShareData::FSS)
+            }
             other => return Err(format!("Unsupported share method: {}", other)),
         };
 
@@ -112,9 +116,19 @@ impl CliConfig {
             other => return Err(format!("Unsupported dictionary type: {}", other)),
         };
 
+        // Convert distance metric based on the explicit distance_metric field
+        let distance_metric = match self.protocol.distance_metric.as_str() {
+            "Linf" => DistanceMetric::LInfinity,
+            "L1" => DistanceMetric::Lp { p: 1 },
+            "L2" => DistanceMetric::Lp { p: 2 },
+            "L3" => DistanceMetric::Lp { p: 3 },
+            other => return Err(format!("Unsupported distance metric: {}", other)),
+        };
+
         let share_config = ShareConfig {
             method: share_method,
             dictionary_type,
+            metric: distance_metric,
             input_bit_length: self.protocol.input_bit_length,
             output_bit_length: self.protocol.output_bit_length,
             dimension: self.protocol.dimensions,
@@ -128,11 +142,20 @@ impl CliConfig {
             other => return Err(format!("Unsupported threshold method: {}", other)),
         };
 
+        // Convert check method
+        let check_method = match self.protocol.check_method.as_str() {
+            "Linf" => CheckMethod::Linf,
+            "LpGarbledCircuits" => CheckMethod::LpGarbledCircuits,
+            "LpIntervalFSS" => CheckMethod::LpIntervalFSS,
+            other => return Err(format!("Unsupported check method: {}", other)),
+        };
+
         let check_config = CheckConfig {
             input_bit_length: self.protocol.output_bit_length,
             output_bit_length: self.protocol.check_output_bit_length,
             num_dimensions: self.protocol.dimensions,
             is_garbler_side: is_server1,
+            method: check_method,
         };
 
         let threshold_config = ThresholdConfig {

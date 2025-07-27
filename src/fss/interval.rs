@@ -386,7 +386,7 @@ impl<const N: usize> IntervalFSSKey<N>
 {
 
     // Need alpha < beta
-    pub fn gen_IntervalFSSKey(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec<N>, b: RingVec<N>, c: RingVec<N>, modulus: u128) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
+    pub fn gen_IntervalFSSKey(alpha_bits: &[bool], beta_bits: &[bool], a: &RingVec<N>, b: &RingVec<N>, c: &RingVec<N>, modulus: u128) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
         assert!(alpha_bits.len() == beta_bits.len());
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
