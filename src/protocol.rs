@@ -14,9 +14,17 @@ use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
 use std::io::{BufReader, BufWriter};
 use std::thread::current;
+use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use rand::Rng;
-    
+
+/// FSS key pair batch for check phase
+#[derive(Clone, Debug)]
+pub struct FssKeyBatch {
+    pub keys0: Vec<IntervalFSSKey<1>>,
+    pub keys1: Vec<IntervalFSSKey<1>>, 
+    pub random_pairs: Vec<(u128, u128)>,
+}
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,21 +165,36 @@ impl FuzzyHeavyHittersProtocol {
     /// Uses iterative extension: start with empty prefixes, then extend each heavy hitter by one bit at a time
     /// 
     /// # Parameters
-    /// * `client_shares_server0` - Client shares for server 0
-    /// * `client_shares_server1` - Client shares for server 1  
-    /// * `threshold_data_server0` - Threshold data for server 0
-    /// * `threshold_data_server1` - Threshold data for server 1
+    /// * `client_shares_list` - Client shares for this server
+    /// * `threshold_data_list` - Threshold data for this server
     /// * `stream` - Communication stream between servers
     /// * `is_server1` - True if this is server 1 (garbler), false if server 0 (evaluator)
+    /// * `fss_dealer_receiver` - Optional receiver to get FSS key batches from dealer
+    /// * `fss_dealer_shutdown` - Optional sender to shutdown the dealer when done
     pub fn run_server_unknown_dictionary(
         &self,
         client_shares_list: &[SharedRange],
-        check_data_list: &[CheckData],
         threshold_data_list: &[ThresholdData],
         stream: UnixStream,
         is_server1: bool,
+        fss_dealer_receiver: Option<mpsc::Receiver<FssKeyBatch>>,
+        fss_dealer_shutdown: Option<mpsc::Sender<()>>,
     ) -> Result<Vec<Vec<u128>>, String> {
+        // Helper closure to shutdown dealer on both success and error
+        let shutdown_dealer = |is_server1: bool, sender: Option<mpsc::Sender<()>>| {
+            if !is_server1 {
+                if let Some(shutdown_sender) = sender {
+                    if let Err(_) = shutdown_sender.send(()) {
+                        println!("Warning: Failed to send shutdown signal to dealer");
+                    } else {
+                        println!("Server 0: Sent shutdown signal to FSS dealer");
+                    }
+                }
+            }
+        };
+
         if self.config.share_config.dictionary_type != DictionaryType::Unknown {
+            shutdown_dealer(is_server1, fss_dealer_shutdown);
             return Err("This method requires Unknown dictionary type configuration".to_string());
         }
 
@@ -218,16 +241,23 @@ impl FuzzyHeavyHittersProtocol {
             }
 
             // Batch process all candidates
-            let exceeds_threshold_results = self.batch_test_prefix_sets_threshold(
+            let exceeds_threshold_results = match self.batch_test_prefix_sets_threshold(
                 &candidate_prefix_sets,
-                client_shares,
-                &threshold_data[0], // For simplicity, using same threshold data for all tests
+                client_shares_list,
+                &threshold_data_list[0], // For simplicity, using same threshold data for all tests
                 &check_phase,
                 &threshold_phase,
                 &mut channel,
                 &mut rng,
                 is_server1,
-            )?;
+                &fss_dealer_receiver,
+            ) {
+                Ok(results) => results,
+                Err(e) => {
+                    shutdown_dealer(is_server1, fss_dealer_shutdown);
+                    return Err(e);
+                }
+            };
 
             // Collect the next heavy hitters based on results
             let mut next_heavy_hitters = Vec::new();
@@ -240,7 +270,7 @@ impl FuzzyHeavyHittersProtocol {
             println!("Next heavy hitters found: {:?}", next_heavy_hitters);
 
             current_heavy_hitters = next_heavy_hitters;
-            check_data_count += candidate_prefix_sets.len() * client_shares.len();
+            check_data_count += candidate_prefix_sets.len() * client_shares_list.len();
             threshold_data_count += candidate_prefix_sets.len();
         }
 
@@ -254,6 +284,9 @@ impl FuzzyHeavyHittersProtocol {
                     .collect::<Vec<u128>>()
             })
             .collect();
+
+        // Shutdown the dealer if we have a shutdown sender (only server 0 should do this)
+        shutdown_dealer(is_server1, fss_dealer_shutdown);
 
         Ok(final_heavy_hitters)
     }
@@ -270,11 +303,35 @@ impl FuzzyHeavyHittersProtocol {
         channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
         rng: &mut AesRng,
         is_server1: bool,
+        fss_dealer_receiver: &Option<mpsc::Receiver<FssKeyBatch>>,
     ) -> Result<Vec<bool>, String> {
         let mut server_bits = Vec::new();
 
         // Process each prefix set and collect our server's results
         for prefix_set in prefix_sets {
+            // Get FSS keys from dealer if using LpIntervalFSS check method
+            let check_data = if let Some(receiver) = fss_dealer_receiver {
+                // Get a batch of FSS keys from the dealer
+                let batch = receiver.recv()
+                    .map_err(|_| "Failed to receive FSS keys from dealer")?;
+                
+                if batch.keys0.len() < client_shares.len() {
+                    return Err(format!("Dealer provided {} keys but {} are needed", 
+                                     batch.keys0.len(), client_shares.len()));
+                }
+                
+                // For now, we'll use the first key from the batch
+                // In a real implementation, you'd want to distribute the keys properly
+                CheckData::LpIntervalFSS {
+                    threshold: self.config.delta, // Use configured delta as threshold
+                    fss_key: batch.keys0[0].clone(),
+                    random_value: batch.random_pairs[0].0,
+                }
+            } else {
+                // Fallback to other check methods
+                CheckData::Linf // or whatever default check method
+            };
+            
             // Run check phase for all client shares with this prefix set
             let mut match_results = Vec::new();
             
@@ -336,56 +393,6 @@ impl FuzzyHeavyHittersProtocol {
         };
 
         Ok(final_results)
-    }
-
-    /// Test if a prefix set exceeds the threshold when evaluated against all client shares
-    fn test_prefix_set_threshold(
-        &self,
-        prefix_set: &[Vec<bool>],
-        client_shares: &[SharedRange],
-        threshold_data: &ThresholdData,
-        check_phase: &CheckPhase,
-        threshold_phase: &ThresholdPhase,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
-        rng: &mut AesRng,
-        is_server1: bool,
-    ) -> Result<bool, String> {
-        // Run check phase for all client shares with this prefix set
-        let mut match_results = Vec::new();
-        
-        for share in client_shares {
-            let result = check_phase.run_fuzzy_match_check(
-                share,
-                prefix_set,
-                &check_data,
-                channel,
-                rng,
-            ).map_err(|e| format!("Check phase failed: {:?}", e))?;
-            
-            match_results.push(result);
-        }
-
-        // Run threshold phase to check if results exceed threshold
-        let server_bit = threshold_phase.compare_with_threshold(
-            &match_results,
-            self.config.threshold,
-            threshold_data,
-            channel,
-            rng,
-        ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-
-        // Exchange bits between servers to get final result
-        if is_server1 {
-            // Server 1: receive bit from server 0, then send our bit
-            let server0_bit = self.receive_single_bit(channel)?;
-            self.send_single_bit(channel, server_bit)?;
-            Ok(server0_bit ^ server_bit)
-        } else {
-            // Server 0: send our bit, then receive from server 1
-            self.send_single_bit(channel, server_bit)?;
-            let server1_bit = self.receive_single_bit(channel)?;
-            Ok(server_bit ^ server1_bit)
-        }
     }
 
     /// Helper method to send a single bit

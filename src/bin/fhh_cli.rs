@@ -14,9 +14,118 @@ use counttree::{
 use clap::{App, Arg, SubCommand};
 use std::{char::MAX, process};
 use std::thread;
+use std::sync::{mpsc, Arc, Mutex};
 use std::os::unix::net::UnixStream;
 use std::fs;
 use serde_json;
+
+/// FSS key pair batch for check phase
+#[derive(Clone)]
+struct FssKeyBatch {
+    keys0: Vec<counttree::fss::ibdcf::IntervalKey>,
+    keys1: Vec<counttree::fss::ibdcf::IntervalKey>, 
+    random_pairs: Vec<(u128, u128)>,
+}
+
+/// Dealer that continuously generates FSS key pairs in the background
+struct FssDealer {
+    receiver: mpsc::Receiver<FssKeyBatch>,
+    shutdown_sender: mpsc::Sender<()>,
+}
+
+impl FssDealer {
+    /// Create a new FSS dealer that generates key pairs in the background
+    fn new(
+        n_clients: usize,
+        distance_threshold: u128,
+        output_bit_length: usize,
+        check_output_bit_length: usize,
+    ) -> Result<Self, String> {
+        let (batch_sender, batch_receiver) = mpsc::channel::<FssKeyBatch>();
+        let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>();
+        
+        // Spawn the dealer thread
+        thread::spawn(move || {
+            loop {
+                // Check if we should shutdown
+                if shutdown_receiver.try_recv().is_ok() {
+                    println!("FSS dealer shutting down");
+                    break;
+                }
+                
+                // Generate a batch of FSS keys for n clients
+                match generate_fss_keys_for_check(
+                    distance_threshold,
+                    output_bit_length,
+                    check_output_bit_length,
+                    n_clients,
+                ) {
+                    Ok((keys0, keys1, random_pairs)) => {
+                        let batch = FssKeyBatch {
+                            keys0,
+                            keys1,
+                            random_pairs,
+                        };
+                        
+                        // Try to send the batch; if receiver is gone, break
+                        if batch_sender.send(batch).is_err() {
+                            println!("FSS dealer: receiver disconnected, shutting down");
+                            break;
+                        }
+                        
+                        println!("FSS dealer: generated batch of {} key pairs", n_clients);
+                    }
+                    Err(e) => {
+                        eprintln!("FSS dealer: failed to generate keys: {}", e);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+            }
+        });
+        
+        Ok(FssDealer {
+            receiver: batch_receiver,
+            shutdown_sender,
+        })
+    }
+    
+    /// Get the next batch of FSS keys (blocks until available)
+    fn get_next_batch(&self) -> Result<FssKeyBatch, String> {
+        self.receiver.recv()
+            .map_err(|_| "FSS dealer disconnected".to_string())
+    }
+    
+    /// Shutdown the dealer thread
+    fn shutdown(&self) {
+        let _ = self.shutdown_sender.send(());
+    }
+}
+
+/// Get FSS keys for check phase from the dealer
+/// This function would be called by the protocol when it needs FSS keys for checking
+/// one prefix against n client points
+fn get_fss_keys_from_dealer(
+    dealer: &Arc<Mutex<FssDealer>>,
+    n_keys_needed: usize,
+) -> Result<(Vec<counttree::fss::ibdcf::IntervalKey>, Vec<counttree::fss::ibdcf::IntervalKey>, Vec<(u128, u128)>), String> {
+    let dealer_guard = dealer.lock()
+        .map_err(|_| "Failed to lock FSS dealer")?;
+    
+    let batch = dealer_guard.get_next_batch()?;
+    
+    if batch.keys0.len() < n_keys_needed {
+        return Err(format!("Dealer provided {} keys but {} were needed", batch.keys0.len(), n_keys_needed));
+    }
+    
+    // Take only the number of keys needed
+    let keys0 = batch.keys0[..n_keys_needed].to_vec();
+    let keys1 = batch.keys1[..n_keys_needed].to_vec();
+    let random_pairs = batch.random_pairs[..n_keys_needed].to_vec();
+    
+    println!("Retrieved {} FSS key pairs from dealer", n_keys_needed);
+    
+    Ok((keys0, keys1, random_pairs))
+}
 
 /// Data structure for synthetic data
 #[derive(serde::Deserialize)]
@@ -273,6 +382,25 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     println!("Generating client shares...");
     let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
     
+    // Initialize FSS dealer for check phase if using LpIntervalFSS
+    let fss_dealer = if cli_config.protocol.check_method == "LpIntervalFSS" {
+        println!("Starting FSS dealer for check phase...");
+        let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
+        let dealer = FssDealer::new(
+            client_points.len(),
+            distance_threshold,
+            cli_config.protocol.output_bit_length,
+            cli_config.protocol.check_output_bit_length,
+        )?;
+        
+        // Give the dealer a head start by letting it generate the first batch
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        println!("FSS dealer started and ready");
+        Some(Arc::new(Mutex::new(dealer)))
+    } else {
+        None
+    };
+    
     println!("Starting unknown dictionary search...");
     println!("Using {} threshold method", cli_config.protocol.threshold_method);
     println!("Threshold: {}, Delta: {}", cli_config.protocol.threshold, cli_config.protocol.delta);
@@ -315,6 +443,14 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     
     // Display results
     display_unknown_dictionary_results(&cli_config, &client_points, &heavy_hitter_values)?;
+    
+    // Shutdown FSS dealer if it was started
+    if let Some(dealer_arc) = fss_dealer {
+        if let Ok(dealer) = dealer_arc.lock() {
+            dealer.shutdown();
+            println!("FSS dealer shutdown complete");
+        }
+    }
     
     Ok(())
 }
