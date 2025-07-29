@@ -103,9 +103,7 @@ impl FuzzyHeavyHittersProtocol {
             let query_point_bits: Vec<Vec<bool>> = query_point.iter()
                 .map(|&point| {
                     let mut key_bits = u128_to_bits(point, self.config.share_config.input_bit_length);
-                    if server_id == 1 {
-                        key_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-                    }
+                    key_bits.reverse(); // Reverse bits for server 1 to match server 0's order
                     key_bits
                 })
                 .collect();
@@ -192,11 +190,6 @@ impl FuzzyHeavyHittersProtocol {
                 }
             }
         };
-
-        if self.config.share_config.dictionary_type != DictionaryType::Unknown {
-            shutdown_dealer(is_server1, fss_dealer_shutdown);
-            return Err("This method requires Unknown dictionary type configuration".to_string());
-        }
 
         let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
         let mut rng = AesRng::new();
@@ -328,8 +321,13 @@ impl FuzzyHeavyHittersProtocol {
                     random_value: batch.random_pairs[0].0,
                 }
             } else {
-                // Fallback to other check methods
-                CheckData::Linf // or whatever default check method
+                match self.config.check_config.method {
+                    CheckMethod::Linf => CheckData::Linf,
+                    CheckMethod::LpGarbledCircuits => CheckData::LpGarbledCircuits {
+                        threshold: self.config.delta,
+                    },
+                    CheckMethod::LpIntervalFSS => return Err("FSS dealer is required for LpIntervalFSS check method".to_string()),
+                }
             };
             
             // Run check phase for all client shares with this prefix set
@@ -560,7 +558,7 @@ pub fn generate_fss_keys_for_check(
             &a,
             &b,
             &c,
-            modulus,
+            out_modulus,
         );
         
         keys_server0.push(key0);

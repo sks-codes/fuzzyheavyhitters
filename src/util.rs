@@ -113,6 +113,24 @@ pub fn u128_to_bits(value: u128, bit_length: usize) -> Vec<bool> {
     bits
 }
 
+/// Convert a vector of bits to a u128 value
+/// Bits are expected to be in LSB-first order (bit 0 is the least significant bit)
+pub fn bits_to_u128(bits: &[bool]) -> u128 {
+    let mut value = 0u128;
+    for (i, &bit) in bits.iter().enumerate() {
+        if bit {
+            value |= 1u128 << i;
+        }
+    }
+    value
+}
+
+/// Convert a query point (vector of bit vectors) to a vector of u128 values for debugging
+/// Each inner Vec<bool> represents the bits for one dimension
+pub fn query_point_to_u128s(query_point: &[Vec<bool>]) -> Vec<u128> {
+    query_point.iter().map(|dim_bits| bits_to_u128(dim_bits)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +184,41 @@ mod tests {
         // Test larger number
         let bits = u128_to_bits(170, 8); // 170 = 10101010 in binary
         assert_eq!(bits, vec![false, true, false, true, false, true, false, true]);
+    }
+
+    #[test]
+    fn test_bits_to_u128() {
+        // Test basic conversion (reverse of u128_to_bits)
+        let bits = vec![true, false, true, false]; // LSB first for 5
+        assert_eq!(bits_to_u128(&bits), 5);
+        
+        // Test with zero
+        let bits = vec![false, false, false, false];
+        assert_eq!(bits_to_u128(&bits), 0);
+        
+        // Test with all ones
+        let bits = vec![true, true, true, true];
+        assert_eq!(bits_to_u128(&bits), 15);
+        
+        // Test larger number
+        let bits = vec![false, true, false, true, false, true, false, true];
+        assert_eq!(bits_to_u128(&bits), 170);
+        
+        // Test round-trip conversion
+        let original = 12345u128;
+        let bits = u128_to_bits(original, 16);
+        let converted_back = bits_to_u128(&bits);
+        assert_eq!(original, converted_back);
+    }
+
+    #[test]
+    fn test_query_point_to_u128s() {
+        let query_point = vec![
+            vec![true, false, true, false], // 5
+            vec![false, true, true, false], // 6
+            vec![true, true, true, true],   // 15
+        ];
+        let result = query_point_to_u128s(&query_point);
+        assert_eq!(result, vec![5, 6, 15]);
     }
 }

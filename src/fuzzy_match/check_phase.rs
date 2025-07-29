@@ -3,11 +3,13 @@ use std::os::unix::net::UnixStream;
 use std::convert::{TryFrom, TryInto};
 use scuttlebutt::{AesRng, Channel, Block, AbstractChannel};
 use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
-use crate::garbled_circuits::equality_full::{multiple_gb_equality_test, multiple_ev_equality_test};
-use crate::garbled_circuits::greater_than_or_equal_threshold::{multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
+use crate::garbled_circuits::equality_full::{
+    multiple_gb_equality_test, multiple_ev_equality_test};
+use crate::garbled_circuits::less_than_or_equal_threshold::{
+    multiple_gb_less_than_ss, multiple_ev_less_than_ss};
 use crate::data_structures::modint::ModInt;
 use crate::fss::interval::IntervalFSSKey;
-use crate::util::u128_to_bits;
+use crate::util::{u128_to_bits, query_point_to_u128s};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
 use crate::{Group, Share};
@@ -113,6 +115,7 @@ impl CheckPhase {
                 self.run_linf_check(shared_range, query_point, channel, rng)
             }
             (CheckMethod::LpGarbledCircuits, CheckData::LpGarbledCircuits { threshold }) => {
+                println!("Running Lp distance check with garbled circuits, threshold: {}", threshold);
                 let threshold_modint = ModInt::new(*threshold, 1 << self.config.input_bit_length);
                 self.run_lp_distance_check_gc(shared_range, query_point, threshold_modint, channel, rng)
             }
@@ -204,16 +207,20 @@ impl CheckPhase {
             aggregated_share = aggregated_share + *dimension_result;
         }
 
+        println!("Server {} aggregated distance share before masking: {}", self.config.is_garbler_side, aggregated_share.val());    
+
         // Step 3: Compare aggregated sum with threshold using garbled circuits
         // Check if aggregated_sum <= threshold (distance is within threshold)
         let comparison_result = if self.config.is_garbler_side {
-            let results = multiple_gb_greater_than_ss(rng, channel, &[threshold], &[aggregated_share]);
+            let results = multiple_gb_less_than_ss(rng, channel, &[aggregated_share], &[threshold]);
             results[0] // true if threshold >= aggregated_sum (distance within threshold)
         } else {
-            let results = multiple_ev_greater_than_ss(rng, channel, &[aggregated_share]);
+            let results = multiple_ev_less_than_ss(rng, channel, &[aggregated_share]);
             results[0]
         };
-        
+
+        println!("Server {} comparison result for threshold {}: {}", self.config.is_garbler_side, threshold.val(), comparison_result);
+
         // Step 4: Convert boolean result to ring share using OT
         let ring_share = self.boolean_to_ring_share_modint(
             comparison_result,

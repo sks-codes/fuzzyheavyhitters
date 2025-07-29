@@ -609,11 +609,15 @@ impl SharePhase {
         &self,
         fss_key: &DistanceFSSKey<N>,
         point_bits: &[bool],
-        _role: bool,
+        role: bool,
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.output_bit_length;
         let result = fss_key.eval_distance_fss(point_bits, self.config.input_bit_length, modulus);
-        Ok(result)
+        if !role {
+            Ok(result) // Server 0 returns the share directly
+        } else {
+            Ok((modulus - result) % modulus) // Server 1 returns the complement
+        }
     }
 }
 

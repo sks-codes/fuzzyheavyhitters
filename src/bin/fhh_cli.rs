@@ -4,12 +4,15 @@
 //! with both servers in the same process for testing purposes.
 
 use counttree::{
-    protocol::{FuzzyHeavyHittersProtocol, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
+    protocol::{FuzzyHeavyHittersProtocol, FssKeyBatch,
+               generate_fss_keys_for_threshold, generate_fss_keys_for_check},
     fuzzy_match::{
         threshold_phase::ThresholdData,
         check_phase::{CheckData, CheckMethod},
     },
     cli_config::CliConfig,
+    fss::interval::IntervalFSSKey,
+    util::{query_point_to_u128s}
 };
 use clap::{App, Arg, SubCommand};
 use std::{char::MAX, process};
@@ -19,13 +22,6 @@ use std::os::unix::net::UnixStream;
 use std::fs;
 use serde_json;
 
-/// FSS key pair batch for check phase
-#[derive(Clone)]
-struct FssKeyBatch {
-    keys0: Vec<counttree::fss::ibdcf::IntervalKey>,
-    keys1: Vec<counttree::fss::ibdcf::IntervalKey>, 
-    random_pairs: Vec<(u128, u128)>,
-}
 
 /// Dealer that continuously generates FSS key pairs in the background
 struct FssDealer {
@@ -35,6 +31,7 @@ struct FssDealer {
 
 impl FssDealer {
     /// Create a new FSS dealer that generates key pairs in the background
+    /// Returns the dealer with channels that can be moved to the protocol
     fn new(
         n_clients: usize,
         distance_threshold: u128,
@@ -89,42 +86,10 @@ impl FssDealer {
         })
     }
     
-    /// Get the next batch of FSS keys (blocks until available)
-    fn get_next_batch(&self) -> Result<FssKeyBatch, String> {
-        self.receiver.recv()
-            .map_err(|_| "FSS dealer disconnected".to_string())
+    /// Extract the receiver and shutdown sender for use by the protocol
+    fn into_channels(self) -> (mpsc::Receiver<FssKeyBatch>, mpsc::Sender<()>) {
+        (self.receiver, self.shutdown_sender)
     }
-    
-    /// Shutdown the dealer thread
-    fn shutdown(&self) {
-        let _ = self.shutdown_sender.send(());
-    }
-}
-
-/// Get FSS keys for check phase from the dealer
-/// This function would be called by the protocol when it needs FSS keys for checking
-/// one prefix against n client points
-fn get_fss_keys_from_dealer(
-    dealer: &Arc<Mutex<FssDealer>>,
-    n_keys_needed: usize,
-) -> Result<(Vec<counttree::fss::ibdcf::IntervalKey>, Vec<counttree::fss::ibdcf::IntervalKey>, Vec<(u128, u128)>), String> {
-    let dealer_guard = dealer.lock()
-        .map_err(|_| "Failed to lock FSS dealer")?;
-    
-    let batch = dealer_guard.get_next_batch()?;
-    
-    if batch.keys0.len() < n_keys_needed {
-        return Err(format!("Dealer provided {} keys but {} were needed", batch.keys0.len(), n_keys_needed));
-    }
-    
-    // Take only the number of keys needed
-    let keys0 = batch.keys0[..n_keys_needed].to_vec();
-    let keys1 = batch.keys1[..n_keys_needed].to_vec();
-    let random_pairs = batch.random_pairs[..n_keys_needed].to_vec();
-    
-    println!("Retrieved {} FSS key pairs from dealer", n_keys_needed);
-    
-    Ok((keys0, keys1, random_pairs))
 }
 
 /// Data structure for synthetic data
@@ -180,9 +145,10 @@ fn run_known_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
             client_points.push(point.clone());
         }
     }
-    
+
     println!("Loaded {} client points from {} clusters", client_points.len(), clusters.len());
     println!("Testing {} query points", query_points.len());
+    println!("List of query points: {:?}", query_points);
     
     // Create initial protocol configurations for both servers
     let protocol_config_server0 = cli_config.to_protocol_config(false)?;
@@ -265,9 +231,6 @@ fn run_known_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
         let threshold_data_list_1 = vec![threshold_data; query_points.len()];
         (threshold_data_list_0, threshold_data_list_1)
     };
-
-    let protocol_server0 = FuzzyHeavyHittersProtocol::new(protocol_config_server0);
-    let protocol_server1 = FuzzyHeavyHittersProtocol::new(protocol_config_server1);
 
     println!("Generating client shares...");
     let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
@@ -383,7 +346,7 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
     
     // Initialize FSS dealer for check phase if using LpIntervalFSS
-    let fss_dealer = if cli_config.protocol.check_method == "LpIntervalFSS" {
+    let (fss_dealer_receiver, fss_dealer_shutdown) = if cli_config.protocol.check_method == "LpIntervalFSS" {
         println!("Starting FSS dealer for check phase...");
         let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
         let dealer = FssDealer::new(
@@ -396,9 +359,11 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
         // Give the dealer a head start by letting it generate the first batch
         std::thread::sleep(std::time::Duration::from_millis(100));
         println!("FSS dealer started and ready");
-        Some(Arc::new(Mutex::new(dealer)))
+        
+        let (receiver, shutdown) = dealer.into_channels();
+        (Some(receiver), Some(shutdown))
     } else {
-        None
+        (None, None)
     };
     
     println!("Starting unknown dictionary search...");
@@ -411,30 +376,28 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
         .map_err(|e| format!("Failed to create Unix socket pair: {}", e))?;
     
     // Run server 1 in a separate thread
-    let shares_server0_clone = shares_server0.clone();
     let shares_server1_clone = shares_server1.clone();
-    let threshold_data_list_server0_clone = threshold_data_list_server0.clone();
     let threshold_data_list_server1_clone = threshold_data_list_server1.clone();
     
     let server1_handle = thread::spawn(move || {
-        protocol_server1.run_unknown_dictionary_search(
-            &shares_server0_clone,
+        protocol_server1.run_server_unknown_dictionary(
             &shares_server1_clone,
-            &threshold_data_list_server0_clone,
             &threshold_data_list_server1_clone,
             stream1,
             true, // is_server1 = true
+            None, // No FSS dealer receiver for server 1
+            None, // No FSS dealer shutdown for server 1
         )
     });
     
     // Run server 0 in main thread
-    let heavy_hitter_values = protocol_server0.run_unknown_dictionary_search(
+    let heavy_hitter_values = protocol_server0.run_server_unknown_dictionary(
         &shares_server0,
-        &shares_server1,
         &threshold_data_list_server0,
-        &threshold_data_list_server1,
         stream2,
         false, // is_server1 = false
+        fss_dealer_receiver,
+        fss_dealer_shutdown,
     )?;
     
     // Wait for server 1 to complete (both servers should return the same results)
@@ -443,14 +406,6 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     
     // Display results
     display_unknown_dictionary_results(&cli_config, &client_points, &heavy_hitter_values)?;
-    
-    // Shutdown FSS dealer if it was started
-    if let Some(dealer_arc) = fss_dealer {
-        if let Ok(dealer) = dealer_arc.lock() {
-            dealer.shutdown();
-            println!("FSS dealer shutdown complete");
-        }
-    }
     
     Ok(())
 }

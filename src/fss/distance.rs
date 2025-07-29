@@ -31,18 +31,15 @@ impl<const N: usize> DistanceFSSKey<N> {
         x_powers[0] = 1;
         for i in 1..N {
             x_powers[i] = (x_powers[i-1] * x) % modulus;
-            println!("x_powers[{}] = {}", i, x_powers[i]);
         }
         for i in 0..N {
             x_powers[i] = (x_powers[i] * BINOMIAL_COEFFICIENTS[N-1][i]) % modulus;
-            println!("x_powers[{}] after binomial coefficient = {}", i, x_powers[i]);
         }
         let zero_payload = RingVec::<N>::new([0; N], modulus);
         for i in 0..N {
             if (i & 1) == 1 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
-            println!("x_powers[{}] for left payload = {}", i, x_powers[i]);
         }
         let right_payload = RingVec::<N>::new(x_powers, modulus);
         for i in 0..N {
@@ -52,7 +49,6 @@ impl<const N: usize> DistanceFSSKey<N> {
             if ((N - i) & 1) == 0 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
-            println!("x_powers[{}] for right payload = {}", i, x_powers[i]);
         }
         let left_payload = RingVec::<N>::new(x_powers, modulus);
         // Creating FSS for the range [left, x] first
@@ -89,8 +85,6 @@ impl<const N: usize> DistanceFSSKey<N> {
     pub fn eval_distance_fss(&self, x_bits: &[bool], input_len: usize, modulus: u128) -> u128 {
         let left_eval = self.left_fss.eval_lintervalFSS(x_bits, modulus);
         let right_eval = self.right_fss.eval_rintervalFSS(x_bits, modulus);
-        println!("left_eval: {:?}", left_eval);
-        println!("right_eval: {:?}", right_eval);
         let mut x = 0;
         for i in 0..x_bits.len() {
             if x_bits[i] {
