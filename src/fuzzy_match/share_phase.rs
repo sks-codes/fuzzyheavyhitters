@@ -211,10 +211,14 @@ impl SharePhase {
                 }
                 // Distance FSS method is the same for both known and unknown dictionary
                 // since FSS already handles evaluating on prefixes
+                let modulus_mask = (1u128 << self.config.output_bit_length) - 1;
                 match *p {
-                    1 => self.share_with_distance_fss_l1(&x, &left_bound, &right_bound),
-                    2 => self.share_with_distance_fss_l2(&x, &left_bound, &right_bound),
-                    3 => self.share_with_distance_fss_l3(&x, &left_bound, &right_bound),
+                    1 => self.share_with_distance_fss_l1(&x, &left_bound, &right_bound, 
+                        (delta + 1) & modulus_mask),
+                    2 => self.share_with_distance_fss_l2(&x, &left_bound, &right_bound, 
+                        (delta * delta + 1) & modulus_mask),
+                    3 => self.share_with_distance_fss_l3(&x, &left_bound, &right_bound, 
+                        (((delta * delta) & modulus_mask) * delta + 1) & modulus_mask),
                     _ => Err(SharePhaseError::InvalidRange("Distance FSS only supports p in range 1-3".to_string())),
                 }
             },
@@ -454,6 +458,7 @@ impl SharePhase {
         x: &[u128], // The original d-dimensional vector
         left_bound: &[u128],
         right_bound: &[u128],
+        max_distance: u128,
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
@@ -481,6 +486,7 @@ impl SharePhase {
                 &center_bits,
                 &alpha_bits, 
                 &beta_bits, 
+                max_distance,
                 modulus,
             );
             
@@ -506,6 +512,7 @@ impl SharePhase {
         x: &[u128], // The original d-dimensional vector
         left_bound: &[u128],
         right_bound: &[u128],
+        max_distance: u128,
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
@@ -533,6 +540,7 @@ impl SharePhase {
                 &center_bits,
                 &alpha_bits, 
                 &beta_bits, 
+                max_distance,
                 modulus,
             );
             
@@ -558,6 +566,7 @@ impl SharePhase {
         x: &[u128], // The original d-dimensional vector
         left_bound: &[u128],
         right_bound: &[u128],
+        max_distance: u128,
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
@@ -585,6 +594,7 @@ impl SharePhase {
                 &center_bits,
                 &alpha_bits, 
                 &beta_bits, 
+                max_distance,
                 modulus,
             );
             

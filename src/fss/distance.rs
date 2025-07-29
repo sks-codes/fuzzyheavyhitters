@@ -24,6 +24,7 @@ impl<const N: usize> DistanceFSSKey<N> {
         x_bits: &[bool],
         left_bits: &[bool],
         right_bits: &[bool],
+        max_distance: u128,
         modulus: u128,
     ) -> (Self, Self) {
         assert!(N <= 6, "N must be less than or equal to 6 for distance FSS key generation");
@@ -51,11 +52,13 @@ impl<const N: usize> DistanceFSSKey<N> {
             }
         }
         let left_payload = RingVec::<N>::new(x_powers, modulus);
+        let mut out_payload = RingVec::<N>::zero(modulus);
+        out_payload[0] = max_distance;
         // Creating FSS for the range [left, x] first
         let (left_key0, left_key1) = LIntervalFSSKey::<N>::gen_LIntervalFSSKey(
             left_bits,
             x_bits,
-            zero_payload.clone(),
+            out_payload.clone(),
             left_payload,
             zero_payload.clone(),
             modulus,
@@ -64,9 +67,9 @@ impl<const N: usize> DistanceFSSKey<N> {
         let (right_key0, right_key1) = RIntervalFSSKey::<N>::gen_RIntervalFSSKey(
             x_bits,
             right_bits,
-            zero_payload.clone(),
-            right_payload,
             zero_payload,
+            right_payload,
+            out_payload,
             modulus,
         );
 
