@@ -115,7 +115,6 @@ impl CheckPhase {
                 self.run_linf_check(shared_range, query_point, channel, rng)
             }
             (CheckMethod::LpGarbledCircuits, CheckData::LpGarbledCircuits { threshold }) => {
-                println!("Running Lp distance check with garbled circuits, threshold: {}", threshold);
                 let threshold_modint = ModInt::new(*threshold, 1 << self.config.input_bit_length);
                 self.run_lp_distance_check_gc(shared_range, query_point, threshold_modint, channel, rng)
             }

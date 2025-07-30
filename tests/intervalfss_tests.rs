@@ -27,9 +27,9 @@ fn test_intervalfss_basic_functionality() {
     let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
         &alpha_bits, 
         &beta_bits, 
-        payload_left, 
-        payload_mid, 
-        payload_right, 
+        &payload_left, 
+        &payload_mid, 
+        &payload_right, 
         modulus, 
     );
 

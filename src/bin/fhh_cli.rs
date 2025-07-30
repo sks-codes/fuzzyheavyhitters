@@ -6,18 +6,15 @@
 use counttree::{
     fuzzy_match::{
         protocol::FuzzyHeavyHittersProtocol,
-        dealer::{FssKeyBatch, FssDealer, DealerSignal, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
+        dealer::{FssDealer, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
         threshold_phase::ThresholdData,
         check_phase::{CheckData, CheckMethod},
     },
     cli_config::CliConfig,
-    fss::interval::IntervalFSSKey,
-    util::{query_point_to_u128s}
 };
 use clap::{App, Arg, SubCommand};
-use std::{char::MAX, process};
+use std::process;
 use std::thread;
-use std::sync::{mpsc, Arc, Mutex};
 use std::os::unix::net::UnixStream;
 use std::fs;
 use serde_json;

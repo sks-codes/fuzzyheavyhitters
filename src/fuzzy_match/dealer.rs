@@ -2,12 +2,17 @@
 //! 
 //! This module provides the trusted dealer functionality for generating FSS keys
 //! for both the check phase and threshold phase of the fuzzy heavy hitters protocol.
+//! 
+//! The dealer operates with a coordinator model where only server 0 sends key requests,
+//! and the dealer responds by sending matching keys to both servers simultaneously.
+//! This ensures both servers always have the same set of FSS keys.
 
 use crate::fss::interval::IntervalFSSKey;
 use crate::data_structures::payload::RingVec;
-use crate::util::u128_to_bits;
+use crate::util::{u128_to_bits, u128_to_bits_msb};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 use rand::Rng;
 
 /// FSS key batch for check phase - contains keys for one server
@@ -33,6 +38,7 @@ pub enum DealerSignal {
 }
 
 /// Dealer that generates FSS key pairs on-demand based on server signals
+/// Only server 0 should send RequestKeys signals - the dealer will send keys to both servers
 pub struct FssDealer {
     receiver_server0: mpsc::Receiver<FssKeyBatch>,
     receiver_server1: mpsc::Receiver<FssKeyBatch>,
@@ -42,6 +48,7 @@ pub struct FssDealer {
 
 impl FssDealer {
     /// Create a new FSS dealer that generates key pairs on-demand based on server signals
+    /// Server 0 acts as the coordinator - when it sends RequestKeys, dealer sends keys to both servers
     /// Returns the dealer with separate channels for both servers
     pub fn new(
         n_clients: usize,
@@ -63,7 +70,9 @@ impl FssDealer {
                 check_output_bit_length,
                 n_clients,
             ) {
-                Ok(keys) => Some(keys),
+                Ok(keys) => {
+                    Some(keys)
+                }
                 Err(e) => {
                     eprintln!("FSS dealer: failed to generate initial keys: {}", e);
                     None
@@ -71,26 +80,39 @@ impl FssDealer {
             };
             
             loop {
-                // Use select! pattern to handle signals from both servers
+                // Only listen for signals from server 0 - it will coordinate key requests for both servers
                 let signal_server0 = signal_receiver_server0.try_recv();
                 let signal_server1 = signal_receiver_server1.try_recv();
                 
-                // Handle server 0 signal
+                // Handle server 0 signal (primary coordinator)
                 if let Ok(signal) = signal_server0 {
                     match signal {
                         DealerSignal::RequestKeys => {
                             if let Some((keys0, keys1, random_pairs)) = &current_keys {
+                                // Send keys to BOTH servers
                                 let batch_server0 = FssKeyBatch {
                                     keys: keys0.clone(),
                                     random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
                                 };
                                 
+                                let batch_server1 = FssKeyBatch {
+                                    keys: keys1.clone(),
+                                    random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                                };
+                                
+                                // Send to server 0
                                 if batch_sender_server0.send(batch_server0).is_err() {
                                     println!("FSS dealer: server 0 disconnected, shutting down");
                                     break;
                                 }
                                 
-                                // Generate new keys for next request
+                                // Send to server 1
+                                if batch_sender_server1.send(batch_server1).is_err() {
+                                    println!("FSS dealer: server 1 disconnected, shutting down");
+                                    break;
+                                }
+                                
+                                // Generate new keys for next request AFTER sending to both servers
                                 match generate_fss_keys_for_check(
                                     distance_threshold,
                                     output_bit_length,
@@ -99,7 +121,6 @@ impl FssDealer {
                                 ) {
                                     Ok(new_keys) => {
                                         current_keys = Some(new_keys);
-                                        println!("FSS dealer: sent keys to server 0 and generated new batch");
                                     }
                                     Err(e) => {
                                         eprintln!("FSS dealer: failed to generate new keys: {}", e);
@@ -114,37 +135,12 @@ impl FssDealer {
                     }
                 }
                 
-                // Handle server 1 signal
+                // Handle shutdown signal from server 1 (but not key requests)
                 if let Ok(signal) = signal_server1 {
                     match signal {
                         DealerSignal::RequestKeys => {
-                            if let Some((keys0, keys1, random_pairs)) = &current_keys {
-                                let batch_server1 = FssKeyBatch {
-                                    keys: keys1.clone(),
-                                    random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
-                                };
-                                
-                                if batch_sender_server1.send(batch_server1).is_err() {
-                                    println!("FSS dealer: server 1 disconnected, shutting down");
-                                    break;
-                                }
-                                
-                                // Generate new keys for next request
-                                match generate_fss_keys_for_check(
-                                    distance_threshold,
-                                    output_bit_length,
-                                    check_output_bit_length,
-                                    n_clients,
-                                ) {
-                                    Ok(new_keys) => {
-                                        current_keys = Some(new_keys);
-                                        println!("FSS dealer: sent keys to server 1 and generated new batch");
-                                    }
-                                    Err(e) => {
-                                        eprintln!("FSS dealer: failed to generate new keys: {}", e);
-                                    }
-                                }
-                            }
+                            // Ignore key requests from server 1 - only server 0 coordinates
+                            println!("FSS dealer: ignoring key request from server 1 (only server 0 coordinates)");
                         }
                         DealerSignal::Shutdown => {
                             println!("FSS dealer: received shutdown signal from server 1");
@@ -152,9 +148,6 @@ impl FssDealer {
                         }
                     }
                 }
-                
-                // Sleep briefly to avoid busy waiting
-                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
         
@@ -206,10 +199,8 @@ pub fn generate_fss_keys_for_threshold(
             let interval_start = sum % modulus;
             let interval_end = (r0 + r1) % modulus;
             
-            let mut alpha_bits = u128_to_bits(interval_start, bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let alpha_bits = u128_to_bits_msb(interval_start, bit_length);
+            let beta_bits = u128_to_bits_msb(interval_end, bit_length);
             
             // For wrap-around: left=0, middle=1, right=0
             let a = RingVec::<1>::new([0], 2); // left
@@ -223,10 +214,8 @@ pub fn generate_fss_keys_for_threshold(
             let interval_start = (r0 + r1) % modulus;
             let interval_end = sum;
             
-            let mut alpha_bits = u128_to_bits(interval_start, bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let alpha_bits = u128_to_bits_msb(interval_start, bit_length);
+            let beta_bits = u128_to_bits_msb(interval_end, bit_length);
             
             // For no wrap-around: left=1, middle=0, right=1
             let a = RingVec::<1>::new([1], 2); // left
@@ -273,7 +262,9 @@ pub fn generate_fss_keys_for_check(
         let r0 = std_rng.gen_range(0..in_modulus);
         let r1 = std_rng.gen_range(0..in_modulus);
         random_pairs.push((r0, r1));
-        
+    }
+    
+    for &(r0, r1) in &random_pairs {
         // Check if distance_threshold + r0 + r1 would wrap around
         let sum = distance_threshold + (r0 + r1) % in_modulus;
         let wraps_around = sum >= in_modulus;
@@ -283,10 +274,8 @@ pub fn generate_fss_keys_for_check(
             let interval_start = sum % in_modulus;
             let interval_end = (r0 + r1) % in_modulus;
             
-            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let alpha_bits = u128_to_bits_msb(interval_start, input_bit_length);
+            let beta_bits = u128_to_bits_msb(interval_end, input_bit_length);
             
             // For wrap-around: left=1, middle=0, right=1
             let a = RingVec::<1>::new([1], out_modulus); // left
@@ -300,10 +289,8 @@ pub fn generate_fss_keys_for_check(
             let interval_start = (r0 + r1) % in_modulus;
             let interval_end = sum;
 
-            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let alpha_bits = u128_to_bits_msb(interval_start, input_bit_length);
+            let beta_bits = u128_to_bits_msb(interval_end, input_bit_length);
 
             
             // For no wrap-around: left=0, middle=1, right=0

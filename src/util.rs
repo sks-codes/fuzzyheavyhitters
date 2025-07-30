@@ -125,6 +125,26 @@ pub fn bits_to_u128(bits: &[bool]) -> u128 {
     value
 }
 
+/// Convert a u128 value to a vector of bits with specified bit length
+/// Bits are returned in MSB-first order (bit 0 is the most significant bit)
+pub fn u128_to_bits_msb(value: u128, bit_length: usize) -> Vec<bool> {
+    let mut bits = Vec::with_capacity(bit_length);
+    for i in (0..bit_length).rev() {
+        bits.push((value >> i) & 1 == 1);
+    }
+    bits
+}
+
+/// Convert a vector of bits to a u128 value
+/// Bits are expected to be in MSB-first order (bit 0 is the most significant bit)
+pub fn bits_to_u128_msb(bits: &[bool]) -> u128 {
+    let mut value = 0u128;
+    for &bit in bits {
+        value = (value << 1) | (if bit { 1 } else { 0 });
+    }
+    value
+}
+
 /// Convert a query point (vector of bit vectors) to a vector of u128 values for debugging
 /// Each inner Vec<bool> represents the bits for one dimension
 pub fn query_point_to_u128s(query_point: &[Vec<bool>]) -> Vec<u128> {
@@ -208,6 +228,50 @@ mod tests {
         let original = 12345u128;
         let bits = u128_to_bits(original, 16);
         let converted_back = bits_to_u128(&bits);
+        assert_eq!(original, converted_back);
+    }
+
+    #[test]
+    fn test_u128_to_bits_msb() {
+        // Test basic conversion
+        let bits = u128_to_bits_msb(5, 4); // 5 = 0101 in binary (MSB first)
+        assert_eq!(bits, vec![false, true, false, true]); // MSB first: [0, 1, 0, 1]
+        
+        // Test with zero
+        let bits = u128_to_bits_msb(0, 4);
+        assert_eq!(bits, vec![false, false, false, false]);
+        
+        // Test with all ones
+        let bits = u128_to_bits_msb(15, 4); // 15 = 1111 in binary
+        assert_eq!(bits, vec![true, true, true, true]);
+        
+        // Test larger number
+        let bits = u128_to_bits_msb(170, 8); // 170 = 10101010 in binary
+        assert_eq!(bits, vec![true, false, true, false, true, false, true, false]);
+    }
+
+    #[test]
+    fn test_bits_to_u128_msb() {
+        // Test basic conversion (reverse of u128_to_bits_msb)
+        let bits = vec![false, true, false, true]; // MSB first for 5
+        assert_eq!(bits_to_u128_msb(&bits), 5);
+        
+        // Test with zero
+        let bits = vec![false, false, false, false];
+        assert_eq!(bits_to_u128_msb(&bits), 0);
+        
+        // Test with all ones
+        let bits = vec![true, true, true, true];
+        assert_eq!(bits_to_u128_msb(&bits), 15);
+        
+        // Test larger number
+        let bits = vec![true, false, true, false, true, false, true, false];
+        assert_eq!(bits_to_u128_msb(&bits), 170);
+        
+        // Test round-trip conversion
+        let original = 12345u128;
+        let bits = u128_to_bits_msb(original, 16);
+        let converted_back = bits_to_u128_msb(&bits);
         assert_eq!(original, converted_back);
     }
 

@@ -8,11 +8,12 @@ use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckM
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
 use crate::data_structures::modint::ModInt;
-use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits};
+use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb};
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
 use std::io::{BufReader, BufWriter};
 use std::thread::current;
+use std::time::Instant;
 use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
 
@@ -92,9 +93,7 @@ impl FuzzyHeavyHittersProtocol {
             // Convert query point from u128 to Vec<bool>
             let query_point_bits: Vec<Vec<bool>> = query_point.iter()
                 .map(|&point| {
-                    let mut key_bits = u128_to_bits(point, self.config.share_config.input_bit_length);
-                    key_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-                    key_bits
+                    u128_to_bits_msb(point, self.config.share_config.input_bit_length)
                 })
                 .collect();
             
@@ -109,7 +108,7 @@ impl FuzzyHeavyHittersProtocol {
                 
                 match_results.push(result);
             }
-
+            
             // Run threshold phase
             let server_bit = threshold_phase.compare_with_threshold(
                 &match_results,
@@ -243,6 +242,8 @@ impl FuzzyHeavyHittersProtocol {
                 }
             };
 
+            println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
+
             // Collect the next heavy hitters based on results
             let mut next_heavy_hitters = Vec::new();
             for (candidate, exceeds_threshold) in candidate_prefix_sets.iter().zip(exceeds_threshold_results.iter()) {
@@ -293,13 +294,16 @@ impl FuzzyHeavyHittersProtocol {
         let mut server_bits = Vec::new();
 
         // Process each prefix set and collect our server's results
-        for prefix_set in prefix_sets {
+        for (prefix_idx, prefix_set) in prefix_sets.iter().enumerate() {
             // Get FSS keys from dealer if using LpIntervalFSS check method
-            let check_data = if let Some(receiver) = fss_dealer_receiver {
-                // Request keys from dealer
-                if let Some(signal_sender) = fss_dealer_signal_sender {
-                    signal_sender.send(DealerSignal::RequestKeys)
-                        .map_err(|_| "Failed to send key request signal to dealer")?;
+            let check_data_list = if let Some(receiver) = fss_dealer_receiver {
+                
+                // Only server 0 should request keys from dealer (as per dealer coordinator model)
+                if !is_server1 {
+                    if let Some(signal_sender) = fss_dealer_signal_sender {
+                        signal_sender.send(DealerSignal::RequestKeys)
+                            .map_err(|_| "Failed to send key request signal to dealer")?;
+                    }
                 }
                 
                 // Get a batch of FSS keys from the dealer
@@ -311,31 +315,36 @@ impl FuzzyHeavyHittersProtocol {
                                      batch.keys.len(), client_shares.len()));
                 }
                 
-                // For now, we'll use the first key from the batch
-                // In a real implementation, you'd want to distribute the keys properly
-                CheckData::LpIntervalFSS {
-                    threshold: self.config.delta, // Use configured delta as threshold
-                    fss_key: batch.keys[0].clone(),
-                    random_value: batch.random_values[0],
+                // Create a CheckData for each client share using corresponding FSS key
+                let mut check_data_vec = Vec::new();
+                for i in 0..client_shares.len() {
+                    check_data_vec.push(CheckData::LpIntervalFSS {
+                        threshold: self.config.delta, // Use configured delta as threshold
+                        fss_key: batch.keys[i].clone(),
+                        random_value: batch.random_values[i],
+                    });
                 }
+                check_data_vec
             } else {
-                match self.config.check_config.method {
+                // Create the same CheckData for all client shares when not using FSS dealer
+                let single_check_data = match self.config.check_config.method {
                     CheckMethod::Linf => CheckData::Linf,
                     CheckMethod::LpGarbledCircuits => CheckData::LpGarbledCircuits {
                         threshold: self.config.delta,
                     },
                     CheckMethod::LpIntervalFSS => return Err("FSS dealer is required for LpIntervalFSS check method".to_string()),
-                }
+                };
+                vec![single_check_data; client_shares.len()]
             };
-            
+
             // Run check phase for all client shares with this prefix set
             let mut match_results = Vec::new();
             
-            for share in client_shares {
+            for (i, share) in client_shares.iter().enumerate() {
                 let result = check_phase.run_fuzzy_match_check(
                     share,
                     prefix_set,
-                    &check_data,
+                    &check_data_list[i], // Use the corresponding CheckData for this client share
                     channel,
                     rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
@@ -354,6 +363,8 @@ impl FuzzyHeavyHittersProtocol {
 
             server_bits.push(server_bit);
         }
+
+        println!("Server {} computed bits: {:?}", if is_server1 { 1 } else { 0 }, server_bits);
 
         // Batch exchange bits between servers to get final results
         let final_results = if is_server1 {

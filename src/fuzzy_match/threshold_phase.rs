@@ -132,12 +132,8 @@ impl ThresholdPhase {
             aggregated_share = aggregated_share + *result;
         }
 
-        println!("Aggregated share before masking: {}", aggregated_share.val());
-
         // Step 2: Add random value to aggregated share and exchange with other server
         let masked_share = aggregated_share + ModInt::new(random_value, modulus);
-
-        println!("Masked share: {}", masked_share.val());
         
         let reconstructed_masked_count = if self.config.is_garbler_side {
             // Server 1 (garbler) sends first, then receives
@@ -146,8 +142,6 @@ impl ThresholdPhase {
                 .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
             channel.flush()
                 .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
-
-            println!("Successfully sent masked share: {}", masked_share.val());
             
             let mut received_bytes = [0u8; 16];
             channel.read_bytes(&mut received_bytes)
@@ -155,8 +149,6 @@ impl ThresholdPhase {
             let other_masked_share = u128::from_le_bytes(received_bytes);
             let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
 
-            println!("Received masked share: {}", other_masked_share_modint.val());
-            
             masked_share + other_masked_share_modint
         } else {
             // Server 0 (evaluator) receives first, then sends
@@ -186,8 +178,6 @@ impl ThresholdPhase {
         // we need to check if actual_count + r0 + r1 >= threshold + r0 + r1
         let fss_result = fss_key.eval_intervalFSS(&count_bits, 2); // modulus 2 for binary output
 
-        println!("FSS evaluation result: {:?}", fss_result);
-        
         // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
         // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)
         // - If actual_count + r0 + r1 is outside [threshold + r0 + r1, MAX], FSS output is 0

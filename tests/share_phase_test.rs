@@ -1,4 +1,4 @@
-use counttree::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, SharePhaseError, DictionaryType};
+use counttree::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType, DistanceMetric};
 
 #[cfg(test)]
 mod tests {
@@ -9,6 +9,7 @@ mod tests {
         // Create OKVS configuration
         let config = ShareConfig {
             method: ShareMethod::OKVS,
+            metric: DistanceMetric::LInfinity,
             dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 20,
@@ -32,8 +33,8 @@ mod tests {
         
         // Verify that both shares are OKVS type
         match (&share1, &share2) {
-            (SharedRange::OKVS { okvs_shares: share1_data, role: role1 }, 
-             SharedRange::OKVS { okvs_shares: share2_data, role: role2 }) => {
+            (SharedRange::OKVS { okvs_shares: share1_data, role: role1, p: _ }, 
+             SharedRange::OKVS { okvs_shares: share2_data, role: role2, p: _ }) => {
                 assert!(!share1_data.is_empty(), "First OKVS share should not be empty");
                 assert!(!share2_data.is_empty(), "Second OKVS share should not be empty");
                 assert_eq!(share1_data.len(), share2_data.len(), "Both shares should have same length");
@@ -79,12 +80,13 @@ mod tests {
     fn test_interval_fss_share_and_eval() {
         // Create Interval FSS configuration
         let config = ShareConfig {
-            method: ShareMethod::IntervalFSS,
+            method: ShareMethod::FSS,
+            metric: DistanceMetric::LInfinity,
             dictionary_type: DictionaryType::Known,
             input_bit_length: 8,  // u = 8, max value = 255
             output_bit_length: 20, // v = 8, for output values
             dimension: 2,
-            data: ShareData::IntervalFSS {},
+            data: ShareData::FSS,
         };
         
         let share_phase = SharePhase::new(config);
@@ -100,8 +102,8 @@ mod tests {
         
         // Verify that both shares are IntervalFSS type
         match (&share1, &share2) {
-            (SharedRange::IntervalFSS { fss_key: keys1, role: _ }, 
-             SharedRange::IntervalFSS { fss_key: keys2, role: _ }) => {
+            (SharedRange::IntervalFSS { keys: keys1, role: _ }, 
+             SharedRange::IntervalFSS { keys: keys2, role: _ }) => {
                 assert_eq!(keys1.len(), 2, "Should have 2 FSS keys for dimension 2");
                 assert_eq!(keys2.len(), 2, "Should have 2 FSS keys for dimension 2");
             },

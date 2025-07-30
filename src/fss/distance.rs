@@ -53,7 +53,7 @@ impl<const N: usize> DistanceFSSKey<N> {
         }
         let left_payload = RingVec::<N>::new(x_powers, modulus);
         let mut out_payload = RingVec::<N>::zero(modulus);
-        out_payload[0] = max_distance;
+        out_payload[N-1] = max_distance;
         // Creating FSS for the range [left, x] first
         let (left_key0, left_key1) = LIntervalFSSKey::<N>::gen_LIntervalFSSKey(
             left_bits,

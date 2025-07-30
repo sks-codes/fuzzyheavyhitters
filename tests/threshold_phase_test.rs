@@ -1,7 +1,7 @@
 use counttree::{
-    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, DictionaryType},
+    fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, DictionaryType, DistanceMetric},
     util::u128_to_bits,
-    fuzzy_match::check_phase::{CheckPhase, CheckConfig},
+    fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckData},
     fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
     data_structures::{modint::ModInt, payload::RingVec},
     fss::interval::IntervalFSSKey,
@@ -61,6 +61,7 @@ mod tests {
         // Step 3: Generate shares for all clients using SharePhase (only once)
         let share_config = ShareConfig {
             method: ShareMethod::OKVS,
+            metric: DistanceMetric::LInfinity,
             dictionary_type: DictionaryType::Known,
             input_bit_length: INPUT_BIT_LENGTH,
             output_bit_length: OUTPUT_BIT_LENGTH,
@@ -118,6 +119,7 @@ mod tests {
                     output_bit_length: OUTPUT_BIT_LENGTH + 4, // Extra bits for aggregation
                     num_dimensions: 2,
                     is_garbler_side: true,
+                    method: CheckMethod::Linf,
                 };
                 
                 let check_phase_garbler = CheckPhase::new(check_config_garbler, share_phase_clone);
@@ -130,10 +132,13 @@ mod tests {
                     .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
                     .collect();
                 
+                let check_data = CheckData::Linf;
+                
                 for share in &all_shares_server1_clone {
                     let result = check_phase_garbler.run_fuzzy_match_check(
                         share,
                         &query_point_bits,
+                        &check_data,
                         &mut channel,
                         &mut rng,
                     ).expect("Check phase should succeed");
@@ -173,6 +178,7 @@ mod tests {
                 output_bit_length: OUTPUT_BIT_LENGTH + 4,
                 num_dimensions: 2,
                 is_garbler_side: false,
+                method: CheckMethod::Linf,
             };
             
             let check_phase_evaluator = CheckPhase::new(check_config_evaluator, share_phase.clone());
@@ -185,10 +191,13 @@ mod tests {
                 .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
                 .collect();
             
+            let check_data = CheckData::Linf;
+            
             for share in &all_shares_server0 {
                 let result = check_phase_evaluator.run_fuzzy_match_check(
                     share,
                     &query_point_bits,
+                    &check_data,
                     &mut channel,
                     &mut rng,
                 ).expect("Check phase should succeed");
@@ -291,6 +300,7 @@ mod tests {
         // Step 2: Generate shares for all clients
         let share_config = ShareConfig {
             method: ShareMethod::OKVS,
+            metric: DistanceMetric::LInfinity,
             dictionary_type: DictionaryType::Known,
             input_bit_length: INPUT_BIT_LENGTH,
             output_bit_length: OUTPUT_BIT_LENGTH,
@@ -341,9 +351,9 @@ mod tests {
         let (fss_key_0, fss_key_1) = IntervalFSSKey::gen_IntervalFSSKey(
             &alpha_bits,
             &beta_bits,
-            outside_payload,  // left (below threshold + r0 + r1)
-            inside_payload,   // mid (in [threshold + r0 + r1, MAX])
-            outside_payload,  // right (above MAX - shouldn't happen)
+            &outside_payload,  // left (below threshold + r0 + r1)
+            &inside_payload,   // mid (in [threshold + r0 + r1, MAX])
+            &outside_payload,  // right (above MAX - shouldn't happen)
             2  // Binary modulus
         );
 
@@ -372,6 +382,7 @@ mod tests {
                 output_bit_length: CHECK_BIT_LENGTH,
                 num_dimensions: 2,
                 is_garbler_side: true,
+                method: CheckMethod::Linf,
             };
             
             let check_phase_garbler = CheckPhase::new(check_config_garbler, share_phase_clone);
@@ -384,10 +395,13 @@ mod tests {
                 .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
                 .collect();
             
+            let check_data = CheckData::Linf;
+            
             for share in &all_shares_server1_clone {
                 let result = check_phase_garbler.run_fuzzy_match_check(
                     share,
                     &query_point_bits,
+                    &check_data,
                     &mut channel,
                     &mut rng,
                 ).expect("Check phase should succeed");
@@ -431,6 +445,7 @@ mod tests {
             output_bit_length: CHECK_BIT_LENGTH,
             num_dimensions: 2,
             is_garbler_side: false,
+            method: CheckMethod::Linf,
         };
         
         let check_phase_evaluator = CheckPhase::new(check_config_evaluator, share_phase.clone());
@@ -443,10 +458,13 @@ mod tests {
             .map(|&point| u128_to_bits(point, INPUT_BIT_LENGTH))
             .collect();
         
+        let check_data = CheckData::Linf;
+        
         for share in &all_shares_server0 {
             let result = check_phase_evaluator.run_fuzzy_match_check(
                 share,
                 &query_point_bits,
+                &check_data,
                 &mut channel,
                 &mut rng,
             ).expect("Check phase should succeed");
