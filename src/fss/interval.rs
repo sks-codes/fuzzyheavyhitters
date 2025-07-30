@@ -119,9 +119,6 @@ fn gen_cor_word<const N: usize>(
         ));
     });
 
-    println!("Data 0: {:?}", data[0].0);
-    println!("Data 1: {:?}", data[0].1);
-
     let mut delta_seed = Vec::<([u8; 16], [u8; 16])>::new();
     let mut delta_bits = vec![];
     let mut delta_ys = vec![];
@@ -145,11 +142,6 @@ fn gen_cor_word<const N: usize>(
             d1.y_bits.1 - d0.y_bits.1
         ));
     });
-
-    println!("Delta bits: {:?}", delta_bits);
-    println!("Delta ys: {:?}", delta_ys);
-    println!("Delta y bits: {:?}", delta_y_bits);
-
 
     if data.len() > 2 {
         panic!("Something went wrong, data length is greater than 2: {}", data.len());
@@ -244,7 +236,6 @@ fn gen_cor_word<const N: usize>(
         let eval0 = eval[0].0;
         let eval1 = eval[0].1;
         if !alpha_bit {
-            println!("Data length is 1, alpha_bit is false");
             new_seeds.push((
                 xor::<16>(&d0.seeds.0, 
                     &xor::<16>(
@@ -261,7 +252,6 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.0 + (cw.y_bits.0.0 * eval1.y_bit.first) + (cw.y_bits.1.0 * eval1.y_bit.second)));
         }
         if beta_bit {
-            println!("Data length is 1, beta_bit is true");
             new_seeds.push((
                 xor::<16>(&d0.seeds.1, 
                     &xor::<16>(
@@ -278,7 +268,6 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
         }    
     } else {
-        println!("Data length is 2, alpha_bit = {}, beta_bit = {}", alpha_bit, beta_bit);
         let d0 = data[0].0;
         let d1 = data[0].1;
         let eval0 = eval[0].0;
@@ -353,8 +342,6 @@ fn gen_cor_word<const N: usize>(
         }
     }
 
-    println!("After updating, new_seeds length: {}", new_seeds.len());
-
     let new_eval: Vec<(IntervalFSSEval<N>, IntervalFSSEval<N>)> = new_seeds.iter().zip(new_bits.iter()).zip(new_y_bits.iter())
         .map(|((seed, bits), y_bits)| {
             (
@@ -422,8 +409,6 @@ impl<const N: usize> IntervalFSSKey<N>
         let mut cor_words: Vec<IntervalFSSCW<N>> = Vec::new();
 
         for (i, (&alpha_bit, &beta_bit)) in alpha_bits.iter().zip(beta_bits.iter()).enumerate() {
-            println!("Layer {}: alpha_bit = {}, beta_bit = {}", i, alpha_bit, beta_bit);
-            println!("In layer {}, the length of eval is {}", i, eval.len());
             let cw = gen_cor_word(
                 alpha_bit, 
                 beta_bit, 
@@ -474,14 +459,7 @@ impl<const N: usize> IntervalFSSKey<N>
             data.y_bits.1.clone()
         };
 
-        println!("Current state: {:?}", state);
-        println!("New y: {:?}", new_y);
-        println!("New y_bit: {:?}", new_y_bit);
-
         let cw = self.cor_words[state.level];
-
-        println!("First part ys of the cor word: {:?}", cw.ys.0);
-        println!("Second part ys of the cor word: {:?}", cw.ys.1);
 
         seed = xor::<16>(&seed,
                         &xor::<16>(&and_bit::<16>(cw.seeds.0, state.bit.first),

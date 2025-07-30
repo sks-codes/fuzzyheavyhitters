@@ -251,6 +251,9 @@ impl CheckPhase {
             ));
         }
 
+        let in_modulus = 1u128 << self.config.input_bit_length;
+        let out_modulus = 1u128 << self.config.output_bit_length;
+
         // Step 1: For each dimension i from 0 to d-1, evaluate query_point[i] with OKVS for dimension i
         let mut all_dimension_eval = Vec::<ModInt>::new();
         
@@ -260,12 +263,11 @@ impl CheckPhase {
             
             // Evaluate at the specific dimension to get |query_point[i] - x[i]|^p
             let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-            all_dimension_eval.push(ModInt::new(res, 1 << self.config.input_bit_length));
+            all_dimension_eval.push(ModInt::new(res, in_modulus));
         }
 
         // Step 2: Aggregate all dimension evaluations (sum of Lp distances across dimensions)
-        let modulus = 1u128 << self.config.input_bit_length;
-        let mut aggregated_share = ModInt::new(0, modulus);
+        let mut aggregated_share = ModInt::new(0, in_modulus);
         for dimension_result in &all_dimension_eval {
             aggregated_share = aggregated_share + *dimension_result;
         }
@@ -273,7 +275,7 @@ impl CheckPhase {
         println!("Aggregated distance share before masking: {}", aggregated_share.val());
 
         // Step 3: Add random value to aggregated share and exchange with other server
-        let masked_share = aggregated_share + ModInt::new(random_value, modulus);
+        let masked_share = aggregated_share + ModInt::new(random_value, in_modulus);
 
         println!("Masked distance share: {}", masked_share.val());
         
@@ -285,16 +287,12 @@ impl CheckPhase {
             channel.flush()
                 .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
-            println!("Successfully sent masked distance share: {}", masked_share.val());
-            
             let mut received_bytes = [0u8; 16];
             channel.read_bytes(&mut received_bytes)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
             let other_masked_share = u128::from_le_bytes(received_bytes);
-            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+            let other_masked_share_modint = ModInt::new(other_masked_share, in_modulus);
 
-            println!("Received masked distance share: {}", other_masked_share_modint.val());
-            
             masked_share + other_masked_share_modint
         } else {
             // Server 0 (evaluator) receives first, then sends
@@ -302,7 +300,7 @@ impl CheckPhase {
             channel.read_bytes(&mut received_bytes)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
             let other_masked_share = u128::from_le_bytes(received_bytes);
-            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+            let other_masked_share_modint = ModInt::new(other_masked_share, in_modulus);
             
             let share_bytes = masked_share.val().to_le_bytes();
             channel.write_bytes(&share_bytes)
@@ -318,30 +316,21 @@ impl CheckPhase {
         // We want to check if actual_distance <= threshold
         // The FSS should be set up for interval [0, threshold + r0 + r1] (less than or equal)
         // Convert distance to bit representation
-        let distance_bits = u128_to_bits(reconstructed_masked_distance.val(), self.config.input_bit_length);
+        let mut distance_bits = u128_to_bits(reconstructed_masked_distance.val(), self.config.input_bit_length);
+        distance_bits.reverse();
         
         // Evaluate FSS: returns payload for the specified interval
         // Since we want to check if actual_distance <= threshold, and we have actual_distance + r0 + r1,
         // the dealer should have set up FSS for interval [0, threshold + r0 + r1]
-        let fss_result = fss_key.eval_intervalFSS(&distance_bits, 2); // modulus 2 for binary output
+        let fss_result = fss_key.eval_intervalFSS(&distance_bits, out_modulus); // modulus 2 for binary output
 
-        println!("FSS evaluation result: {:?}", fss_result);
-        
-        // The FSS is set up for interval [0, threshold + r0 + r1], so:
-        // - If actual_distance + r0 + r1 is in [0, threshold + r0 + r1], FSS output is 1 (within threshold)
-        // - If actual_distance + r0 + r1 is outside this interval, FSS output is 0 (exceeds threshold)
-        let within_threshold = fss_result.val()[0] == 1;
+        println!("FSS evaluation result for server {}: {:?}", self.config.is_garbler_side, fss_result);
 
-        // Step 5: Convert boolean result to ring share using OT
-        let ring_share = self.boolean_to_ring_share_modint(
-            within_threshold,
-            1 << self.config.output_bit_length,
-            channel,
-            &mut AesRng::new(),
-            self.config.is_garbler_side,
-        )?;
-        
-        Ok(ring_share)
+        if self.config.is_garbler_side {
+            Ok(ModInt::new(out_modulus - fss_result[0], out_modulus)) // Return the negated first element as the result
+        } else {
+            Ok(ModInt::new(fss_result[0], out_modulus)) // Return the first element as the result
+        }
     }
 
 

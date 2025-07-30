@@ -510,20 +510,21 @@ pub fn generate_fss_keys_for_check(
         random_pairs.push((r0, r1));
         
         // Check if distance_threshold + r0 + r1 would wrap around
-        let sum = distance_threshold + r0 + r1;
+        let sum = distance_threshold + (r0 + r1) % in_modulus;
         let wraps_around = sum >= in_modulus;
+        println!("Sum and sum of r0+r1: {}, {}", sum, r0 + r1);
         let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
             // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
             // Return 0 in the middle, 1 on left and right
             let interval_start = sum % in_modulus;
             let interval_end = (r0 + r1) % in_modulus;
+
+            println!("Wrap-around case: interval [{}, {}]", interval_start, interval_end);
             
-            let alpha_bits: Vec<bool> = (0..input_bit_length)
-                .map(|i| ((interval_start >> i) & 1) == 1)
-                .collect();
-            let beta_bits: Vec<bool> = (0..input_bit_length)
-                .map(|i| ((interval_end >> i) & 1) == 1)
-                .collect();
+            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
+            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
+            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
             
             // For wrap-around: left=1, middle=0, right=1
             let a = RingVec::<1>::new([1], out_modulus); // left
@@ -537,12 +538,13 @@ pub fn generate_fss_keys_for_check(
             let interval_start = (r0 + r1) % in_modulus;
             let interval_end = sum;
 
-            let alpha_bits: Vec<bool> = (0..input_bit_length)
-                .map(|i| ((interval_start >> i) & 1) == 1)
-                .collect();
-            let beta_bits: Vec<bool> = (0..input_bit_length)
-                .map(|i| ((interval_end >> i) & 1) == 1)
-                .collect();
+            println!("No wrap-around case: interval [{}, {}]", interval_start, interval_end);
+
+            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
+            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
+            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
+
             
             // For no wrap-around: left=0, middle=1, right=0
             let a = RingVec::<1>::new([0], out_modulus); // left
