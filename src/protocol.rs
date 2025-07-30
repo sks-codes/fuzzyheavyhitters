@@ -477,7 +477,7 @@ pub fn generate_fss_keys_for_threshold(
             &a,
             &b,
             &c,
-            modulus,
+            2,
         );
         
         keys_server0.push(key0);

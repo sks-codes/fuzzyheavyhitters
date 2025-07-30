@@ -178,7 +178,8 @@ impl ThresholdPhase {
         // Step 3: Evaluate the reconstructed masked count using FSS key for interval [threshold + r0 + r1, MAX]
         // The reconstructed_masked_count = actual_count + r0 + r1
         // Convert count to bit representation
-        let count_bits = u128_to_bits(reconstructed_masked_count.val(), self.config.input_bit_length);
+        let mut count_bits = u128_to_bits(reconstructed_masked_count.val(), self.config.input_bit_length);
+        count_bits.reverse(); // Reverse to MSB-first order
         
         // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
         // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
@@ -190,7 +191,7 @@ impl ThresholdPhase {
         // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
         // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)
         // - If actual_count + r0 + r1 is outside [threshold + r0 + r1, MAX], FSS output is 0
-        let threshold_exceeded = fss_result.val()[0] == 1;
+        let threshold_exceeded = fss_result[0] == 1;
 
         Ok(threshold_exceeded)
     }
