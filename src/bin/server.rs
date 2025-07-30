@@ -150,10 +150,16 @@ fn create_server_tcp_socket(port: u16) -> io::Result<MyChannel> {
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)));
     let (stream, _) = listener.unwrap().accept()?;
     stream.set_nodelay(true)?;
+    stream.set_nonblocking(false)?; // Ensure blocking mode
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?; // Add reasonable timeouts
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    // stream.set_keepalive(Some(Duration::from_secs(30)))?;
 
     Ok(scuttlebutt::SyncChannel::new(
-        BufReader::new(stream.try_clone()?),
-        BufWriter::new(stream),
+        BufReader::with_capacity(64 * 4096 * 4096, stream.try_clone().unwrap()),
+        BufWriter::with_capacity(64 * 4096 * 4096, stream)
+        // BufReader::new(stream.try_clone()?),
+        // BufWriter::new(stream),
     ))
 }
 
@@ -236,23 +242,11 @@ async fn main() -> io::Result<()> {
     let coll = collect::KeyCollection::new(&seed, cfg.data_len);
     let arc = Arc::new(Mutex::new(coll));
 
-    // let gc_channel = match setup_unix_socket(server_idx) {
-    //     Ok(channel) => Some(Arc::new(Mutex::new(channel))),
-    //     Err(e) => {
-    //         eprintln!("Warning: Failed to setup GC channel: {}", e);
-    //         None
-    //     }
-    // };
     let num_cpus = available_parallelism().unwrap().get();
 
-
-    // let gc_channels = setup_unix_sockets(server_idx, num_cpus).unwrap_or_else(|e| {
-    //     eprintln!("Warning: Failed to setup GC channels: {}", e);
-    //     vec![] // Fallback to no channels
-    // });
     let gc_channels = setup_tcp_sockets(server_idx, num_cpus, cfg.server0, cfg.server1).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to setup GC channels: {}", e);
-        vec![] // Fallback to no channels
+        vec![]
     });
 
     let mut server_addr = server_addr;

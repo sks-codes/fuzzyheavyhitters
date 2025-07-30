@@ -61,9 +61,11 @@ where
     E: Debug,
 {
     // The garbler encodes their input into binary wires
-    let garbler_wires: BinaryBundle<F::Item> = gb.encode_bundle(&input, &vec![2; input.len()]).map(BinaryBundle::from).unwrap();
+    println!("garb len: {:?}", input.len());
+    let garbler_wires: BinaryBundle<F::Item> = BinaryBundle::new(gb.encode_many(&input, &vec![2; input.len()]).unwrap());//.map(BinaryBundle::from).unwrap();
     // The evaluator receives their input labels using Oblivious Transfer (OT)
-    let evaluator_wires: BinaryBundle<F::Item> = gb.bin_receive(input.len() - num_tests).unwrap();
+    println!("eval len: {:?}", input.len());
+    let evaluator_wires: BinaryBundle<F::Item> = BinaryBundle::new(gb.receive_many(&vec![2;input.len() - num_tests]).unwrap());
 
     EQInputs {
         garbler_wires,
@@ -103,10 +105,12 @@ where
 {
     // The number of bits needed to represent a single input, in this case a u128
     let nwires = input.len();
+    println!("garb len: {:?}", nwires + num_tests);
     // The evaluator receives the garblers input labels.
-    let garbler_wires: BinaryBundle<F::Item> = ev.bin_receive(nwires + num_tests).unwrap();
+    let garbler_wires: BinaryBundle<F::Item> = BinaryBundle::new(ev.receive_many(&vec![2; nwires + num_tests]).unwrap());
+    println!("eval len: {:?}", nwires);
     // The evaluator receives their input labels using Oblivious Transfer (OT).
-    let evaluator_wires: BinaryBundle<F::Item> = ev.encode_bundle(input, &vec![2; nwires]).map(BinaryBundle::from).unwrap();
+    let evaluator_wires: BinaryBundle<F::Item> = BinaryBundle::new(ev.encode_many(input, &vec![2; nwires]).unwrap());//map(BinaryBundle::from).unwrap();
 
     EQInputs {
         garbler_wires,
@@ -129,6 +133,7 @@ pub trait BinaryGadgets: FancyBinary + BundleGadgets {
             .map(|(x_bit, y_bit)| {
                 let xy = self.xor(x_bit, y_bit)?;
                 self.negate(&xy)
+                // self.xor(x_bit, y_bit)
             })
             .collect::<Result<Vec<Self::Item>, Self::Error>>()?;
 
@@ -140,7 +145,7 @@ pub trait BinaryGadgets: FancyBinary + BundleGadgets {
         x: &BinaryBundle<Self::Item>,
         y: &BinaryBundle<Self::Item>,
     ) -> Result<Self::Item, Self::Error> {
-        assert_eq!(x.wires().len(), y.wires().len() + 1, "x must have one more wire than y");
+        // assert_eq!(x.wires().len(), y.wires().len() + 1, "x must have one more wire than y");
 
         let (x_wires, mask) = x.wires().split_at(x.wires().len() - 1);
         let mask = &mask[0]; // Last wire is the mask

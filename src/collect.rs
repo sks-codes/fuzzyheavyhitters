@@ -2,7 +2,7 @@ use std::convert::{TryFrom, TryInto};
 use std::io::{BufReader, BufWriter};
 use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Group, Share};
 use rayon::prelude::*;
-use scuttlebutt::{AesRng, Block, SyncChannel};
+use scuttlebutt::{AbstractChannel, AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
 use crate::fss::ibdcf::{ibDCFKey, EvalState, eval_str};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
@@ -146,12 +146,12 @@ where
                     .par_iter()
                     .map(|state| {
                         let mut left_bits: Vec<bool> = state.iter()
-                            .map(|(left, _)| left.y_bit ^ left.bit)
+                            .map(|(left, right)| left.y_bit ^ left.bit ^ right.y_bit ^ gc_sender)
                             .collect();
-                        let mut right_bits: Vec<bool> = state.iter()
-                            .map(|(_, right)| right.y_bit ^ right.bit)
-                            .collect();
-                        left_bits.append(&mut right_bits);
+                        // let mut right_bits: Vec<bool> = state.iter()
+                        //     .map(|(_, right)| right.y_bit ^ right.bit)
+                        //     .collect();
+                        // left_bits.append(&mut right_bits);
                         left_bits
                     })
                     .collect()
@@ -184,6 +184,7 @@ where
                     } else {
                         multiple_ev_equality_test(&mut rng, &mut channel, &chunk)
                     };
+                    channel.flush().expect("flush failed");
                     let mut node_vals = vec![];
                     if gc_sender{
                         let mut all_shares = Vec::with_capacity(bin_shares.len());
@@ -219,6 +220,7 @@ where
                             })
                             .collect();
                     }
+                    channel.flush().expect("flush failed");
                     node_vals
                 }));
             }
