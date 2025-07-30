@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData, DictionaryType, DistanceMetric};
 use crate::fuzzy_match::check_phase::{CheckConfig, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod};
-use crate::protocol::ProtocolConfig;
+use crate::fuzzy_match::protocol::ProtocolConfig;
 use crate::Share;
 
 /// CLI configuration that combines all protocol parameters

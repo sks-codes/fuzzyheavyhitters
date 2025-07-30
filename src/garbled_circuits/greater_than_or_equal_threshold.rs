@@ -44,8 +44,6 @@ fn garbler_preprocess_greater_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) 
         // b = y <= t
         let b = y.val() > t.val();
         
-        println!("y: {}, t: {}, z1: {}, z2: {}, b: {}", y.val(), t.val(), z1, z2, b);
-        
         z1_values.push(z1);
         z2_values.push(z2);
         b_values.push(b);
@@ -131,7 +129,6 @@ where
 fn evaluator_preprocess_greater_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
     inputs_x.iter().map(|x| {
         let z3 = x.val();
-        println!("x: {}, z3: {}", x.val(), z3);
         z3
     }).collect()
 }

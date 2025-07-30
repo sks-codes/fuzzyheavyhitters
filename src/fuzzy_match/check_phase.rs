@@ -207,8 +207,6 @@ impl CheckPhase {
             aggregated_share = aggregated_share + *dimension_result;
         }
 
-        println!("Server {} aggregated distance share before masking: {}", self.config.is_garbler_side, aggregated_share.val());    
-
         // Step 3: Compare aggregated sum with threshold using garbled circuits
         // Check if aggregated_sum <= threshold (distance is within threshold)
         let comparison_result = if self.config.is_garbler_side {
@@ -218,8 +216,6 @@ impl CheckPhase {
             let results = multiple_ev_less_than_ss(rng, channel, &[aggregated_share]);
             results[0]
         };
-
-        println!("Server {} comparison result for threshold {}: {}", self.config.is_garbler_side, threshold.val(), comparison_result);
 
         // Step 4: Convert boolean result to ring share using OT
         let ring_share = self.boolean_to_ring_share_modint(
@@ -272,12 +268,8 @@ impl CheckPhase {
             aggregated_share = aggregated_share + *dimension_result;
         }
 
-        println!("Aggregated distance share before masking: {}", aggregated_share.val());
-
         // Step 3: Add random value to aggregated share and exchange with other server
         let masked_share = aggregated_share + ModInt::new(random_value, in_modulus);
-
-        println!("Masked distance share: {}", masked_share.val());
         
         let reconstructed_masked_distance = if self.config.is_garbler_side {
             // Server 1 (garbler) sends first, then receives
@@ -323,8 +315,6 @@ impl CheckPhase {
         // Since we want to check if actual_distance <= threshold, and we have actual_distance + r0 + r1,
         // the dealer should have set up FSS for interval [0, threshold + r0 + r1]
         let fss_result = fss_key.eval_intervalFSS(&distance_bits, out_modulus); // modulus 2 for binary output
-
-        println!("FSS evaluation result for server {}: {:?}", self.config.is_garbler_side, fss_result);
 
         if self.config.is_garbler_side {
             Ok(ModInt::new(out_modulus - fss_result[0], out_modulus)) // Return the negated first element as the result

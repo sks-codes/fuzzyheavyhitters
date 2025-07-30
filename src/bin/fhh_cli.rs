@@ -4,9 +4,9 @@
 //! with both servers in the same process for testing purposes.
 
 use counttree::{
-    protocol::{FuzzyHeavyHittersProtocol, FssKeyBatch,
-               generate_fss_keys_for_threshold, generate_fss_keys_for_check},
     fuzzy_match::{
+        protocol::FuzzyHeavyHittersProtocol,
+        dealer::{FssKeyBatch, FssDealer, DealerSignal, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
         threshold_phase::ThresholdData,
         check_phase::{CheckData, CheckMethod},
     },
@@ -21,76 +21,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::os::unix::net::UnixStream;
 use std::fs;
 use serde_json;
-
-
-/// Dealer that continuously generates FSS key pairs in the background
-struct FssDealer {
-    receiver: mpsc::Receiver<FssKeyBatch>,
-    shutdown_sender: mpsc::Sender<()>,
-}
-
-impl FssDealer {
-    /// Create a new FSS dealer that generates key pairs in the background
-    /// Returns the dealer with channels that can be moved to the protocol
-    fn new(
-        n_clients: usize,
-        distance_threshold: u128,
-        output_bit_length: usize,
-        check_output_bit_length: usize,
-    ) -> Result<Self, String> {
-        let (batch_sender, batch_receiver) = mpsc::channel::<FssKeyBatch>();
-        let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>();
-        
-        // Spawn the dealer thread
-        thread::spawn(move || {
-            loop {
-                // Check if we should shutdown
-                if shutdown_receiver.try_recv().is_ok() {
-                    println!("FSS dealer shutting down");
-                    break;
-                }
-                
-                // Generate a batch of FSS keys for n clients
-                match generate_fss_keys_for_check(
-                    distance_threshold,
-                    output_bit_length,
-                    check_output_bit_length,
-                    n_clients,
-                ) {
-                    Ok((keys0, keys1, random_pairs)) => {
-                        let batch = FssKeyBatch {
-                            keys0,
-                            keys1,
-                            random_pairs,
-                        };
-                        
-                        // Try to send the batch; if receiver is gone, break
-                        if batch_sender.send(batch).is_err() {
-                            println!("FSS dealer: receiver disconnected, shutting down");
-                            break;
-                        }
-                        
-                        println!("FSS dealer: generated batch of {} key pairs", n_clients);
-                    }
-                    Err(e) => {
-                        eprintln!("FSS dealer: failed to generate keys: {}", e);
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
-            }
-        });
-        
-        Ok(FssDealer {
-            receiver: batch_receiver,
-            shutdown_sender,
-        })
-    }
-    
-    /// Extract the receiver and shutdown sender for use by the protocol
-    fn into_channels(self) -> (mpsc::Receiver<FssKeyBatch>, mpsc::Sender<()>) {
-        (self.receiver, self.shutdown_sender)
-    }
-}
 
 /// Data structure for synthetic data
 #[derive(serde::Deserialize)]
@@ -346,7 +276,7 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
     let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
     
     // Initialize FSS dealer for check phase if using LpIntervalFSS
-    let (fss_dealer_receiver, fss_dealer_shutdown) = if cli_config.protocol.check_method == "LpIntervalFSS" {
+    let (fss_dealer_receiver_server0, fss_dealer_receiver_server1, fss_dealer_signal_sender_server0, fss_dealer_signal_sender_server1) = if cli_config.protocol.check_method == "LpIntervalFSS" {
         println!("Starting FSS dealer for check phase...");
         let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
         let dealer = FssDealer::new(
@@ -356,14 +286,12 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
             cli_config.protocol.check_output_bit_length,
         )?;
         
-        // Give the dealer a head start by letting it generate the first batch
-        std::thread::sleep(std::time::Duration::from_millis(100));
         println!("FSS dealer started and ready");
         
-        let (receiver, shutdown) = dealer.into_channels();
-        (Some(receiver), Some(shutdown))
+        let (receiver_server0, receiver_server1, signal_sender_server0, signal_sender_server1) = dealer.into_channels();
+        (Some(receiver_server0), Some(receiver_server1), Some(signal_sender_server0), Some(signal_sender_server1))
     } else {
-        (None, None)
+        (None, None, None, None)
     };
     
     println!("Starting unknown dictionary search...");
@@ -385,8 +313,8 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
             &threshold_data_list_server1_clone,
             stream1,
             true, // is_server1 = true
-            None, // No FSS dealer receiver for server 1
-            None, // No FSS dealer shutdown for server 1
+            fss_dealer_receiver_server1, // Server 1 gets its own FSS dealer receiver
+            fss_dealer_signal_sender_server1, // Server 1 can signal the dealer
         )
     });
     
@@ -396,8 +324,8 @@ fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> 
         &threshold_data_list_server0,
         stream2,
         false, // is_server1 = false
-        fss_dealer_receiver,
-        fss_dealer_shutdown,
+        fss_dealer_receiver_server0, // Server 0 gets its own FSS dealer receiver
+        fss_dealer_signal_sender_server0, // Server 0 can signal the dealer
     )?;
     
     // Wait for server 1 to complete (both servers should return the same results)

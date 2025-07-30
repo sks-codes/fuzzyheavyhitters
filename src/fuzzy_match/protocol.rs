@@ -6,9 +6,8 @@
 use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType};
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
+use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
 use crate::data_structures::modint::ModInt;
-use crate::data_structures::payload::RingVec;
-use crate::fss::interval::IntervalFSSKey;
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits};
 use scuttlebutt::{AesRng, Channel};
 use std::os::unix::net::UnixStream;
@@ -16,15 +15,6 @@ use std::io::{BufReader, BufWriter};
 use std::thread::current;
 use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
-use rand::Rng;
-
-/// FSS key pair batch for check phase
-#[derive(Clone, Debug)]
-pub struct FssKeyBatch {
-    pub keys0: Vec<IntervalFSSKey<1>>,
-    pub keys1: Vec<IntervalFSSKey<1>>, 
-    pub random_pairs: Vec<(u128, u128)>,
-}
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +158,7 @@ impl FuzzyHeavyHittersProtocol {
     /// * `stream` - Communication stream between servers
     /// * `is_server1` - True if this is server 1 (garbler), false if server 0 (evaluator)
     /// * `fss_dealer_receiver` - Optional receiver to get FSS key batches from dealer
-    /// * `fss_dealer_shutdown` - Optional sender to shutdown the dealer when done
+    /// * `fss_dealer_signal_sender` - Optional sender to signal the dealer for keys or shutdown
     pub fn run_server_unknown_dictionary(
         &self,
         client_shares_list: &[SharedRange],
@@ -176,13 +166,13 @@ impl FuzzyHeavyHittersProtocol {
         stream: UnixStream,
         is_server1: bool,
         fss_dealer_receiver: Option<mpsc::Receiver<FssKeyBatch>>,
-        fss_dealer_shutdown: Option<mpsc::Sender<()>>,
+        fss_dealer_signal_sender: Option<mpsc::Sender<DealerSignal>>,
     ) -> Result<Vec<Vec<u128>>, String> {
         // Helper closure to shutdown dealer on both success and error
-        let shutdown_dealer = |is_server1: bool, sender: Option<mpsc::Sender<()>>| {
+        let shutdown_dealer = |is_server1: bool, sender: Option<mpsc::Sender<DealerSignal>>| {
             if !is_server1 {
-                if let Some(shutdown_sender) = sender {
-                    if let Err(_) = shutdown_sender.send(()) {
+                if let Some(signal_sender) = sender {
+                    if let Err(_) = signal_sender.send(DealerSignal::Shutdown) {
                         println!("Warning: Failed to send shutdown signal to dealer");
                     } else {
                         println!("Server 0: Sent shutdown signal to FSS dealer");
@@ -244,10 +234,11 @@ impl FuzzyHeavyHittersProtocol {
                 &mut rng,
                 is_server1,
                 &fss_dealer_receiver,
+                &fss_dealer_signal_sender,
             ) {
                 Ok(results) => results,
                 Err(e) => {
-                    shutdown_dealer(is_server1, fss_dealer_shutdown);
+                    shutdown_dealer(is_server1, fss_dealer_signal_sender);
                     return Err(e);
                 }
             };
@@ -279,7 +270,7 @@ impl FuzzyHeavyHittersProtocol {
             .collect();
 
         // Shutdown the dealer if we have a shutdown sender (only server 0 should do this)
-        shutdown_dealer(is_server1, fss_dealer_shutdown);
+        shutdown_dealer(is_server1, fss_dealer_signal_sender);
 
         Ok(final_heavy_hitters)
     }
@@ -297,6 +288,7 @@ impl FuzzyHeavyHittersProtocol {
         rng: &mut AesRng,
         is_server1: bool,
         fss_dealer_receiver: &Option<mpsc::Receiver<FssKeyBatch>>,
+        fss_dealer_signal_sender: &Option<mpsc::Sender<DealerSignal>>,
     ) -> Result<Vec<bool>, String> {
         let mut server_bits = Vec::new();
 
@@ -304,21 +296,27 @@ impl FuzzyHeavyHittersProtocol {
         for prefix_set in prefix_sets {
             // Get FSS keys from dealer if using LpIntervalFSS check method
             let check_data = if let Some(receiver) = fss_dealer_receiver {
+                // Request keys from dealer
+                if let Some(signal_sender) = fss_dealer_signal_sender {
+                    signal_sender.send(DealerSignal::RequestKeys)
+                        .map_err(|_| "Failed to send key request signal to dealer")?;
+                }
+                
                 // Get a batch of FSS keys from the dealer
                 let batch = receiver.recv()
                     .map_err(|_| "Failed to receive FSS keys from dealer")?;
                 
-                if batch.keys0.len() < client_shares.len() {
+                if batch.keys.len() < client_shares.len() {
                     return Err(format!("Dealer provided {} keys but {} are needed", 
-                                     batch.keys0.len(), client_shares.len()));
+                                     batch.keys.len(), client_shares.len()));
                 }
                 
                 // For now, we'll use the first key from the batch
                 // In a real implementation, you'd want to distribute the keys properly
                 CheckData::LpIntervalFSS {
                     threshold: self.config.delta, // Use configured delta as threshold
-                    fss_key: batch.keys0[0].clone(),
-                    random_value: batch.random_pairs[0].0,
+                    fss_key: batch.keys[0].clone(),
+                    random_value: batch.random_values[0],
                 }
             } else {
                 match self.config.check_config.method {
@@ -406,166 +404,4 @@ impl FuzzyHeavyHittersProtocol {
         }
         Ok(bits[0])
     }
-}
-
-/// Generate FSS keys for interval FSS threshold comparison
-/// This simulates a trusted dealer generating FSS keys
-pub fn generate_fss_keys_for_threshold(
-    threshold: u128,
-    bit_length: usize,
-    num_queries: usize,
-) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>, Vec<(u128, u128)>), String> {
-    let modulus = 1u128 << bit_length;
-    
-    let mut keys_server0 = Vec::new();
-    let mut keys_server1 = Vec::new();
-    let mut random_pairs = Vec::new();
-    
-    for _ in 0..num_queries {
-        // Generate random pair (r0, r1) for this query using standard rand
-        let mut std_rng = rand::thread_rng();
-        let r0 = std_rng.gen_range(0..modulus);
-        let r1 = std_rng.gen_range(0..modulus);
-        random_pairs.push((r0, r1));
-        
-        // Check if threshold + r0 + r1 would wrap around
-        let sum = threshold + r0 + r1;
-        let wraps_around = sum >= modulus;
-        let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
-            // Wrap-around case: interval [threshold+r0+r1 mod modulus, r0+r1]
-            // Return 1 in the middle, 0 on left and right
-            let interval_start = sum % modulus;
-            let interval_end = (r0 + r1) % modulus;
-            
-            let alpha_bits: Vec<bool> = (0..bit_length)
-                .map(|i| ((interval_start >> i) & 1) == 1)
-                .collect();
-            let beta_bits: Vec<bool> = (0..bit_length)
-                .map(|i| ((interval_end >> i) & 1) == 1)
-                .collect();
-            
-            // For wrap-around: left=0, middle=1, right=0
-            let a = RingVec::<1>::new([0], 2); // left
-            let b = RingVec::<1>::new([1], 2); // middle
-            let c = RingVec::<1>::new([0], 2); // right
-            
-            (alpha_bits, beta_bits, a, b, c)
-        } else {
-            // No wrap-around case: interval [r0+r1, threshold+r0+r1]
-            // Return 1 on left and right, 0 in the middle
-            let interval_start = (r0 + r1) % modulus;
-            let interval_end = sum;
-            
-            let alpha_bits: Vec<bool> = (0..bit_length)
-                .map(|i| ((interval_start >> i) & 1) == 1)
-                .collect();
-            let beta_bits: Vec<bool> = (0..bit_length)
-                .map(|i| ((interval_end >> i) & 1) == 1)
-                .collect();
-            
-            // For no wrap-around: left=1, middle=0, right=1
-            let a = RingVec::<1>::new([1], 2); // left
-            let b = RingVec::<1>::new([0], 2); // middle
-            let c = RingVec::<1>::new([1], 2); // right
-            
-            (alpha_bits, beta_bits, a, b, c)
-        };
-        
-        let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
-            &alpha_bits,
-            &beta_bits,
-            &a,
-            &b,
-            &c,
-            2,
-        );
-        
-        keys_server0.push(key0);
-        keys_server1.push(key1);
-    }
-    
-    Ok((keys_server0, keys_server1, random_pairs))
-}
-
-/// Generate FSS keys for check phase comparison (Lp distance with IntervalFSS)
-/// This simulates a trusted dealer generating FSS keys for distance threshold comparison
-pub fn generate_fss_keys_for_check(
-    distance_threshold: u128,
-    input_bit_length: usize,
-    output_bit_length: usize,
-    num_checks: usize,
-) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>, Vec<(u128, u128)>), String> {
-    let in_modulus = 1u128 << input_bit_length;
-    let out_modulus = 1u128 << output_bit_length;
-    
-    let mut keys_server0 = Vec::new();
-    let mut keys_server1 = Vec::new();
-    let mut random_pairs = Vec::new();
-    
-    for _ in 0..num_checks {
-        // Generate random pair (r0, r1) for this check using standard rand
-        let mut std_rng = rand::thread_rng();
-        let r0 = std_rng.gen_range(0..in_modulus);
-        let r1 = std_rng.gen_range(0..in_modulus);
-        random_pairs.push((r0, r1));
-        
-        // Check if distance_threshold + r0 + r1 would wrap around
-        let sum = distance_threshold + (r0 + r1) % in_modulus;
-        let wraps_around = sum >= in_modulus;
-        println!("Sum and sum of r0+r1: {}, {}", sum, r0 + r1);
-        let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
-            // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
-            // Return 0 in the middle, 1 on left and right
-            let interval_start = sum % in_modulus;
-            let interval_end = (r0 + r1) % in_modulus;
-
-            println!("Wrap-around case: interval [{}, {}]", interval_start, interval_end);
-            
-            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            
-            // For wrap-around: left=1, middle=0, right=1
-            let a = RingVec::<1>::new([1], out_modulus); // left
-            let b = RingVec::<1>::new([0], out_modulus); // middle
-            let c = RingVec::<1>::new([1], out_modulus); // right
-
-            (alpha_bits, beta_bits, a, b, c)
-        } else {
-            // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
-            // Return 1 inside interval (distance <= threshold), 0 outside
-            let interval_start = (r0 + r1) % in_modulus;
-            let interval_end = sum;
-
-            println!("No wrap-around case: interval [{}, {}]", interval_start, interval_end);
-
-            let mut alpha_bits = u128_to_bits(interval_start, input_bit_length);
-            alpha_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-            let mut beta_bits = u128_to_bits(interval_end, input_bit_length);
-            beta_bits.reverse(); // Reverse bits for server 1 to match server 0's order
-
-            
-            // For no wrap-around: left=0, middle=1, right=0
-            let a = RingVec::<1>::new([0], out_modulus); // left
-            let b = RingVec::<1>::new([1], out_modulus); // middle
-            let c = RingVec::<1>::new([0], out_modulus); // right
-
-            (alpha_bits, beta_bits, a, b, c)
-        };
-        
-        let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
-            &alpha_bits,
-            &beta_bits,
-            &a,
-            &b,
-            &c,
-            out_modulus,
-        );
-        
-        keys_server0.push(key0);
-        keys_server1.push(key1);
-    }
-    
-    Ok((keys_server0, keys_server1, random_pairs))
 }

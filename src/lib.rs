@@ -11,7 +11,6 @@ pub mod synthetic_data;
 pub mod fuzzy_match;
 pub mod aes;
 pub mod okvs_f2k;
-pub mod protocol;
 pub mod cli_config;
 pub mod util;
 
