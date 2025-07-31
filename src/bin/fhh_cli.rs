@@ -6,7 +6,7 @@
 use counttree::{
     fuzzy_match::{
         protocol::FuzzyHeavyHittersProtocol,
-        dealer::{FssDealer, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
+        dealer::FssDealer,
         threshold_phase::ThresholdData,
         check_phase::{CheckData, CheckMethod},
         client::Client,
@@ -17,6 +17,7 @@ use counttree::{
 };
 use scuttlebutt::AbstractChannel;
 use clap::{App, Arg, SubCommand};
+use tarpc::server;
 use std::process;
 use std::thread;
 use std::net::{TcpListener, TcpStream, SocketAddr};
@@ -24,21 +25,15 @@ use std::io::{BufReader, BufWriter};
 use std::fs;
 use serde_json;
 use bincode;
+use std::time::Instant;
 
-/// Data structure for synthetic data
-#[derive(serde::Deserialize)]
-struct Cluster {
-    center: Vec<u128>,
-    points: Vec<Vec<u128>>,
-}
-
-/// Load cluster data from JSON file
-fn load_clusters(file_path: &str) -> Result<Vec<Cluster>, String> {
+/// Load client points directly from JSON file
+fn load_client_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     let content = fs::read_to_string(file_path)
-        .map_err(|e| format!("Failed to read data file {}: {}", file_path, e))?;
+        .map_err(|e| format!("Failed to read client points file {}: {}", file_path, e))?;
     
     serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse data file {}: {}", file_path, e))
+        .map_err(|e| format!("Failed to parse client points file {}: {}", file_path, e))
 }
 
 /// Load query points from JSON file
@@ -561,8 +556,8 @@ fn estimate_max_nearby_count_for_prefix(
 /// Generate a sample configuration file
 fn generate_config(output_path: &str) -> Result<(), String> {
     let sample_config = CliConfig {
-        data_file: "data/synthetic/clusters.json".to_string(),
-        query_file: "data/synthetic/server_query_points.json".to_string(),
+        data_file: "data/synthetic/client_points.json".to_string(),
+        query_file: "data/synthetic/server_points.json".to_string(),
         protocol: counttree::cli_config::ProtocolParameters {
             delta: 5,
             threshold: 3,
@@ -584,12 +579,9 @@ fn generate_config(output_path: &str) -> Result<(), String> {
         network: counttree::cli_config::NetworkConfig {
             server0_addr: "127.0.0.1".to_string(),
             server1_addr: "127.0.0.1".to_string(),
-            server0_port: 8000,
-            server1_port: 8001,
-            dealer_addr: "127.0.0.1".to_string(),
+            server0_to_server1_port: 8000,
             dealer_to_server0_port: 9000,
             dealer_to_server1_port: 9001,
-            client_addr: "127.0.0.1".to_string(),
             client_to_server0_port: 7000,
             client_to_server1_port: 7001,
         },
@@ -607,6 +599,7 @@ fn generate_config(output_path: &str) -> Result<(), String> {
 
 /// Run as dealer - generates and distributes FSS keys to servers
 fn run_dealer(config_path: &str) -> Result<(), String> {
+    let start_time = Instant::now();
     println!("Starting FSS Dealer...");
     let cli_config = CliConfig::from_file(config_path)?;
 
@@ -621,10 +614,10 @@ fn run_dealer(config_path: &str) -> Result<(), String> {
     );
 
     // Connect to both servers
-    let server0_stream = TcpStream::connect((self.server0_addr.as_str(), self.server0_port))
+    let server0_stream = TcpStream::connect((cli_config.network.server0_addr.as_str(), cli_config.network.dealer_to_server0_port))
         .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
-        
-    let server1_stream = TcpStream::connect((self.server1_addr.as_str(), self.server1_port))
+
+    let server1_stream = TcpStream::connect((cli_config.network.server1_addr.as_str(), cli_config.network.dealer_to_server1_port))
         .map_err(|e| format!("Failed to connect to server 1: {}", e))?;
 
     println!("Connected to both servers");
@@ -644,34 +637,50 @@ fn run_dealer(config_path: &str) -> Result<(), String> {
         CommTrackingChannel::new(reader, writer)
     };
 
+    let dealer_start = Instant::now();
     dealer.run(&mut channel_server0, &mut channel_server1)
         .map_err(|e| format!("Failed to run dealer protocol: {}", e))?;
+    let dealer_time = dealer_start.elapsed();
+    
+    let total_time = start_time.elapsed();
+    
+    // Calculate communication metrics
+    let (bytes_sent_0, bytes_received_0) = channel_server0.get_communication_stats();
+    let (bytes_sent_1, bytes_received_1) = channel_server1.get_communication_stats();
+    let total_bytes = bytes_sent_0 + bytes_received_0 + bytes_sent_1 + bytes_received_1;
+    
+    println!("\n=== Dealer Performance Summary ===");
+    println!("📊 FSS key generation and distribution time: {:.2?}", dealer_time);
+    println!("📊 Total dealer time: {:.2?}", total_time);
+    println!("📡 Communication with server 0:");
+    println!("   Bytes sent: {} bytes ({:.2} KB)", bytes_sent_0, bytes_sent_0 as f64 / 1024.0);
+    println!("   Bytes received: {} bytes ({:.2} KB)", bytes_received_0, bytes_received_0 as f64 / 1024.0);
+    println!("📡 Communication with server 1:");
+    println!("   Bytes sent: {} bytes ({:.2} KB)", bytes_sent_1, bytes_sent_1 as f64 / 1024.0);
+    println!("   Bytes received: {} bytes ({:.2} KB)", bytes_received_1, bytes_received_1 as f64 / 1024.0);
+    println!("📡 Total communication: {} bytes ({:.2} KB)", total_bytes, total_bytes as f64 / 1024.0);
 
     Ok(())
 }
 
 /// Run as client - generates shares and sends them to servers
 fn run_client(config_path: &str) -> Result<(), String> {
+    let start_time = Instant::now();
     println!("Starting Client...");
     let cli_config = CliConfig::from_file(config_path)?;
     
-    // Load client data
+    // Load client data directly from client_points.json
     println!("Loading client data from {}", cli_config.data_file);
-    let clusters = load_clusters(&cli_config.data_file)?;
+    let client_points = load_client_points(&cli_config.data_file)?;
     
-    // Extract client points from clusters
-    let mut client_points = Vec::new();
-    for cluster in &clusters {
-        for point in &cluster.points {
-            client_points.push(point.clone());
-        }
-    }
-    println!("Loaded {} client points from {} clusters", client_points.len(), clusters.len());
+    println!("Loaded {} client points", client_points.len());
     
     // Generate client shares
+    let share_start = Instant::now();
     let share_config = cli_config.to_share_config()?; // Client uses share config
     let client = Client::new(share_config);
     let (shares_server0, shares_server1) = client.generate_client_shares(&client_points, cli_config.protocol.delta)?;
+    let share_time = share_start.elapsed();
 
     println!("Connecting to servers...");
     let server0_stream = TcpStream::connect((cli_config.network.server0_addr.as_str(), cli_config.network.client_to_server0_port))
@@ -696,17 +705,37 @@ fn run_client(config_path: &str) -> Result<(), String> {
     
     // Send shares to both servers
     println!("Sending shares to servers...");
+    let send_start = Instant::now();
     client.send_client_shares(
         shares_server0, 
         shares_server1, 
         &mut channel_server0, 
         &mut channel_server1)?;
+    let send_time = send_start.elapsed();
+    
+    let total_time = start_time.elapsed();
+    
+    // Calculate communication metrics
+    let (bytes_sent_0, _) = channel_server0.get_communication_stats();
+    let (bytes_sent_1, _) = channel_server1.get_communication_stats();
+    let total_bytes_sent = bytes_sent_0 + bytes_sent_1;
+    
     println!("Client shares sent successfully");
+    
+    println!("\n=== Client Performance Summary ===");
+    println!("📊 Share generation time: {:.2?}", share_time);
+    println!("📊 Share transmission time: {:.2?}", send_time);
+    println!("📊 Total client time: {:.2?}", total_time);
+    println!("📡 Bytes sent to server 0: {} bytes", bytes_sent_0);
+    println!("📡 Bytes sent to server 1: {} bytes", bytes_sent_1);
+    println!("📡 Total bytes sent: {} bytes ({:.2} KB)", total_bytes_sent, total_bytes_sent as f64 / 1024.0);
+    
     Ok(())
 }
 
 /// Run server for both known and unknown dictionary cases
 fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
+    let start_time = Instant::now();
     let cli_config = CliConfig::from_file(config_path)?;
     let server_id = if is_server1 { 1 } else { 0 };
     let is_known_dictionary = cli_config.protocol.dictionary_type == "Known";
@@ -714,21 +743,26 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
     println!("Server {} starting {} dictionary protocol...", 
              server_id, 
              if is_known_dictionary { "known" } else { "unknown" });
+
+    let server_addr = if is_server1 {
+        cli_config.network.server1_addr.clone()
+    } else {
+        cli_config.network.server0_addr.clone()
+    };
     
     // Create protocol configuration
     let protocol_config = cli_config.to_protocol_config(is_server1)?;
     let protocol = FuzzyHeavyHittersProtocol::new(protocol_config, is_server1);
     
-    // Set up listeners for client and dealer connections
-    let client_port = if is_server1 { 
+    let client_to_server_port = if is_server1 { 
         cli_config.network.client_to_server1_port 
     } else { 
         cli_config.network.client_to_server0_port 
     };
 
     // Listen for client connection
-    println!("Server {}: Waiting for client connection on port {}", server_id, client_port);
-    let client_listener = TcpListener::bind(("0.0.0.0", client_port))
+    println!("Server {}: Waiting for client connection on port {}", server_id, client_to_server_port);
+    let client_listener = TcpListener::bind((server_addr.clone(), client_to_server_port))
         .map_err(|e| format!("Failed to bind client listener: {}", e))?;
     
     let (client_stream, _) = client_listener.accept()
@@ -750,18 +784,17 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
     println!("Server {}: Received {} shares from client", server_id, shares.len());
 
-    let dealer_port = if is_server1 {
+    let dealer_to_server_port = if is_server1 {
         cli_config.network.dealer_to_server1_port
     } else {
         cli_config.network.dealer_to_server0_port
     };
-
-    println!("Server {}: Waiting for dealer connection on port {}", server_id, dealer_port);
-    let dealer_listener = TcpListener::bind(("0.0.0.0", dealer_port))
+    println!("Server {}: Waiting for dealer connection on port {}", server_id, dealer_to_server_port);
+    let dealer_listener = TcpListener::bind((server_addr, dealer_to_server_port))
         .map_err(|e| format!("Failed to bind dealer listener: {}", e))?;
-        
     let (dealer_stream, _) = dealer_listener.accept()
         .map_err(|e| format!("Failed to accept dealer connection: {}", e))?;
+
     // Set up dealer channel and receive FSS keys
     let mut dealer_channel = {
         dealer_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
@@ -771,14 +804,14 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
     };
     println!("Server {}: Dealer connected", server_id);
         
+    // Server 1 connects to Server 0
+    let server0_addr = &cli_config.network.server0_addr;
+    let server0_to_server1_port = cli_config.network.server0_to_server1_port;
     // Set up inter-server communication
     let mut other_server_channel = if is_server1 {
-        // Server 1 connects to Server 0
-        let server0_addr = &cli_config.network.server0_addr;
-        let server0_port = cli_config.network.server0_port;
-        
-        println!("Server {}: Connecting to Server 0 at {}:{}", server_id, server0_addr, server0_port);
-        let other_server_stream = std::net::TcpStream::connect((server0_addr.as_str(), server0_port))
+
+        println!("Server {}: Connecting to Server 0 at {}:{}", server_id, server0_addr, server0_to_server1_port);
+        let other_server_stream = std::net::TcpStream::connect((server0_addr.as_str(), server0_to_server1_port))
             .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
         
         let channel = {
@@ -790,11 +823,8 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
         println!("Server {}: Connected to Server 0", server_id);
         channel
     } else {
-        // Server 0 binds and waits for Server 1
-        let server0_port = cli_config.network.server0_port;
-        
-        println!("Server {}: Waiting for Server 1 connection on port {}", server_id, server0_port);
-        let server_listener = TcpListener::bind(("0.0.0.0", server0_port))
+        println!("Server {}: Waiting for Server 1 connection on port {}", server_id, server0_to_server1_port);
+        let server_listener = TcpListener::bind((server0_addr.as_str(), server0_to_server1_port))
             .map_err(|e| format!("Failed to bind server listener: {}", e))?;
         
         let (other_server_stream, _) = server_listener.accept()
@@ -816,27 +846,68 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
         let query_points = load_query_points(&cli_config.query_file)?;
         
         // Run the protocol for known dictionary
+        let protocol_start = Instant::now();
         let results = protocol.run_server_known_dictionary(
             &shares,
             &query_points,
             &mut other_server_channel,
             &mut dealer_channel,
         )?;
+        let protocol_time = protocol_start.elapsed();
         
         println!("Server {}: Protocol execution completed", server_id);
         println!("Results: {:?}", results);
+        
+        // Print performance metrics
+        let total_time = start_time.elapsed();
+        let (other_server_bytes_sent, other_server_bytes_received) = other_server_channel.get_communication_stats();
+        let (dealer_bytes_sent, dealer_bytes_received) = dealer_channel.get_communication_stats();
+        
+        println!("\n=== Server {} Performance Summary ===", server_id);
+        println!("📊 Protocol execution time: {:.2?}", protocol_time);
+        println!("📊 Total server time: {:.2?}", total_time);
+        println!("📡 Communication with other server:");
+        println!("   Bytes sent: {} bytes ({:.2} KB)", other_server_bytes_sent, other_server_bytes_sent as f64 / 1024.0);
+        println!("   Bytes received: {} bytes ({:.2} KB)", other_server_bytes_received, other_server_bytes_received as f64 / 1024.0);
+        println!("📡 Communication with dealer:");
+        println!("   Bytes sent: {} bytes ({:.2} KB)", dealer_bytes_sent, dealer_bytes_sent as f64 / 1024.0);
+        println!("   Bytes received: {} bytes ({:.2} KB)", dealer_bytes_received, dealer_bytes_received as f64 / 1024.0);
+        println!("📡 Total communication: {} bytes ({:.2} KB)", 
+                 other_server_bytes_sent + other_server_bytes_received + dealer_bytes_sent + dealer_bytes_received,
+                 (other_server_bytes_sent + other_server_bytes_received + dealer_bytes_sent + dealer_bytes_received) as f64 / 1024.0);
+        
     } else {
         println!("Server {}: Running unknown dictionary protocol...", server_id);
         // Run the protocol for unknown dictionary
+        let protocol_start = Instant::now();
         let heavy_hitters = protocol.run_server_unknown_dictionary(
             &shares,
             is_server1,
             &mut other_server_channel,
             &mut dealer_channel,
         )?;
+        let protocol_time = protocol_start.elapsed();
         
         println!("Server {}: Protocol execution completed", server_id);
         println!("Found {} heavy hitters: {:?}", heavy_hitters.len(), heavy_hitters);
+        
+        // Print performance metrics
+        let total_time = start_time.elapsed();
+        let (other_server_bytes_sent, other_server_bytes_received) = other_server_channel.get_communication_stats();
+        let (dealer_bytes_sent, dealer_bytes_received) = dealer_channel.get_communication_stats();
+        
+        println!("\n=== Server {} Performance Summary ===", server_id);
+        println!("📊 Protocol execution time: {:.2?}", protocol_time);
+        println!("📊 Total server time: {:.2?}", total_time);
+        println!("📡 Communication with other server:");
+        println!("   Bytes sent: {} bytes ({:.2} KB)", other_server_bytes_sent, other_server_bytes_sent as f64 / 1024.0);
+        println!("   Bytes received: {} bytes ({:.2} KB)", other_server_bytes_received, other_server_bytes_received as f64 / 1024.0);
+        println!("📡 Communication with dealer:");
+        println!("   Bytes sent: {} bytes ({:.2} KB)", dealer_bytes_sent, dealer_bytes_sent as f64 / 1024.0);
+        println!("   Bytes received: {} bytes ({:.2} KB)", dealer_bytes_received, dealer_bytes_received as f64 / 1024.0);
+        println!("📡 Total communication: {} bytes ({:.2} KB)", 
+                 other_server_bytes_sent + other_server_bytes_received + dealer_bytes_sent + dealer_bytes_received,
+                 (other_server_bytes_sent + other_server_bytes_received + dealer_bytes_sent + dealer_bytes_received) as f64 / 1024.0);
     }
     
     Ok(())

@@ -7,15 +7,14 @@ use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, Shar
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
-use crate::fuzzy_match::client::{Client, ClientConfig};
+use crate::fuzzy_match::client::{Client};
 use crate::data_structures::modint::ModInt;
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb};
 use crate::channel::CommTrackingChannel;
-use scuttlebutt::AesRng;
+use scuttlebutt::{AbstractChannel, AesRng};
 use std::thread::current;
-use std::time::Instant;
-use std::sync::mpsc;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,19 +62,32 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_channel: &mut CommTrackingChannel,
     ) -> Result<(Vec<SharedRange>), String> {
-        // Receive shares using binary deserialization
+        // Receive shares using custom serialization
         let mut len_bytes = [0u8; 8];
         client_channel.read_bytes(&mut len_bytes)
             .map_err(|e| format!("Failed to read length from client: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
-    
+
         let mut shares_data = vec![0u8; len];
         client_channel.read_bytes(&mut shares_data)
             .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
-    
-        let shares: Vec<SharedRange> = bincode::deserialize(&shares_data)
-            .map_err(|e| format!("Failed to deserialize shares: {}", e))?;
 
+        // Custom deserialization for Vec<SharedRange>
+        let mut bytes = &shares_data[..];
+        if bytes.len() < 4 {
+            return Err("Too short for Vec<SharedRange> length".to_string());
+        }
+        let mut arr = [0u8; 4];
+        arr.copy_from_slice(&bytes[..4]);
+        let count = u32::from_le_bytes(arr) as usize;
+        bytes = &bytes[4..];
+        let modulus = 1u128 << self.config.share_config.output_bit_length;
+        let mut shares = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (share, rest) = SharedRange::from_bytes(bytes, modulus)?;
+            shares.push(share);
+            bytes = rest;
+        }
         Ok(shares)
     }
 
@@ -346,42 +358,42 @@ impl FuzzyHeavyHittersProtocol {
 
     /// Request FSS keys from dealer
     fn request_dealer(&self, signal: DealerSignal, dealer_channel: &mut CommTrackingChannel) -> Result<FssKeyBatch, String> {
-        // Send request signal to dealer
-        let signal_data = bincode::serialize(&signal)
-            .map_err(|e| format!("Failed to serialize dealer request: {}", e))?;
-        
-        // Write length first, then data
-        let len_bytes = (signal_data.len() as u64).to_le_bytes();
+        // Send DealerSignal using custom serialization
+        let signal_bytes = signal.to_bytes();
+        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
         dealer_channel.write_bytes(&len_bytes)
-            .map_err(|e| format!("Failed to write request length: {}", e))?;
-        dealer_channel.write_bytes(&signal_data)
-            .map_err(|e| format!("Failed to write request data: {}", e))?;
+            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+        dealer_channel.write_bytes(&signal_bytes)
+            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
         dealer_channel.flush()
-            .map_err(|e| format!("Failed to flush request: {}", e))?;
-        
+            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+
         // Receive FSS key batch from dealer
         let mut len_bytes = [0u8; 8];
         dealer_channel.read_bytes(&mut len_bytes)
             .map_err(|e| format!("Failed to read key batch length: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
-        
+
         let mut batch_data = vec![0u8; len];
         dealer_channel.read_bytes(&mut batch_data)
             .map_err(|e| format!("Failed to read key batch data: {}", e))?;
-        
-        let batch: FssKeyBatch = bincode::deserialize(&batch_data)
-            .map_err(|e| format!("Failed to deserialize key batch: {}", e))?;
-        
-        Ok(batch)
+
+        // Use output modulus from threshold config for deserialization
+        let modulus = 1u128 << self.config.threshold_config.output_bit_length;
+        FssKeyBatch::from_bytes(&batch_data, modulus)
     }
 
     /// Send shutdown signal to dealer
     fn shutdown_dealer(&self, dealer_channel: &mut CommTrackingChannel) -> Result<(), String> {
-        self.request_dealer(DealerSignal::Shutdown, dealer_channel)
-            .map(|_| ()) // Ignore response for shutdown
-            .or_else(|e| {
-                println!("Warning: Failed to send shutdown signal to dealer: {}", e);
-                Ok(()) // Don't fail on shutdown errors
-            })
+        // Send shutdown signal using custom serialization
+        let signal_bytes = DealerSignal::Shutdown.to_bytes();
+        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
+        dealer_channel.write_bytes(&len_bytes)
+            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+        dealer_channel.write_bytes(&signal_bytes)
+            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
+        dealer_channel.flush()
+            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+        Ok(())
     }
 }

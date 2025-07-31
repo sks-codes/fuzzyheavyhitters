@@ -12,13 +12,42 @@ const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
 ];
 
 // N here is P+1, where P is the distance Lp norm
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct DistanceFSSKey<const N: usize> {
     left_fss: LIntervalFSSKey<N>,
     right_fss: RIntervalFSSKey<N>,
 }
 
 impl<const N: usize> DistanceFSSKey<N> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let left_bytes = self.left_fss.to_bytes(modulus);
+        let right_bytes = self.right_fss.to_bytes(modulus);
+        let mut out = Vec::new();
+        out.extend_from_slice(&(left_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&left_bytes);
+        out.extend_from_slice(&(right_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&right_bytes);
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        let mut offset = 0;
+        let left_len = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
+        offset += 4;
+        let (left_fss, _) = LIntervalFSSKey::<N>::from_bytes(&bytes[offset..offset+left_len], modulus);
+        offset += left_len;
+        let right_len = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
+        offset += 4;
+        let (right_fss, _) = RIntervalFSSKey::<N>::from_bytes(&bytes[offset..offset+right_len], modulus);
+        offset += right_len;
+        (
+            Self {
+                left_fss,
+                right_fss,
+            },
+            offset
+        )
+    }
     pub fn gen_distance_fss_key(
         x: u128,
         x_bits: &[bool],

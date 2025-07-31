@@ -72,17 +72,11 @@ pub struct NetworkConfig {
     /// Address for server 1
     pub server1_addr: String,
     /// Port for server 0
-    pub server0_port: u16,
-    /// Port for server 1
-    pub server1_port: u16,
-    /// Address for dealer
-    pub dealer_addr: String,
+    pub server0_to_server1_port: u16,
     /// Port for dealer to server 0 communication
     pub dealer_to_server0_port: u16,
     /// Port for dealer to server 1 communication
     pub dealer_to_server1_port: u16,
-    /// Address for client
-    pub client_addr: String,
     /// Port for client to server 0 communication
     pub client_to_server0_port: u16,
     /// Port for client to server 1 communication

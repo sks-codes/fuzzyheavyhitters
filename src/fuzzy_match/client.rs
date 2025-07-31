@@ -6,7 +6,6 @@
 use crate::channel::CommTrackingChannel;
 use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange};
 use crate::fuzzy_match::protocol::ProtocolConfig;
-use serde::{Deserialize, Serialize};
 use scuttlebutt::AbstractChannel;
 
 /// Client structure that handles client-side operations
@@ -50,30 +49,34 @@ impl Client {
         channel_server0: &mut CommTrackingChannel,
         channel_server1: &mut CommTrackingChannel,
     ) -> Result<(), String> {
-        // Send shares using binary serialization
-        let shares0_data = bincode::serialize(&shares_server0)
-            .map_err(|e| format!("Failed to serialize shares for server 0: {}", e))?;
-        let shares1_data = bincode::serialize(&shares_server1)
-            .map_err(|e| format!("Failed to serialize shares for server 1: {}", e))?;
-    
-        // Send to server 0
-        let len_bytes = (shares0_data.len() as u64).to_le_bytes();
+        // Custom serialization for Vec<SharedRange>
+        let modulus = 1u128 << self.share_phase.config.output_bit_length;
+        let mut data = Vec::new();
+        data.extend_from_slice(&(shares_server0.len() as u32).to_le_bytes());
+        for share in &shares_server0 {
+            data.extend_from_slice(&share.to_bytes());
+        }
+        let len_bytes = (data.len() as u64).to_le_bytes();
         channel_server0.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to send length to server 0: {}", e))?;
-        channel_server0.write_bytes(&shares0_data)
+        channel_server0.write_bytes(&data)
             .map_err(|e| format!("Failed to send shares to server 0: {}", e))?;
         channel_server0.flush()
             .map_err(|e| format!("Failed to flush to server 0: {}", e))?;
-    
-        // Send to server 1
-        let len_bytes = (shares1_data.len() as u64).to_le_bytes();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&(shares_server1.len() as u32).to_le_bytes());
+        for share in &shares_server1 {
+            data.extend_from_slice(&share.to_bytes());
+        }
+        let len_bytes = (data.len() as u64).to_le_bytes();
         channel_server1.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to send length to server 1: {}", e))?;
-        channel_server1.write_bytes(&shares1_data)
+        channel_server1.write_bytes(&data)
             .map_err(|e| format!("Failed to send shares to server 1: {}", e))?;
         channel_server1.flush()
             .map_err(|e| format!("Failed to flush to server 1: {}", e))?;
-        
+
         Ok(())
     }
 }

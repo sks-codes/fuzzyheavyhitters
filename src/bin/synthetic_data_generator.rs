@@ -64,29 +64,17 @@ fn export_dataset(dataset: &counttree::synthetic_data::SyntheticDataset, output_
     // Create output directory if it doesn't exist
     fs::create_dir_all(output_dir)?;
     
-    // Export client points
+    // Export client points (all points flattened from clusters)
     let client_points_path = Path::new(output_dir).join("client_points.json");
     let client_points_json = serde_json::to_string_pretty(&dataset.get_client_points())?;
     fs::write(&client_points_path, client_points_json)?;
     println!("📄 Client points exported to: {}", client_points_path.display());
     
-    // Export server query points (cluster centers)
-    let server_points_path = Path::new(output_dir).join("server_query_points.json");
+    // Export server points (cluster centers only, renamed from server_query_points)
+    let server_points_path = Path::new(output_dir).join("server_points.json");
     let server_points_json = serde_json::to_string_pretty(&dataset.get_server_query_points())?;
     fs::write(&server_points_path, server_points_json)?;
-    println!("📄 Server query points exported to: {}", server_points_path.display());
-    
-    // Export cluster information
-    let clusters_path = Path::new(output_dir).join("clusters.json");
-    let clusters_json = serde_json::to_string_pretty(&dataset.get_clusters())?;
-    fs::write(&clusters_path, clusters_json)?;
-    println!("📄 Cluster information exported to: {}", clusters_path.display());
-    
-    // Export complete dataset
-    let full_dataset_path = Path::new(output_dir).join("full_dataset.json");
-    let full_dataset_json = serde_json::to_string_pretty(dataset)?;
-    fs::write(&full_dataset_path, full_dataset_json)?;
-    println!("📄 Full dataset exported to: {}", full_dataset_path.display());
+    println!("📄 Server points exported to: {}", server_points_path.display());
     
     // Export summary statistics
     let stats_path = Path::new(output_dir).join("dataset_stats.txt");
@@ -94,8 +82,8 @@ fn export_dataset(dataset: &counttree::synthetic_data::SyntheticDataset, output_
         "Synthetic Dataset Statistics\n\
          ============================\n\
          Total clusters: {}\n\
-         Total client points: {}\n\
-         Server query points: {}\n\
+         Total client points: {} (exact match to config)\n\
+         Server points (cluster centers): {}\n\
          Coordinate bounds: {:?}\n\
          Max cluster radius: {}\n\
          Dimensions: {}\n\n\
@@ -116,8 +104,18 @@ fn export_dataset(dataset: &counttree::synthetic_data::SyntheticDataset, output_
         ));
     }
     
+    // Verify total points match
+    let actual_total: usize = dataset.clusters.iter().map(|c| c.size).sum();
+    cluster_details.push_str(&format!("\nVerification: Sum of cluster sizes = {} (should equal {})\n", 
+                                     actual_total, dataset.config.total_points));
+    
     fs::write(&stats_path, stats_content + &cluster_details)?;
     println!("📄 Dataset statistics exported to: {}", stats_path.display());
+    
+    println!("\n✅ Export completed! Generated files:");
+    println!("   - client_points.json: {} points for client", dataset.total_client_points);
+    println!("   - server_points.json: {} cluster centers for server queries", dataset.server_query_points.len());
+    println!("   - dataset_stats.txt: Summary and verification info");
     
     Ok(())
 }

@@ -60,6 +60,7 @@ pub enum ThresholdPhaseError {
 }
 
 /// Threshold phase handler
+#[derive(Debug, Clone)]
 pub struct ThresholdPhase {
     config: ThresholdConfig,
 }

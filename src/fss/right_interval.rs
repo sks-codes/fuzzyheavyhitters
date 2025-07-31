@@ -20,7 +20,7 @@ use std::cell::RefCell;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
-#[derive(Clone, Debug, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Copy)]
 pub struct RIntervalFSSCW<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], 
                 [u8; AES_BLOCK_SIZE]),
@@ -32,7 +32,78 @@ pub struct RIntervalFSSCW<const N: usize> {
                  (Pair<ModInt>, Pair<ModInt>)),
 }
 
-#[derive(Clone, Debug, Copy, serde::Serialize, serde::Deserialize)]
+impl<const N: usize> RIntervalFSSCW<N> {
+    pub fn to_bytes(&self, modulus: u128) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.seeds.0);
+        out.extend_from_slice(&self.seeds.1);
+        let mut bits_byte = 0u8;
+        bits_byte |= (self.bits.0.first as u8) << 0;
+        bits_byte |= (self.bits.0.second as u8) << 1;
+        bits_byte |= (self.bits.1.first as u8) << 2;
+        bits_byte |= (self.bits.1.second as u8) << 3;
+        out.push(bits_byte);
+        out.extend(self.ys.0.0.to_bytes());
+        out.extend(self.ys.0.1.to_bytes());
+        out.extend(self.ys.1.0.to_bytes());
+        out.extend(self.ys.1.1.to_bytes());
+        for pair in [&self.y_bits.0, &self.y_bits.1] {
+            for mint in [&pair.first, &pair.second] {
+                let mut buf = [0u8; 16];
+                let bytes = mint.to_u128().to_le_bytes();
+                buf.copy_from_slice(&bytes);
+                out.extend_from_slice(&buf);
+            }
+        }
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        let mut offset = 0;
+        let mut seeds0 = [0u8; AES_BLOCK_SIZE];
+        let mut seeds1 = [0u8; AES_BLOCK_SIZE];
+        seeds0.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        offset += AES_BLOCK_SIZE;
+        seeds1.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        offset += AES_BLOCK_SIZE;
+        let bits_byte = bytes[offset];
+        offset += 1;
+        let bits = (
+            Pair::new((bits_byte & 0x1) != 0, (bits_byte & 0x2) != 0),
+            Pair::new((bits_byte & 0x4) != 0, (bits_byte & 0x8) != 0),
+        );
+        let (ys00, used00) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used00;
+        let (ys01, used01) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used01;
+        let (ys10, used10) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used10;
+        let (ys11, used11) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used11;
+        let mut y_bits = (
+            Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
+            Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
+        );
+        for pair in [&mut y_bits.0, &mut y_bits.1] {
+            for mint in [&mut pair.first, &mut pair.second] {
+                let val = u128::from_le_bytes(bytes[offset..offset+16].try_into().unwrap());
+                *mint = ModInt::new(val, modulus);
+                offset += 16;
+            }
+        }
+        (
+            RIntervalFSSCW {
+                seeds: (seeds0, seeds1),
+                bits,
+                ys: ((ys00, ys01), (ys10, ys11)),
+                y_bits,
+            },
+            offset
+        )
+    }
+}
+
+#[derive(Clone, Debug, Copy)]
 pub struct RIntervalFSSData<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
     pub bits: (Pair<bool>, Pair<bool>),
@@ -40,11 +111,51 @@ pub struct RIntervalFSSData<const N: usize> {
     pub y_bits: (Pair<ModInt>, Pair<ModInt>),
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct RIntervalFSSKey<const N: usize> {
     pub key_idx: bool,
     pub root_seed: [u8; AES_BLOCK_SIZE],
     pub cor_words: Vec<RIntervalFSSCW<N>>,
+}
+
+impl<const N: usize> RIntervalFSSKey<N> {
+    pub fn to_bytes(&self, modulus: u128) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(self.key_idx as u8);
+        out.extend_from_slice(&self.root_seed);
+        let num_words = self.cor_words.len() as u32;
+        out.extend_from_slice(&num_words.to_le_bytes());
+        for cw in &self.cor_words {
+            let cw_bytes = cw.to_bytes(modulus);
+            out.extend(cw_bytes);
+        }
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        let mut offset = 0;
+        let key_idx = bytes[offset] != 0;
+        offset += 1;
+        let mut root_seed = [0u8; AES_BLOCK_SIZE];
+        root_seed.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        offset += AES_BLOCK_SIZE;
+        let num_words = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
+        offset += 4;
+        let mut cor_words = Vec::with_capacity(num_words);
+        for _ in 0..num_words {
+            let (cw, used) = RIntervalFSSCW::<N>::from_bytes(&bytes[offset..], modulus);
+            cor_words.push(cw);
+            offset += used;
+        }
+        (
+            RIntervalFSSKey {
+                key_idx,
+                root_seed,
+                cor_words,
+            },
+            offset
+        )
+    }
 }
 
 
