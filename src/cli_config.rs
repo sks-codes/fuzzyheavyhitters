@@ -49,6 +49,8 @@ pub struct ProtocolParameters {
     pub check_method: String,
     /// Distance metric ("Linf", "L1", "L2", "L3")
     pub distance_metric: String,
+    /// Number of clients participating in the protocol
+    pub num_clients: usize,
     /// OKVS parameters (if using OKVS sharing)
     pub okvs: Option<OkvsConfig>,
 }
@@ -182,6 +184,56 @@ impl CliConfig {
             threshold_config,
             threshold: self.protocol.threshold,
             delta: self.protocol.delta,
+            num_clients: self.protocol.num_clients,
+        })
+    }
+
+    /// Convert CLI config to share config for client
+    pub fn to_share_config(&self) -> Result<ShareConfig, String> {
+        // Convert share method and data
+        let (share_method, share_data) = match self.protocol.share_method.as_str() {
+            "OKVS" => {
+                // Get OKVS configuration
+                let okvs_config = self.protocol.okvs.as_ref()
+                    .ok_or("OKVS configuration required for OKVS share method")?;
+
+                let share_data = ShareData::OKVS {
+                    r1: okvs_config.r1,
+                    r2: okvs_config.r2,
+                };
+                
+                (ShareMethod::OKVS, share_data)
+            },
+            "FSS" => {
+                (ShareMethod::FSS, ShareData::FSS)
+            }
+            other => return Err(format!("Unsupported share method: {}", other)),
+        };
+
+        // Convert dictionary type
+        let dictionary_type = match self.protocol.dictionary_type.as_str() {
+            "Known" => DictionaryType::Known,
+            "Unknown" => DictionaryType::Unknown,
+            other => return Err(format!("Unsupported dictionary type: {}", other)),
+        };
+
+        // Convert distance metric based on the explicit distance_metric field
+        let distance_metric = match self.protocol.distance_metric.as_str() {
+            "Linf" => DistanceMetric::LInfinity,
+            "L1" => DistanceMetric::Lp { p: 1 },
+            "L2" => DistanceMetric::Lp { p: 2 },
+            "L3" => DistanceMetric::Lp { p: 3 },
+            other => return Err(format!("Unsupported distance metric: {}", other)),
+        };
+
+        Ok(ShareConfig {
+            method: share_method,
+            dictionary_type,
+            metric: distance_metric,
+            input_bit_length: self.protocol.input_bit_length,
+            output_bit_length: self.protocol.output_bit_length,
+            dimension: self.protocol.dimensions,
+            data: share_data,
         })
     }
 

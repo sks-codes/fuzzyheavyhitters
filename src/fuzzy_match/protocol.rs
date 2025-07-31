@@ -7,6 +7,7 @@ use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, Shar
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
+use crate::fuzzy_match::client::{Client, ClientConfig};
 use crate::data_structures::modint::ModInt;
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb};
 use crate::channel::CommTrackingChannel;
@@ -29,6 +30,8 @@ pub struct ProtocolConfig {
     pub threshold: u128,
     /// The delta value for fuzzy matching (L-infinity distance)
     pub delta: u128,
+    /// Number of clients participating in the protocol
+    pub num_clients: usize,
 }
 
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
@@ -36,153 +39,90 @@ pub struct ProtocolConfig {
 pub struct FuzzyHeavyHittersProtocol {
     config: ProtocolConfig,
     share_phase: SharePhase,
+    check_phase: CheckPhase,
+    threshold_phase: ThresholdPhase,
+    is_server1: bool,
 }
 
 impl FuzzyHeavyHittersProtocol {
     /// Create a new protocol instance
-    pub fn new(config: ProtocolConfig) -> Self {
+    pub fn new(config: ProtocolConfig, is_server1: bool) -> Self {
         let share_phase = SharePhase::new(config.share_config.clone());
-        
+        let check_phase = CheckPhase::new(config.check_config.clone(), share_phase.clone());
+        let threshold_phase = ThresholdPhase::new(config.threshold_config.clone());
         Self {
             config,
             share_phase,
+            check_phase,
+            threshold_phase,
+            is_server1,
         }
     }
 
-    /// Generate shares for all client points
-    pub fn generate_client_shares(&self, client_points: &[Vec<u128>]) 
-        -> Result<(Vec<SharedRange>, Vec<SharedRange>), String> {
-        let mut shares_server0 = Vec::new();
-        let mut shares_server1 = Vec::new();
+    pub fn receive_client_shares(
+        &self,
+        client_channel: &mut CommTrackingChannel,
+    ) -> Result<(Vec<SharedRange>), String> {
+        // Receive shares using binary deserialization
+        let mut len_bytes = [0u8; 8];
+        client_channel.read_bytes(&mut len_bytes)
+            .map_err(|e| format!("Failed to read length from client: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+    
+        let mut shares_data = vec![0u8; len];
+        client_channel.read_bytes(&mut shares_data)
+            .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
+    
+        let shares: Vec<SharedRange> = bincode::deserialize(&shares_data)
+            .map_err(|e| format!("Failed to deserialize shares: {}", e))?;
 
-        for client_point in client_points {
-            let (share0, share1) = self.share_phase.share_range(client_point, self.config.delta)
-                .map_err(|e| format!("Failed to generate shares: {:?}", e))?;
-            
-            shares_server0.push(share0);
-            shares_server1.push(share1);
-        }
-
-        Ok((shares_server0, shares_server1))
+        Ok(shares)
     }
 
     /// Run the protocol as a specific server (0 or 1)
     pub fn run_server_known_dictionary(
         &self,
-        server_id: u8,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
-        threshold_data_list: &[ThresholdData],
-        check_data_list: &[CheckData],
-        mut channel: CommTrackingChannel,
+        other_server_channel: &mut CommTrackingChannel,
+        dealer_channel: &mut CommTrackingChannel,
     ) -> Result<Vec<bool>, String> {
         let mut rng = AesRng::new();
         
-        let share_phase = SharePhase::new(self.config.share_config.clone());
-        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
-        let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
+        // Convert query points from u128 to Vec<Vec<bool>>
+        let query_point_sets: Vec<Vec<Vec<bool>>> = query_points.iter()
+            .map(|query_point| {
+                query_point.iter()
+                    .map(|&point| {
+                        u128_to_bits_msb(point, self.config.share_config.input_bit_length)
+                    })
+                    .collect()
+            })
+            .collect();
         
-        let mut server_bits = Vec::new();
-        
-        for (query_idx, query_point) in query_points.iter().enumerate() {
-            // Run check phase for all client shares
-            let mut match_results = Vec::new();
-            
-            // Convert query point from u128 to Vec<bool>
-            let query_point_bits: Vec<Vec<bool>> = query_point.iter()
-                .map(|&point| {
-                    u128_to_bits_msb(point, self.config.share_config.input_bit_length)
-                })
-                .collect();
-            
-            for share in client_shares {
-                let result = check_phase.run_fuzzy_match_check(
-                    share,
-                    &query_point_bits,
-                    &check_data_list[query_idx],
-                    &mut channel,
-                    &mut rng,
-                ).map_err(|e| format!("Check phase failed: {:?}", e))?;
-                
-                match_results.push(result);
-            }
-            
-            // Run threshold phase
-            let server_bit = threshold_phase.compare_with_threshold(
-                &match_results,
-                self.config.threshold,
-                &threshold_data_list[query_idx],
-                &mut channel,
-                &mut rng,
-            ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-            
-            server_bits.push(server_bit);
-        }
+        // Use batch_test_prefix_sets_threshold to process all query points
+        let final_results = self.batch_test_prefix_sets_threshold(
+            &query_point_sets,
+            client_shares,
+            other_server_channel,
+            dealer_channel,
+            &mut rng,
+        )?;
 
-        // Exchange threshold bits between servers
-        let final_results = if server_id == 0 {
-            // Server 0: send bits first, then receive
-            send_bool_vec(&mut channel, &server_bits).map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
-            let server1_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
-            
-            // Compute final results (XOR the bits)
-            server_bits.iter()
-                .zip(server1_bits.iter())
-                .map(|(bit0, bit1)| bit0 ^ bit1)
-                .collect()
-        } else {
-            // Server 1: receive bits first, then send
-            let server0_bits = receive_bool_vec(&mut channel).map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
-            send_bool_vec(&mut channel, &server_bits).map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
-            
-            // Compute final results (XOR the bits)
-            server0_bits.iter()
-                .zip(server_bits.iter())
-                .map(|(bit0, bit1)| bit0 ^ bit1)
-                .collect()
-        };
+        // Shutdown dealer at the end
+        self.shutdown_dealer(dealer_channel)?;
 
         Ok(final_results)
     }
 
-    /// Run the protocol for unknown dictionary case using binary search approach
-    /// This method finds the "frontier" of prefixes that exceed the threshold
-    /// Uses iterative extension: start with empty prefixes, then extend each heavy hitter by one bit at a time
-    /// 
-    /// # Parameters
-    /// * `client_shares_list` - Client shares for this server
-    /// * `threshold_data_list` - Threshold data for this server
-    /// * `stream` - Communication stream between servers
-    /// * `is_server1` - True if this is server 1 (garbler), false if server 0 (evaluator)
-    /// * `fss_dealer_receiver` - Optional receiver to get FSS key batches from dealer
-    /// * `fss_dealer_signal_sender` - Optional sender to signal the dealer for keys or shutdown
     pub fn run_server_unknown_dictionary(
         &self,
         client_shares_list: &[SharedRange],
-        threshold_data_list: &[ThresholdData],
-        mut channel: CommTrackingChannel,
         is_server1: bool,
-        fss_dealer_receiver: Option<mpsc::Receiver<FssKeyBatch>>,
-        fss_dealer_signal_sender: Option<mpsc::Sender<DealerSignal>>,
+        other_server_channel: &mut CommTrackingChannel,
+        dealer_channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Vec<u128>>, String> {
-        // Helper closure to shutdown dealer on both success and error
-        let shutdown_dealer = |is_server1: bool, sender: Option<mpsc::Sender<DealerSignal>>| {
-            if !is_server1 {
-                if let Some(signal_sender) = sender {
-                    if let Err(_) = signal_sender.send(DealerSignal::Shutdown) {
-                        println!("Warning: Failed to send shutdown signal to dealer");
-                    } else {
-                        println!("Server 0: Sent shutdown signal to FSS dealer");
-                    }
-                }
-            }
-        };
-
         let mut rng = AesRng::new();
-        
-        let share_phase = SharePhase::new(self.config.share_config.clone());
-        let check_phase = CheckPhase::new(self.config.check_config.clone(), share_phase.clone());
-        let threshold_phase = ThresholdPhase::new(self.config.threshold_config.clone());
         
         let max_bit_length = self.config.share_config.input_bit_length;
         let dimension = self.config.share_config.dimension;
@@ -220,24 +160,13 @@ impl FuzzyHeavyHittersProtocol {
             }
 
             // Batch process all candidates
-            let exceeds_threshold_results = match self.batch_test_prefix_sets_threshold(
+            let exceeds_threshold_results = self.batch_test_prefix_sets_threshold(
                 &candidate_prefix_sets,
                 client_shares_list,
-                &threshold_data_list[0], // For simplicity, using same threshold data for all tests
-                &check_phase,
-                &threshold_phase,
-                &mut channel,
+                other_server_channel,
+                dealer_channel,
                 &mut rng,
-                is_server1,
-                &fss_dealer_receiver,
-                &fss_dealer_signal_sender,
-            ) {
-                Ok(results) => results,
-                Err(e) => {
-                    shutdown_dealer(is_server1, fss_dealer_signal_sender);
-                    return Err(e);
-                }
-            };
+            )?;
 
             println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
 
@@ -267,56 +196,39 @@ impl FuzzyHeavyHittersProtocol {
             })
             .collect();
 
-        // Shutdown the dealer if we have a shutdown sender (only server 0 should do this)
-        shutdown_dealer(is_server1, fss_dealer_signal_sender);
+        // Shutdown dealer at the end
+        self.shutdown_dealer(dealer_channel)?;
 
         Ok(final_heavy_hitters)
     }
 
-    /// Batch test if multiple prefix sets exceed the threshold when evaluated against all client shares
-    /// This processes all candidates in a batch and exchanges results efficiently
     fn batch_test_prefix_sets_threshold(
         &self,
         prefix_sets: &[Vec<Vec<bool>>],
         client_shares: &[SharedRange],
-        threshold_data: &ThresholdData,
-        check_phase: &CheckPhase,
-        threshold_phase: &ThresholdPhase,
-        channel: &mut CommTrackingChannel,
+        other_server_channel: &mut CommTrackingChannel,
+        dealer_channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-        is_server1: bool,
-        fss_dealer_receiver: &Option<mpsc::Receiver<FssKeyBatch>>,
-        fss_dealer_signal_sender: &Option<mpsc::Sender<DealerSignal>>,
     ) -> Result<Vec<bool>, String> {
         let mut server_bits = Vec::new();
 
         // Process each prefix set and collect our server's results
         for (prefix_idx, prefix_set) in prefix_sets.iter().enumerate() {
-            // Get FSS keys from dealer if using LpIntervalFSS check method
-            let check_data_list = if let Some(receiver) = fss_dealer_receiver {
-                
-                // Only server 0 should request keys from dealer (as per dealer coordinator model)
-                if !is_server1 {
-                    if let Some(signal_sender) = fss_dealer_signal_sender {
-                        signal_sender.send(DealerSignal::RequestKeys)
-                            .map_err(|_| "Failed to send key request signal to dealer")?;
-                    }
-                }
-                
-                // Get a batch of FSS keys from the dealer
-                let batch = receiver.recv()
-                    .map_err(|_| "Failed to receive FSS keys from dealer")?;
+            // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
+            let check_data_list = if matches!(self.config.check_config.method, CheckMethod::LpIntervalFSS) {
+                // Request check FSS keys from dealer
+                let batch = self.request_dealer(DealerSignal::RequestCheckKeys, dealer_channel)?;
                 
                 if batch.keys.len() < client_shares.len() {
                     return Err(format!("Dealer provided {} keys but {} are needed", 
                                      batch.keys.len(), client_shares.len()));
                 }
                 
-                // Create a CheckData for each client share using corresponding FSS key
+                // Create CheckData for each client share using corresponding FSS key
                 let mut check_data_vec = Vec::new();
                 for i in 0..client_shares.len() {
                     check_data_vec.push(CheckData::LpIntervalFSS {
-                        threshold: self.config.delta, // Use configured delta as threshold
+                        threshold: self.config.delta,
                         fss_key: batch.keys[i].clone(),
                         random_value: batch.random_values[i],
                     });
@@ -329,7 +241,7 @@ impl FuzzyHeavyHittersProtocol {
                     CheckMethod::LpGarbledCircuits => CheckData::LpGarbledCircuits {
                         threshold: self.config.delta,
                     },
-                    CheckMethod::LpIntervalFSS => return Err("FSS dealer is required for LpIntervalFSS check method".to_string()),
+                    CheckMethod::LpIntervalFSS => unreachable!(), // Already handled above
                 };
                 vec![single_check_data; client_shares.len()]
             };
@@ -338,37 +250,56 @@ impl FuzzyHeavyHittersProtocol {
             let mut match_results = Vec::new();
             
             for (i, share) in client_shares.iter().enumerate() {
-                let result = check_phase.run_fuzzy_match_check(
+                let result = self.check_phase.run_fuzzy_match_check(
                     share,
                     prefix_set,
                     &check_data_list[i], // Use the corresponding CheckData for this client share
-                    channel,
+                    other_server_channel,
                     rng,
                 ).map_err(|e| format!("Check phase failed: {:?}", e))?;
                 
                 match_results.push(result);
             }
 
+            // Handle ThresholdData - get from dealer if using IntervalFSS, otherwise use provided data
+            let threshold_data_to_use = if matches!(self.config.threshold_config.method, ThresholdMethod::IntervalFSS) {
+                // Request threshold FSS keys from dealer
+                let batch = self.request_dealer(DealerSignal::RequestThresholdKeys, dealer_channel)?;
+                
+                if batch.keys.is_empty() {
+                    return Err("Dealer provided no threshold keys".to_string());
+                }
+                
+                // Use the first key for threshold comparison (typically only need one per query)
+                ThresholdData::IntervalFSS {
+                    fss_key: batch.keys[0].clone(),
+                    random_value: batch.random_values[0],
+                }
+            } else {
+                // Use garbled circuits threshold data
+                ThresholdData::GarbledCircuits
+            };
+
             // Run threshold phase to check if results exceed threshold
-            let server_bit = threshold_phase.compare_with_threshold(
+            let server_bit = self.threshold_phase.compare_with_threshold(
                 &match_results,
                 self.config.threshold,
-                threshold_data,
-                channel,
+                &threshold_data_to_use,
+                other_server_channel,
                 rng,
             ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
             server_bits.push(server_bit);
         }
 
-        println!("Server {} computed bits: {:?}", if is_server1 { 1 } else { 0 }, server_bits);
+        println!("Server {} computed bits: {:?}", if self.is_server1 { 1 } else { 0 }, server_bits);
 
         // Batch exchange bits between servers to get final results
-        let final_results = if is_server1 {
+        let final_results = if self.is_server1 {
             // Server 1: receive bits from server 0, then send our bits
-            let server0_bits = receive_bool_vec(channel)
+            let server0_bits = receive_bool_vec(other_server_channel)
                 .map_err(|e| format!("Failed to receive bits from server 0: {:?}", e))?;
-            send_bool_vec(channel, &server_bits)
+            send_bool_vec(other_server_channel, &server_bits)
                 .map_err(|e| format!("Failed to send bits to server 0: {:?}", e))?;
             
             if server0_bits.len() != server_bits.len() {
@@ -381,9 +312,9 @@ impl FuzzyHeavyHittersProtocol {
                 .collect()
         } else {
             // Server 0: send our bits, then receive from server 1
-            send_bool_vec(channel, &server_bits)
+            send_bool_vec(other_server_channel, &server_bits)
                 .map_err(|e| format!("Failed to send bits to server 1: {:?}", e))?;
-            let server1_bits = receive_bool_vec(channel)
+            let server1_bits = receive_bool_vec(other_server_channel)
                 .map_err(|e| format!("Failed to receive bits from server 1: {:?}", e))?;
             
             if server1_bits.len() != server_bits.len() {
@@ -411,5 +342,46 @@ impl FuzzyHeavyHittersProtocol {
             return Err(format!("Expected 1 bit, got {}", bits.len()));
         }
         Ok(bits[0])
+    }
+
+    /// Request FSS keys from dealer
+    fn request_dealer(&self, signal: DealerSignal, dealer_channel: &mut CommTrackingChannel) -> Result<FssKeyBatch, String> {
+        // Send request signal to dealer
+        let signal_data = bincode::serialize(&signal)
+            .map_err(|e| format!("Failed to serialize dealer request: {}", e))?;
+        
+        // Write length first, then data
+        let len_bytes = (signal_data.len() as u64).to_le_bytes();
+        dealer_channel.write_bytes(&len_bytes)
+            .map_err(|e| format!("Failed to write request length: {}", e))?;
+        dealer_channel.write_bytes(&signal_data)
+            .map_err(|e| format!("Failed to write request data: {}", e))?;
+        dealer_channel.flush()
+            .map_err(|e| format!("Failed to flush request: {}", e))?;
+        
+        // Receive FSS key batch from dealer
+        let mut len_bytes = [0u8; 8];
+        dealer_channel.read_bytes(&mut len_bytes)
+            .map_err(|e| format!("Failed to read key batch length: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        
+        let mut batch_data = vec![0u8; len];
+        dealer_channel.read_bytes(&mut batch_data)
+            .map_err(|e| format!("Failed to read key batch data: {}", e))?;
+        
+        let batch: FssKeyBatch = bincode::deserialize(&batch_data)
+            .map_err(|e| format!("Failed to deserialize key batch: {}", e))?;
+        
+        Ok(batch)
+    }
+
+    /// Send shutdown signal to dealer
+    fn shutdown_dealer(&self, dealer_channel: &mut CommTrackingChannel) -> Result<(), String> {
+        self.request_dealer(DealerSignal::Shutdown, dealer_channel)
+            .map(|_| ()) // Ignore response for shutdown
+            .or_else(|e| {
+                println!("Warning: Failed to send shutdown signal to dealer: {}", e);
+                Ok(()) // Don't fail on shutdown errors
+            })
     }
 }

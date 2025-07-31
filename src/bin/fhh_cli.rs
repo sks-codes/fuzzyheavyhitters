@@ -9,6 +9,8 @@ use counttree::{
         dealer::{FssDealer, generate_fss_keys_for_threshold, generate_fss_keys_for_check},
         threshold_phase::ThresholdData,
         check_phase::{CheckData, CheckMethod},
+        client::Client,
+        share_phase::SharedRange,
     },
     cli_config::CliConfig,
     channel::CommTrackingChannel,
@@ -21,6 +23,7 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{BufReader, BufWriter};
 use std::fs;
 use serde_json;
+use bincode;
 
 /// Data structure for synthetic data
 #[derive(serde::Deserialize)]
@@ -45,345 +48,6 @@ fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse query file {}: {}", file_path, e))
-}
-
-/// Run the protocol with both servers in the same process (for testing)
-fn run_local_protocol(config_path: &str) -> Result<(), String> {
-    println!("Loading configuration from {}", config_path);
-    let cli_config = CliConfig::from_file(config_path)?;
-    
-    // Check dictionary type and route to appropriate handler
-    match cli_config.protocol.dictionary_type.as_str() {
-        "Known" => run_known_dictionary_protocol(cli_config),
-        "Unknown" => run_unknown_dictionary_protocol(cli_config),
-        other => Err(format!("Unsupported dictionary type: {}", other)),
-    }
-}
-
-/// Run the protocol for known dictionary case
-fn run_known_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
-    println!("Loading synthetic data from {}", cli_config.data_file);
-    let clusters = load_clusters(&cli_config.data_file)?;
-    
-    println!("Loading query points from {}", cli_config.query_file);
-    let query_points = load_query_points(&cli_config.query_file)?;
-    
-    // Extract client points from clusters
-    let mut client_points = Vec::new();
-    for cluster in &clusters {
-        for point in &cluster.points {
-            client_points.push(point.clone());
-        }
-    }
-
-    println!("Loaded {} client points from {} clusters", client_points.len(), clusters.len());
-    println!("Testing {} query points", query_points.len());
-    println!("List of query points: {:?}", query_points);
-    
-    // Create initial protocol configurations for both servers
-    let protocol_config_server0 = cli_config.to_protocol_config(false)?;
-    let protocol_config_server1 = cli_config.to_protocol_config(true)?;
-
-    let protocol_server0 = FuzzyHeavyHittersProtocol::new(protocol_config_server0);
-    let protocol_server1 = FuzzyHeavyHittersProtocol::new(protocol_config_server1);
-
-    let estimated_num_check = query_points.len() * client_points.len();
-    let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
-    let (check_data_list_server0, check_data_list_server1) = if cli_config.protocol.check_method == "Linf" {
-        let check_data_list_0 = vec![CheckData::Linf; estimated_num_check];
-        let check_data_list_1 = vec![CheckData::Linf; estimated_num_check];
-        (check_data_list_0, check_data_list_1)
-    } else if cli_config.protocol.check_method == "LpGarbledCircuits" {
-        let check_data_list_0 = vec![CheckData::LpGarbledCircuits {threshold: distance_threshold}; estimated_num_check];
-        let check_data_list_1 = vec![CheckData::LpGarbledCircuits {threshold: distance_threshold}; estimated_num_check];
-        (check_data_list_0, check_data_list_1)
-    } else if cli_config.protocol.check_method == "LpIntervalFSS" {
-        let (keys0, keys1, random_pairs) = generate_fss_keys_for_check(
-            distance_threshold,
-            cli_config.protocol.output_bit_length,
-            cli_config.protocol.check_output_bit_length,
-            estimated_num_check,
-        )?;
-        println!("Generated {} check FSS key pairs for LpIntervalFSS", keys0.len());
-        
-        // Create check data for each check using corresponding random pairs
-        let mut check_data_list_0 = Vec::new();
-        let mut check_data_list_1 = Vec::new();
-        
-        for ((fss_key_0, fss_key_1), (r0, r1)) in keys0.iter().zip(keys1.iter()).zip(random_pairs.iter()) {
-            check_data_list_0.push(CheckData::LpIntervalFSS {
-                threshold: distance_threshold,
-                fss_key: fss_key_0.clone(),
-                random_value: *r0,
-            });
-            check_data_list_1.push(CheckData::LpIntervalFSS {
-                threshold: distance_threshold,
-                fss_key: fss_key_1.clone(),
-                random_value: *r1,
-            });
-        }
-        
-        (check_data_list_0, check_data_list_1)
-    } else {
-        return Err(format!("Unsupported check method: {}", cli_config.protocol.check_method));
-    };
-
-    // Generate FSS keys and create threshold data if using IntervalFSS
-    let (threshold_data_list_server0, threshold_data_list_server1) = if cli_config.protocol.threshold_method == "IntervalFSS" {
-        println!("Generating FSS keys for IntervalFSS...");
-        let (keys0, keys1, random_pairs) = generate_fss_keys_for_threshold(
-            cli_config.protocol.threshold,
-            cli_config.protocol.check_output_bit_length,
-            query_points.len(),
-        )?;
-        
-        println!("Generated {} random pairs for FSS keys", random_pairs.len());
-        
-        // Create threshold data for each query using corresponding random pairs
-        let mut threshold_data_list_0 = Vec::new();
-        let mut threshold_data_list_1 = Vec::new();
-        
-        for ((fss_key_0, fss_key_1), (r0, r1)) in keys0.iter().zip(keys1.iter()).zip(random_pairs.iter()) {
-            threshold_data_list_0.push(ThresholdData::IntervalFSS {
-                fss_key: fss_key_0.clone(),
-                random_value: *r0,
-            });
-            threshold_data_list_1.push(ThresholdData::IntervalFSS {
-                fss_key: fss_key_1.clone(),
-                random_value: *r1,
-            });
-        }
-        
-        (threshold_data_list_0, threshold_data_list_1)
-    } else {
-        let threshold_data = ThresholdData::GarbledCircuits;
-        let threshold_data_list_0 = vec![threshold_data.clone(); query_points.len()];
-        let threshold_data_list_1 = vec![threshold_data; query_points.len()];
-        (threshold_data_list_0, threshold_data_list_1)
-    };
-
-    println!("Generating client shares...");
-    let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
-    
-    println!("Starting protocol execution...");
-    println!("Using {} threshold method", cli_config.protocol.threshold_method);
-    println!("Threshold: {}, Delta: {}", cli_config.protocol.threshold, cli_config.protocol.delta);
-    println!();
-    
-    // Create TCP socket pair for communication (using localhost)
-    let port = 9000u16; // Choose a port for local communication
-    let server_addr = SocketAddr::from(([127, 0, 0, 1], port));
-    
-    let listener = TcpListener::bind(server_addr)
-        .map_err(|e| format!("Failed to bind TCP listener: {}", e))?;
-    
-    let stream2 = TcpStream::connect(server_addr)
-        .map_err(|e| format!("Failed to connect to TCP server: {}", e))?;
-    
-    let (stream1, _) = listener.accept()
-        .map_err(|e| format!("Failed to accept TCP connection: {}", e))?;
-    
-    // Convert to CommTrackingChannel
-    let channel1 = {
-        stream1.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
-        let reader = BufReader::new(stream1.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
-        let writer = BufWriter::new(stream1);
-        CommTrackingChannel::new(reader, writer)
-    };
-    
-    let channel2 = {
-        stream2.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
-        let reader = BufReader::new(stream2.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
-        let writer = BufWriter::new(stream2);
-        CommTrackingChannel::new(reader, writer)
-    };
-    
-    // Run server 1 in a separate thread
-    let protocol_server1_clone = protocol_server1.clone();
-    let shares_server1_clone = shares_server1.clone();
-    let query_points_clone = query_points.clone();
-    let threshold_data_list_server1_clone = threshold_data_list_server1.clone();
-    let check_data_list_server1_clone = check_data_list_server1.clone();
-    
-    let server1_handle = thread::spawn(move || {
-        protocol_server1_clone.run_server_known_dictionary(
-            1,
-            &shares_server1_clone,
-            &query_points_clone,
-            &threshold_data_list_server1_clone,
-            &check_data_list_server1_clone,
-            channel1,
-        )
-    });
-    
-    // Run server 0 in main thread
-    let final_results = protocol_server0.run_server_known_dictionary(
-        0,
-        &shares_server0,
-        &query_points,
-        &threshold_data_list_server0,
-        &check_data_list_server0,
-        channel2,
-    )?;
-    
-    // Wait for server 1 to complete (both servers should return the same final results)
-    let _result_server1 = server1_handle.join()
-        .map_err(|e| format!("Server 1 thread failed: {:?}", e))??;
-    
-    // Display results and comparison with expected
-    display_known_dictionary_results(&cli_config, &query_points, &client_points, &final_results)?;
-    
-    Ok(())
-}
-
-/// Run the protocol for unknown dictionary case
-fn run_unknown_dictionary_protocol(cli_config: CliConfig) -> Result<(), String> {
-    println!("Loading synthetic data from {}", cli_config.data_file);
-    let clusters = load_clusters(&cli_config.data_file)?;
-    
-    // Extract client points from clusters
-    let mut client_points = Vec::new();
-    for cluster in &clusters {
-        for point in &cluster.points {
-            client_points.push(point.clone());
-        }
-    }
-    
-    println!("Loaded {} client points from {} clusters", client_points.len(), clusters.len());
-    println!("Running unknown dictionary search...");
-    
-    // Create initial protocol configurations for both servers
-    let protocol_config_server0 = cli_config.to_protocol_config(false)?;
-    let protocol_config_server1 = cli_config.to_protocol_config(true)?;
-
-    // For unknown dictionary, we need multiple threshold data instances for the search
-    // Generate enough for a reasonable search depth
-    let max_search_iterations = 100; // Adjust based on expected search complexity
-    
-    let (threshold_data_list_server0, threshold_data_list_server1) = if cli_config.protocol.threshold_method == "IntervalFSS" {
-        println!("Generating FSS keys for IntervalFSS...");
-        let (keys0, keys1, random_pairs) = generate_fss_keys_for_threshold(
-            cli_config.protocol.threshold,
-            cli_config.protocol.check_output_bit_length,
-            max_search_iterations,
-        )?;
-        
-        println!("Generated {} random pairs for FSS keys", random_pairs.len());
-        
-        // Create threshold data for search using corresponding random pairs
-        let mut threshold_data_list_0 = Vec::new();
-        let mut threshold_data_list_1 = Vec::new();
-        
-        for ((fss_key_0, fss_key_1), (r0, r1)) in keys0.iter().zip(keys1.iter()).zip(random_pairs.iter()) {
-            threshold_data_list_0.push(ThresholdData::IntervalFSS {
-                fss_key: fss_key_0.clone(),
-                random_value: *r0,
-            });
-            threshold_data_list_1.push(ThresholdData::IntervalFSS {
-                fss_key: fss_key_1.clone(),
-                random_value: *r1,
-            });
-        }
-        
-        (threshold_data_list_0, threshold_data_list_1)
-    } else {
-        let threshold_data = ThresholdData::GarbledCircuits;
-        let threshold_data_list_0 = vec![threshold_data.clone(); max_search_iterations];
-        let threshold_data_list_1 = vec![threshold_data; max_search_iterations];
-        (threshold_data_list_0, threshold_data_list_1)
-    };
-
-    let protocol_server0 = FuzzyHeavyHittersProtocol::new(protocol_config_server0);
-    let protocol_server1 = FuzzyHeavyHittersProtocol::new(protocol_config_server1);
-
-    println!("Generating client shares...");
-    let (shares_server0, shares_server1) = protocol_server0.generate_client_shares(&client_points)?;
-    
-    // Initialize FSS dealer for check phase if using LpIntervalFSS
-    let (fss_dealer_receiver_server0, fss_dealer_receiver_server1, fss_dealer_signal_sender_server0, fss_dealer_signal_sender_server1) = if cli_config.protocol.check_method == "LpIntervalFSS" {
-        println!("Starting FSS dealer for check phase...");
-        let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
-        let dealer = FssDealer::new(
-            client_points.len(),
-            distance_threshold,
-            cli_config.protocol.output_bit_length,
-            cli_config.protocol.check_output_bit_length,
-        )?;
-        
-        println!("FSS dealer started and ready");
-        
-        let (receiver_server0, receiver_server1, signal_sender_server0, signal_sender_server1) = dealer.into_channels();
-        (Some(receiver_server0), Some(receiver_server1), Some(signal_sender_server0), Some(signal_sender_server1))
-    } else {
-        (None, None, None, None)
-    };
-    
-    println!("Starting unknown dictionary search...");
-    println!("Using {} threshold method", cli_config.protocol.threshold_method);
-    println!("Threshold: {}, Delta: {}", cli_config.protocol.threshold, cli_config.protocol.delta);
-    println!();
-    
-    // Create TCP socket pair for communication (using localhost)
-    let port2 = 9001u16; // Choose a different port for second communication
-    let server_addr2 = SocketAddr::from(([127, 0, 0, 1], port2));
-    
-    let listener2 = TcpListener::bind(server_addr2)
-        .map_err(|e| format!("Failed to bind TCP listener: {}", e))?;
-    
-    let stream_b = TcpStream::connect(server_addr2)
-        .map_err(|e| format!("Failed to connect to TCP server: {}", e))?;
-    
-    let (stream_a, _) = listener2.accept()
-        .map_err(|e| format!("Failed to accept TCP connection: {}", e))?;
-    
-    // Convert to CommTrackingChannel
-    let channel_a = {
-        stream_a.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
-        let reader = BufReader::new(stream_a.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
-        let writer = BufWriter::new(stream_a);
-        CommTrackingChannel::new(reader, writer)
-    };
-    
-    let channel_b = {
-        stream_b.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
-        let reader = BufReader::new(stream_b.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
-        let writer = BufWriter::new(stream_b);
-        CommTrackingChannel::new(reader, writer)
-    };
-    
-    // Run server 1 in a separate thread
-    let shares_server1_clone = shares_server1.clone();
-    let threshold_data_list_server1_clone = threshold_data_list_server1.clone();
-    
-    let server1_handle = thread::spawn(move || {
-        protocol_server1.run_server_unknown_dictionary(
-            &shares_server1_clone,
-            &threshold_data_list_server1_clone,
-            channel_a,
-            true, // is_server1 = true
-            fss_dealer_receiver_server1, // Server 1 gets its own FSS dealer receiver
-            fss_dealer_signal_sender_server1, // Server 1 can signal the dealer
-        )
-    });
-    
-    // Run server 0 in main thread
-    let heavy_hitter_values = protocol_server0.run_server_unknown_dictionary(
-        &shares_server0,
-        &threshold_data_list_server0,
-        channel_b,
-        false, // is_server1 = false
-        fss_dealer_receiver_server0, // Server 0 gets its own FSS dealer receiver
-        fss_dealer_signal_sender_server0, // Server 0 can signal the dealer
-    )?;
-    
-    // Wait for server 1 to complete (both servers should return the same results)
-    let _result_server1 = server1_handle.join()
-        .map_err(|e| format!("Server 1 thread failed: {:?}", e))??;
-    
-    // Display results
-    display_unknown_dictionary_results(&cli_config, &client_points, &heavy_hitter_values)?;
-    
-    Ok(())
 }
 
 /// Calculate distance between two points based on the distance metric
@@ -911,6 +575,7 @@ fn generate_config(output_path: &str) -> Result<(), String> {
             threshold_method: "GarbledCircuits".to_string(), // Can also be "IntervalFSS"
             check_method: "Linf".to_string(), // Can also be "LpGarbledCircuits" or "LpIntervalFSS"
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
+            num_clients: 100, // Number of clients participating in the protocol
             okvs: Some(counttree::cli_config::OkvsConfig {
                 r1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
                 r2: [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
@@ -944,26 +609,45 @@ fn generate_config(output_path: &str) -> Result<(), String> {
 fn run_dealer(config_path: &str) -> Result<(), String> {
     println!("Starting FSS Dealer...");
     let cli_config = CliConfig::from_file(config_path)?;
-    
-    use counttree::fuzzy_match::dealer::NetworkedFssDealer;
-    
-    // For dealer, we need to estimate the number of clients
-    // This would typically be provided as a parameter or read from data
-    let estimated_clients = 1000; // Default estimate, could be made configurable
-    
+
     let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
-    
-    let dealer = NetworkedFssDealer::new(
-        cli_config.network.server0_addr,
-        cli_config.network.dealer_to_server0_port,
-        cli_config.network.server1_addr,
-        cli_config.network.dealer_to_server1_port,
+
+    let dealer = FssDealer::new(
         distance_threshold,
+        cli_config.protocol.threshold,
         cli_config.protocol.output_bit_length,
         cli_config.protocol.check_output_bit_length,
+        cli_config.protocol.num_clients,
     );
-    
-    dealer.run(estimated_clients)
+
+    // Connect to both servers
+    let server0_stream = TcpStream::connect((self.server0_addr.as_str(), self.server0_port))
+        .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
+        
+    let server1_stream = TcpStream::connect((self.server1_addr.as_str(), self.server1_port))
+        .map_err(|e| format!("Failed to connect to server 1: {}", e))?;
+
+    println!("Connected to both servers");
+
+    // Create channels
+    let mut channel_server0 = {
+        server0_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+        let reader = BufReader::new(server0_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+        let writer = BufWriter::new(server0_stream);
+        CommTrackingChannel::new(reader, writer)
+    };
+
+    let mut channel_server1 = {
+        server1_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+        let reader = BufReader::new(server1_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+        let writer = BufWriter::new(server1_stream);
+        CommTrackingChannel::new(reader, writer)
+    };
+
+    dealer.run(&mut channel_server0, &mut channel_server1)
+        .map_err(|e| format!("Failed to run dealer protocol: {}", e))?;
+
+    Ok(())
 }
 
 /// Run as client - generates shares and sends them to servers
@@ -982,21 +666,13 @@ fn run_client(config_path: &str) -> Result<(), String> {
             client_points.push(point.clone());
         }
     }
-    
     println!("Loaded {} client points from {} clusters", client_points.len(), clusters.len());
     
-    // Create protocol configuration
-    let protocol_config = cli_config.to_protocol_config(false)?; // Client uses server0 config
-    let protocol = FuzzyHeavyHittersProtocol::new(protocol_config);
-    
     // Generate client shares
-    println!("Generating client shares...");
-    let (shares_server0, shares_server1) = protocol.generate_client_shares(&client_points)?;
-    
-    // Connect to both servers and send shares
-    use std::net::TcpStream;
-    use std::io::{BufReader, BufWriter};
-    
+    let share_config = cli_config.to_share_config()?; // Client uses share config
+    let client = Client::new(share_config);
+    let (shares_server0, shares_server1) = client.generate_client_shares(&client_points, cli_config.protocol.delta)?;
+
     println!("Connecting to servers...");
     let server0_stream = TcpStream::connect((cli_config.network.server0_addr.as_str(), cli_config.network.client_to_server0_port))
         .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
@@ -1004,15 +680,13 @@ fn run_client(config_path: &str) -> Result<(), String> {
     let server1_stream = TcpStream::connect((cli_config.network.server1_addr.as_str(), cli_config.network.client_to_server1_port))
         .map_err(|e| format!("Failed to connect to server 1: {}", e))?;
     
-    // Send shares to server 0
+    // Create communication channels for both servers
     let mut channel_server0 = {
         server0_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
         let reader = BufReader::new(server0_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
         let writer = BufWriter::new(server0_stream);
         CommTrackingChannel::new(reader, writer)
     };
-    
-    // Send shares to server 1
     let mut channel_server1 = {
         server1_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
         let reader = BufReader::new(server1_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
@@ -1020,64 +694,30 @@ fn run_client(config_path: &str) -> Result<(), String> {
         CommTrackingChannel::new(reader, writer)
     };
     
+    // Send shares to both servers
     println!("Sending shares to servers...");
-    // Send shares using binary serialization
-    let shares0_data = bincode::serialize(&shares_server0)
-        .map_err(|e| format!("Failed to serialize shares for server 0: {}", e))?;
-    let shares1_data = bincode::serialize(&shares_server1)
-        .map_err(|e| format!("Failed to serialize shares for server 1: {}", e))?;
-    
-    // Send to server 0
-    let len_bytes = (shares0_data.len() as u64).to_le_bytes();
-    channel_server0.write_bytes(&len_bytes)
-        .map_err(|e| format!("Failed to send length to server 0: {}", e))?;
-    channel_server0.write_bytes(&shares0_data)
-        .map_err(|e| format!("Failed to send shares to server 0: {}", e))?;
-    channel_server0.flush()
-        .map_err(|e| format!("Failed to flush to server 0: {}", e))?;
-    
-    // Send to server 1
-    let len_bytes = (shares1_data.len() as u64).to_le_bytes();
-    channel_server1.write_bytes(&len_bytes)
-        .map_err(|e| format!("Failed to send length to server 1: {}", e))?;
-    channel_server1.write_bytes(&shares1_data)
-        .map_err(|e| format!("Failed to send shares to server 1: {}", e))?;
-    channel_server1.flush()
-        .map_err(|e| format!("Failed to flush to server 1: {}", e))?;
-    
+    client.send_client_shares(
+        shares_server0, 
+        shares_server1, 
+        &mut channel_server0, 
+        &mut channel_server1)?;
     println!("Client shares sent successfully");
     Ok(())
 }
 
-/// Run as server 0
-fn run_server0(config_path: &str) -> Result<(), String> {
-    println!("Starting Server 0...");
-    let cli_config = CliConfig::from_file(config_path)?;
-    
-    run_server(config_path, false)
-}
-
-/// Run as server 1  
-fn run_server1(config_path: &str) -> Result<(), String> {
-    println!("Starting Server 1...");
-    let cli_config = CliConfig::from_file(config_path)?;
-    
-    run_server(config_path, true)
-}
-
-/// Common server implementation
+/// Run server for both known and unknown dictionary cases
 fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
     let cli_config = CliConfig::from_file(config_path)?;
     let server_id = if is_server1 { 1 } else { 0 };
+    let is_known_dictionary = cli_config.protocol.dictionary_type == "Known";
     
-    println!("Server {} starting...", server_id);
+    println!("Server {} starting {} dictionary protocol...", 
+             server_id, 
+             if is_known_dictionary { "known" } else { "unknown" });
     
     // Create protocol configuration
     let protocol_config = cli_config.to_protocol_config(is_server1)?;
-    let protocol = FuzzyHeavyHittersProtocol::new(protocol_config);
-    
-    use std::net::TcpListener;
-    use std::io::{BufReader, BufWriter};
+    let protocol = FuzzyHeavyHittersProtocol::new(protocol_config, is_server1);
     
     // Set up listeners for client and dealer connections
     let client_port = if is_server1 { 
@@ -1085,25 +725,7 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
     } else { 
         cli_config.network.client_to_server0_port 
     };
-    
-    let dealer_port = if is_server1 {
-        cli_config.network.dealer_to_server1_port
-    } else {
-        cli_config.network.dealer_to_server0_port
-    };
-    
-    let other_server_port = if is_server1 {
-        cli_config.network.server0_port
-    } else {
-        cli_config.network.server1_port
-    };
-    
-    let other_server_addr = if is_server1 {
-        &cli_config.network.server0_addr
-    } else {
-        &cli_config.network.server1_addr
-    };
-    
+
     // Listen for client connection
     println!("Server {}: Waiting for client connection on port {}", server_id, client_port);
     let client_listener = TcpListener::bind(("0.0.0.0", client_port))
@@ -1122,98 +744,118 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
         CommTrackingChannel::new(reader, writer)
     };
     
+    
     println!("Server {}: Receiving shares from client...", server_id);
-    // Receive shares using binary deserialization
-    let mut len_bytes = [0u8; 8];
-    client_channel.read_bytes(&mut len_bytes)
-        .map_err(|e| format!("Failed to read length from client: {}", e))?;
-    let len = u64::from_le_bytes(len_bytes) as usize;
-    
-    let mut shares_data = vec![0u8; len];
-    client_channel.read_bytes(&mut shares_data)
-        .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
-    
-    let shares: Vec<Vec<u128>> = bincode::deserialize(&shares_data)
-        .map_err(|e| format!("Failed to deserialize shares: {}", e))?;
-    
+    let shares = protocol.receive_client_shares(&mut client_channel)
+        .map_err(|e| format!("Failed to receive client shares: {}", e))?;
     println!("Server {}: Received {} shares from client", server_id, shares.len());
-    
-    // Listen for dealer connection
+
+    let dealer_port = if is_server1 {
+        cli_config.network.dealer_to_server1_port
+    } else {
+        cli_config.network.dealer_to_server0_port
+    };
+
     println!("Server {}: Waiting for dealer connection on port {}", server_id, dealer_port);
     let dealer_listener = TcpListener::bind(("0.0.0.0", dealer_port))
         .map_err(|e| format!("Failed to bind dealer listener: {}", e))?;
-    
+        
     let (dealer_stream, _) = dealer_listener.accept()
         .map_err(|e| format!("Failed to accept dealer connection: {}", e))?;
-    
-    println!("Server {}: Dealer connected", server_id);
-    
-    // Set up dealer channel
+    // Set up dealer channel and receive FSS keys
     let mut dealer_channel = {
         dealer_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
         let reader = BufReader::new(dealer_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
         let writer = BufWriter::new(dealer_stream);
         CommTrackingChannel::new(reader, writer)
     };
-    
-    // Connect to other server
-    println!("Server {}: Connecting to other server at {}:{}", server_id, other_server_addr, other_server_port);
-    let other_server_stream = std::net::TcpStream::connect((other_server_addr.as_str(), other_server_port))
-        .map_err(|e| format!("Failed to connect to other server: {}", e))?;
-    
-    let mut other_server_channel = {
-        other_server_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
-        let reader = BufReader::new(other_server_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
-        let writer = BufWriter::new(other_server_stream);
-        CommTrackingChannel::new(reader, writer)
+    println!("Server {}: Dealer connected", server_id);
+        
+    // Set up inter-server communication
+    let mut other_server_channel = if is_server1 {
+        // Server 1 connects to Server 0
+        let server0_addr = &cli_config.network.server0_addr;
+        let server0_port = cli_config.network.server0_port;
+        
+        println!("Server {}: Connecting to Server 0 at {}:{}", server_id, server0_addr, server0_port);
+        let other_server_stream = std::net::TcpStream::connect((server0_addr.as_str(), server0_port))
+            .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
+        
+        let channel = {
+            other_server_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+            let reader = BufReader::new(other_server_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+            let writer = BufWriter::new(other_server_stream);
+            CommTrackingChannel::new(reader, writer)
+        };
+        println!("Server {}: Connected to Server 0", server_id);
+        channel
+    } else {
+        // Server 0 binds and waits for Server 1
+        let server0_port = cli_config.network.server0_port;
+        
+        println!("Server {}: Waiting for Server 1 connection on port {}", server_id, server0_port);
+        let server_listener = TcpListener::bind(("0.0.0.0", server0_port))
+            .map_err(|e| format!("Failed to bind server listener: {}", e))?;
+        
+        let (other_server_stream, _) = server_listener.accept()
+            .map_err(|e| format!("Failed to accept server connection: {}", e))?;
+        
+        let channel = {
+            other_server_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+            let reader = BufReader::new(other_server_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+            let writer = BufWriter::new(other_server_stream);
+            CommTrackingChannel::new(reader, writer)
+        };
+        println!("Server {}: Server 1 connected", server_id);
+        channel
     };
-    
-    println!("Server {}: Connected to other server", server_id);
-    
-    // TODO: Implement the actual protocol execution
-    // This would depend on whether it's known or unknown dictionary protocol
-    // and would use the shares, dealer_channel, and other_server_channel
-    
-    match cli_config.protocol.dictionary_type.as_str() {
-        "Known" => {
-            // Load query points for known dictionary
-            println!("Server {}: Loading query points from {}", server_id, cli_config.query_file);
-            let query_points = load_query_points(&cli_config.query_file)?;
-            
-            // TODO: Generate threshold and check data based on configuration
-            // This is a simplified placeholder - actual implementation would need
-            // to coordinate with dealer for FSS keys if using IntervalFSS methods
-            
-            println!("Server {}: Running known dictionary protocol...", server_id);
-            // The actual protocol call would go here
-        }
-        "Unknown" => {
-            println!("Server {}: Running unknown dictionary protocol...", server_id);
-            // The actual protocol call would go here
-        }
-        other => return Err(format!("Unsupported dictionary type: {}", other)),
+
+    if is_known_dictionary {
+        // Load query points for known dictionary
+        println!("Server {}: Loading query points from {}", server_id, cli_config.query_file);
+        let query_points = load_query_points(&cli_config.query_file)?;
+        
+        // Run the protocol for known dictionary
+        let results = protocol.run_server_known_dictionary(
+            &shares,
+            &query_points,
+            &mut other_server_channel,
+            &mut dealer_channel,
+        )?;
+        
+        println!("Server {}: Protocol execution completed", server_id);
+        println!("Results: {:?}", results);
+    } else {
+        println!("Server {}: Running unknown dictionary protocol...", server_id);
+        // Run the protocol for unknown dictionary
+        let heavy_hitters = protocol.run_server_unknown_dictionary(
+            &shares,
+            is_server1,
+            &mut other_server_channel,
+            &mut dealer_channel,
+        )?;
+        
+        println!("Server {}: Protocol execution completed", server_id);
+        println!("Found {} heavy hitters: {:?}", heavy_hitters.len(), heavy_hitters);
     }
     
-    println!("Server {}: Protocol execution completed", server_id);
     Ok(())
+}
+
+/// Helper function to run as server 0
+fn run_server0(config_path: &str) -> Result<(), String> {
+    run_server(config_path, false)
+}
+
+/// Helper function to run as server 1  
+fn run_server1(config_path: &str) -> Result<(), String> {
+    run_server(config_path, true)
 }
 
 fn main() {
     let matches = App::new("Fuzzy Heavy Hitters CLI")
         .version("1.0")
         .about("CLI for running the fuzzy heavy hitters protocol in distributed or local mode")
-        .subcommand(
-            SubCommand::with_name("run-local")
-                .about("Run both servers locally for testing")
-                .arg(
-                    Arg::with_name("config")
-                        .short("c")
-                        .long("config")
-                        .value_name("FILE")
-                        .help("Configuration file path")
-                        .required(true)
-                )
-        )
         .subcommand(
             SubCommand::with_name("dealer")
                 .about("Run as FSS dealer (generates and distributes keys)")
@@ -1240,7 +882,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("server0")
-                .about("Run as server 0")
+                .about("Run as server 0 (evaluator)")
                 .arg(
                     Arg::with_name("config")
                         .short("c")
@@ -1252,7 +894,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("server1")
-                .about("Run as server 1")
+                .about("Run as server 1 (garbler)")
                 .arg(
                     Arg::with_name("config")
                         .short("c")
@@ -1277,10 +919,6 @@ fn main() {
         .get_matches();
 
     let result = match matches.subcommand() {
-        ("run-local", Some(sub_matches)) => {
-            let config_path = sub_matches.value_of("config").unwrap();
-            run_local_protocol(config_path)
-        },
         ("dealer", Some(sub_matches)) => {
             let config_path = sub_matches.value_of("config").unwrap();
             run_dealer(config_path)
@@ -1304,7 +942,6 @@ fn main() {
         _ => {
             eprintln!("No subcommand specified. Use --help for usage information.");
             eprintln!("Available commands:");
-            eprintln!("  run-local     - Run both servers locally for testing");
             eprintln!("  dealer        - Run as FSS dealer");
             eprintln!("  client        - Run as client");
             eprintln!("  server0       - Run as server 0");
