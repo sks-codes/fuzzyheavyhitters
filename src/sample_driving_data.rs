@@ -55,13 +55,18 @@ pub fn csv_to_bitvecs<P: AsRef<Path>>(
 
     rdr.records().map(|record| {
         let record = record?;
-        let lon = record[7].parse::<f64>()?; //15 and 16 for start lon and lat
-        let lat = record[6].parse::<f64>()?; // 7 and 6 for end lon and lat
+        let start_lon = record[15].parse::<f64>()?;
+        let start_lat = record[16].parse::<f64>()?;
+        // let end_lon = record[7].parse::<f64>()?;
+        // let end_lat = record[6].parse::<f64>()?;
 
-        let (lat_grid, lon_grid) = geo_to_grid(lat, lon);
-        let lat_bits = to_bitvec(lat_grid, LAT_BITS);
-        let lon_bits = to_bitvec(lon_grid, LON_BITS);
-        Ok(vec![lat_bits, lon_bits])
+        let (start_lat_grid, start_lon_grid) = geo_to_grid(start_lat, start_lon);
+        // let (end_lat_grid, end_lon_grid) = geo_to_grid(end_lat, end_lon);
+        let start_lat_bits = to_bitvec(start_lat_grid, LAT_BITS);
+        let start_lon_bits = to_bitvec(start_lon_grid, LON_BITS);
+        // let end_lat_bits = to_bitvec(end_lat_grid, LAT_BITS);
+        // let end_lon_bits = to_bitvec(end_lon_grid, LON_BITS);
+        Ok(vec![start_lat_bits, start_lon_bits])//, end_lat_bits, end_lon_bits])
     }).collect()
 }
 

@@ -166,10 +166,10 @@ impl ibDCFKey
 
     pub fn gen_interval(left_bits: &[bool], right_bits: &[bool]) -> ((ibDCFKey, ibDCFKey), (ibDCFKey, ibDCFKey)){
         // let r = &[false; 512];
-        let l_minus_one = left_bits.to_vec();
-        let r_plus_one = right_bits.to_vec();
-        let left_key = Self::gen_ibDCF(l_minus_one.as_slice(), true);
-        let right_key = Self::gen_ibDCF(r_plus_one.as_slice(), false);
+        // let l_minus_one = left_bits.to_vec();
+        // let r_plus_one = right_bits.to_vec();
+        let left_key = Self::gen_ibDCF(left_bits, true);
+        let right_key = Self::gen_ibDCF(right_bits, true);
         ((left_key.0, right_key.0), (left_key.1, right_key.1))
     }
 
@@ -177,6 +177,7 @@ impl ibDCFKey
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
         let delta = MSB_u32_to_bits(alpha[0].len() as u8, size);
+        // let delta_p1 = MSB_u32_to_bits(alpha[0].len() as u8, size + 1);
         for i in 0..alpha.len() {
             let left = subtract_bitstrings(alpha[i].as_slice(), delta.as_slice());
             let right = add_bitstrings(alpha[i].as_slice(), delta.as_slice());

@@ -406,6 +406,8 @@ async fn main() -> io::Result<()> {
         let key_size = serialized_key.len();
         client_data.key_gen_time_avg_ms = avg_client_time * 1000f64;
         client_data.key_size_bytes = key_size;
+        println!("avg client time: {:?}", client_data.key_gen_time_avg_ms);
+        println!("Key size: {:?}", client_data.key_size_bytes);
     }
     tree_init(&mut client0, &mut client1).await?;
 

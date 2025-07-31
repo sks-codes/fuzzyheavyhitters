@@ -1,7 +1,7 @@
 {
   "data_len": 64,
-  "n_dims": 2,
-  "ball_size": 5,
+  "n_dims": 4,
+  "ball_size": 3,
   "threshold": 0.005,
   "server0": "172.31.26.253:3000",
   "server1": "172.31.16.170:3000",
