@@ -8,10 +8,9 @@ use crate::util::u128_to_bits;
 use crate::{Share, Group};
 
 
-use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
 use std::convert::TryInto;
-use scuttlebutt::{AesRng, Channel, Block, AbstractChannel};
+use scuttlebutt::{AesRng, Block, AbstractChannel};
+use crate::channel::CommTrackingChannel;
 use serde::{Deserialize, Serialize};
 
 /// Method for threshold comparison
@@ -82,7 +81,7 @@ impl ThresholdPhase {
         &self,
         match_results: &[ModInt],
         threshold: ModInt,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<bool, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.input_bit_length;
@@ -121,7 +120,7 @@ impl ThresholdPhase {
         threshold: u128,
         random_value: u128,
         fss_key: &IntervalFSSKey<1>,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
     ) -> Result<bool, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.input_bit_length;
         
@@ -194,7 +193,7 @@ impl ThresholdPhase {
         match_results: &[ModInt],
         threshold: u128,
         threshold_data: &ThresholdData,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<bool, ThresholdPhaseError> {
         match self.config.method {

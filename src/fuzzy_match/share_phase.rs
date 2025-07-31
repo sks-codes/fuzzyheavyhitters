@@ -91,7 +91,7 @@ pub struct ShareConfig {
 }
 
 /// Represents the shared data for a range around input x
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SharedRange {
     /// OKVS-based sharing
     OKVS {

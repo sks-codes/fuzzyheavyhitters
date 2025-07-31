@@ -9,9 +9,8 @@ use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, Thres
 use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
 use crate::data_structures::modint::ModInt;
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb};
-use scuttlebutt::{AesRng, Channel};
-use std::os::unix::net::UnixStream;
-use std::io::{BufReader, BufWriter};
+use crate::channel::CommTrackingChannel;
+use scuttlebutt::AesRng;
 use std::thread::current;
 use std::time::Instant;
 use std::sync::mpsc;
@@ -75,9 +74,8 @@ impl FuzzyHeavyHittersProtocol {
         query_points: &[Vec<u128>],
         threshold_data_list: &[ThresholdData],
         check_data_list: &[CheckData],
-        stream: UnixStream,
+        mut channel: CommTrackingChannel,
     ) -> Result<Vec<bool>, String> {
-        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
         let mut rng = AesRng::new();
         
         let share_phase = SharePhase::new(self.config.share_config.clone());
@@ -162,7 +160,7 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_shares_list: &[SharedRange],
         threshold_data_list: &[ThresholdData],
-        stream: UnixStream,
+        mut channel: CommTrackingChannel,
         is_server1: bool,
         fss_dealer_receiver: Option<mpsc::Receiver<FssKeyBatch>>,
         fss_dealer_signal_sender: Option<mpsc::Sender<DealerSignal>>,
@@ -180,7 +178,6 @@ impl FuzzyHeavyHittersProtocol {
             }
         };
 
-        let mut channel = Channel::new(BufReader::new(stream.try_clone().unwrap()), BufWriter::new(stream));
         let mut rng = AesRng::new();
         
         let share_phase = SharePhase::new(self.config.share_config.clone());
@@ -285,7 +282,7 @@ impl FuzzyHeavyHittersProtocol {
         threshold_data: &ThresholdData,
         check_phase: &CheckPhase,
         threshold_phase: &ThresholdPhase,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
         is_server1: bool,
         fss_dealer_receiver: &Option<mpsc::Receiver<FssKeyBatch>>,
@@ -403,12 +400,12 @@ impl FuzzyHeavyHittersProtocol {
     }
 
     /// Helper method to send a single bit
-    fn send_single_bit(&self, channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>, bit: bool) -> Result<(), String> {
+    fn send_single_bit(&self, channel: &mut CommTrackingChannel, bit: bool) -> Result<(), String> {
         send_bool_vec(channel, &[bit]).map_err(|e| format!("Failed to send bit: {:?}", e))
     }
 
     /// Helper method to receive a single bit
-    fn receive_single_bit(&self, channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>) -> Result<bool, String> {
+    fn receive_single_bit(&self, channel: &mut CommTrackingChannel) -> Result<bool, String> {
         let bits = receive_bool_vec(channel).map_err(|e| format!("Failed to receive bit: {:?}", e))?;
         if bits.len() != 1 {
             return Err(format!("Expected 1 bit, got {}", bits.len()));

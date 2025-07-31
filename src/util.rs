@@ -2,9 +2,7 @@
 //! 
 //! This module contains helper functions for data conversion and communication.
 
-use scuttlebutt::{Channel, AbstractChannel};
-use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
+use scuttlebutt::AbstractChannel;
 
 /// Pack a vector of booleans into a vector of bytes
 /// Each byte contains up to 8 bits, with remaining bits set to 0 if the length is not a multiple of 8
@@ -51,7 +49,7 @@ pub fn unpack_bytes_to_bits(bytes: &[u8], expected_length: usize) -> Vec<bool> {
 
 /// Send a vector of booleans over a channel by packing them into bytes
 pub fn send_bool_vec(
-    channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+    channel: &mut crate::channel::CommTrackingChannel,
     bits: &[bool],
 ) -> Result<(), String> {
     // First send the length
@@ -78,7 +76,7 @@ pub fn send_bool_vec(
 
 /// Receive a vector of booleans from a channel by unpacking them from bytes
 pub fn receive_bool_vec(
-    channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+    channel: &mut crate::channel::CommTrackingChannel,
 ) -> Result<Vec<bool>, String> {
     // First receive the length
     let mut length_bytes = [0u8; 4];

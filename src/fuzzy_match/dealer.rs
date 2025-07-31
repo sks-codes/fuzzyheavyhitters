@@ -10,13 +10,17 @@
 use crate::fss::interval::IntervalFSSKey;
 use crate::data_structures::payload::RingVec;
 use crate::util::{u128_to_bits, u128_to_bits_msb};
+use crate::channel::CommTrackingChannel;
+use scuttlebutt::AbstractChannel;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
+use std::net::{TcpListener, TcpStream, SocketAddr};
+use std::io::{BufReader, BufWriter};
 use rand::Rng;
 
 /// FSS key batch for check phase - contains keys for one server
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FssKeyBatch {
     pub keys: Vec<IntervalFSSKey<1>>,
     pub random_values: Vec<u128>,
@@ -31,7 +35,7 @@ pub struct FssKeyPairBatch {
 }
 
 /// Signal sent from servers to the dealer
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DealerSignal {
     RequestKeys,
     Shutdown,
@@ -44,6 +48,173 @@ pub struct FssDealer {
     receiver_server1: mpsc::Receiver<FssKeyBatch>,
     signal_sender_server0: mpsc::Sender<DealerSignal>,
     signal_sender_server1: mpsc::Sender<DealerSignal>,
+}
+
+/// Networked FSS Dealer that communicates with servers over TCP
+pub struct NetworkedFssDealer {
+    server0_addr: String,
+    server0_port: u16,
+    server1_addr: String,
+    server1_port: u16,
+    distance_threshold: u128,
+    output_bit_length: usize,
+    check_output_bit_length: usize,
+}
+
+impl NetworkedFssDealer {
+    /// Create a new networked FSS dealer
+    pub fn new(
+        server0_addr: String,
+        server0_port: u16,
+        server1_addr: String,
+        server1_port: u16,
+        distance_threshold: u128,
+        output_bit_length: usize,
+        check_output_bit_length: usize,
+    ) -> Self {
+        NetworkedFssDealer {
+            server0_addr,
+            server0_port,
+            server1_addr,
+            server1_port,
+            distance_threshold,
+            output_bit_length,
+            check_output_bit_length,
+        }
+    }
+
+    /// Run the dealer - listen for connections from both servers and handle key requests
+    pub fn run(&self, n_clients: usize) -> Result<(), String> {
+        println!("FSS Dealer starting...");
+        println!("Waiting for connections from:");
+        println!("  Server 0: {}:{}", self.server0_addr, self.server0_port);
+        println!("  Server 1: {}:{}", self.server1_addr, self.server1_port);
+
+        // Connect to both servers
+        let server0_stream = TcpStream::connect((self.server0_addr.as_str(), self.server0_port))
+            .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
+        
+        let server1_stream = TcpStream::connect((self.server1_addr.as_str(), self.server1_port))
+            .map_err(|e| format!("Failed to connect to server 1: {}", e))?;
+
+        println!("Connected to both servers");
+
+        // Create channels
+        let mut channel_server0 = {
+            server0_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+            let reader = BufReader::new(server0_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+            let writer = BufWriter::new(server0_stream);
+            CommTrackingChannel::new(reader, writer)
+        };
+
+        let mut channel_server1 = {
+            server1_stream.set_nodelay(true).map_err(|e| format!("Failed to set nodelay: {}", e))?;
+            let reader = BufReader::new(server1_stream.try_clone().map_err(|e| format!("Failed to clone stream: {}", e))?);
+            let writer = BufWriter::new(server1_stream);
+            CommTrackingChannel::new(reader, writer)
+        };
+
+        // Generate initial FSS keys
+        let mut current_keys = generate_fss_keys_for_check(
+            self.distance_threshold,
+            self.output_bit_length,
+            self.check_output_bit_length,
+            n_clients,
+        )?;
+
+        println!("Generated initial FSS keys, dealer ready");
+
+        // Main dealer loop - handle key requests
+        loop {
+            // Wait for key request from server 0 (coordinator)
+            let signal_bytes = match self.read_dealer_signal(&mut channel_server0) {
+                Ok(signal) => signal,
+                Err(e) => {
+                    println!("Dealer: Error reading from server 0: {}, terminating", e);
+                    break;
+                }
+            };
+
+            match signal_bytes {
+                DealerSignal::RequestKeys => {
+                    println!("Dealer: Received key request from server 0");
+
+                    // Send keys to both servers
+                    let batch_server0 = FssKeyBatch {
+                        keys: current_keys.0.clone(),
+                        random_values: current_keys.2.iter().map(|(r0, _)| *r0).collect(),
+                    };
+
+                    let batch_server1 = FssKeyBatch {
+                        keys: current_keys.1.clone(),
+                        random_values: current_keys.2.iter().map(|(_, r1)| *r1).collect(),
+                    };
+
+                    // Send to server 0
+                    self.write_fss_key_batch(&mut channel_server0, &batch_server0)
+                        .map_err(|e| format!("Failed to send keys to server 0: {}", e))?;
+
+                    // Send to server 1
+                    self.write_fss_key_batch(&mut channel_server1, &batch_server1)
+                        .map_err(|e| format!("Failed to send keys to server 1: {}", e))?;
+
+                    println!("Dealer: Sent FSS keys to both servers");
+
+                    // Generate new keys for next request
+                    current_keys = generate_fss_keys_for_check(
+                        self.distance_threshold,
+                        self.output_bit_length,
+                        self.check_output_bit_length,
+                        n_clients,
+                    )?;
+                }
+                DealerSignal::Shutdown => {
+                    println!("Dealer: Received shutdown signal, terminating");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Read a dealer signal from the channel
+    fn read_dealer_signal(&self, channel: &mut CommTrackingChannel) -> Result<DealerSignal, String> {
+        // Read the length first
+        let mut len_bytes = [0u8; 8];
+        channel.read_bytes(&mut len_bytes)
+            .map_err(|e| format!("Failed to read length: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        
+        // Read the data
+        let mut data = vec![0u8; len];
+        channel.read_bytes(&mut data)
+            .map_err(|e| format!("Failed to read data: {}", e))?;
+        
+        // Deserialize
+        bincode::deserialize(&data)
+            .map_err(|e| format!("Deserialization error: {}", e))
+    }
+
+    /// Write an FSS key batch to the channel
+    fn write_fss_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
+        let data = bincode::serialize(batch)
+            .map_err(|e| format!("Serialization error: {}", e))?;
+        
+        // Write length first
+        let len_bytes = (data.len() as u64).to_le_bytes();
+        channel.write_bytes(&len_bytes)
+            .map_err(|e| format!("Failed to write length: {}", e))?;
+        
+        // Write data
+        channel.write_bytes(&data)
+            .map_err(|e| format!("Failed to write data: {}", e))?;
+        
+        channel.flush()
+            .map_err(|e| format!("Failed to flush: {}", e))?;
+        
+        Ok(())
+    }
 }
 
 impl FssDealer {

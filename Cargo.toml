@@ -49,3 +49,7 @@ path = "benchmark/parallel_stress_test.rs"
 [[bin]]
 name = "fhh_cli"
 path = "src/bin/fhh_cli.rs"
+
+[[bin]]
+name = "garbled_circuit_socket_demo"
+path = "src/bin/garbled_circuit_socket_demo.rs"

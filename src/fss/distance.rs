@@ -12,7 +12,7 @@ const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
 ];
 
 // N here is P+1, where P is the distance Lp norm
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DistanceFSSKey<const N: usize> {
     left_fss: LIntervalFSSKey<N>,
     right_fss: RIntervalFSSKey<N>,

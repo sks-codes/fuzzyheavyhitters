@@ -1,7 +1,6 @@
-use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
 use std::convert::{TryFrom, TryInto};
-use scuttlebutt::{AesRng, Channel, Block, AbstractChannel};
+use scuttlebutt::{AesRng, Block, AbstractChannel};
+use crate::channel::CommTrackingChannel;
 use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
 use crate::garbled_circuits::equality_full::{
     multiple_gb_equality_test, multiple_ev_equality_test};
@@ -100,7 +99,7 @@ impl CheckPhase {
         shared_range: &SharedRange,
         query_point: &[Vec<bool>],
         check_data: &CheckData,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<ModInt, CheckPhaseError> {
         if query_point.len() != self.config.num_dimensions {
@@ -134,7 +133,7 @@ impl CheckPhase {
         &self,
         shared_range: &SharedRange,
         query_point: &[Vec<bool>],
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<ModInt, CheckPhaseError> {
         // Step 1: For each dimension i from 0 to d-1, evaluate query_point[i] with OKVS for dimension i
@@ -178,7 +177,7 @@ impl CheckPhase {
         shared_range: &SharedRange,
         query_point: &[Vec<bool>],
         threshold: ModInt,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<ModInt, CheckPhaseError> {
         if query_point.len() != self.config.num_dimensions {
@@ -238,7 +237,7 @@ impl CheckPhase {
         threshold: u128,
         random_value: u128,
         fss_key: &IntervalFSSKey<1>,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
     ) -> Result<ModInt, CheckPhaseError> {
         if query_point.len() != self.config.num_dimensions {
             return Err(CheckPhaseError::InputLengthMismatch(
@@ -328,7 +327,7 @@ impl CheckPhase {
         &self,
         boolean_share: bool,
         modulus: u128,
-        channel: &mut Channel<BufReader<UnixStream>, BufWriter<UnixStream>>,
+        channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
         is_garbler_side: bool,
     ) -> Result<ModInt, CheckPhaseError> {
