@@ -265,8 +265,6 @@ impl CheckPhase {
             aggregated_share = aggregated_share + *dimension_result;
         }
 
-        println!("Aggregated share before masking: {}", aggregated_share.val());
-
         // Step 3: Add random value to aggregated share and exchange with other server
         let masked_share = aggregated_share + ModInt::new(random_value, in_modulus);
         

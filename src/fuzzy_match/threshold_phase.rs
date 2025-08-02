@@ -4,7 +4,7 @@ use crate::garbled_circuits::greater_than_or_equal_threshold::{
 use crate::data_structures::modint::ModInt;
 use crate::data_structures::payload::RingVec;
 use crate::fss::interval::IntervalFSSKey;
-use crate::util::u128_to_bits;
+use crate::util::u128_to_bits_msb;
 use crate::{Share, Group};
 use crate::channel::CommTrackingChannel;
 use std::convert::TryInto;
@@ -90,8 +90,6 @@ impl ThresholdPhase {
             aggregated_share = aggregated_share + *result;
         }
 
-        println!("Aggregated share: {}", aggregated_share.val());
-
         // Step 2: Compare aggregated share with threshold using garbled circuits
         // Both aggregated_share and threshold are already ModInt, so we can use them directly
         let comparison_result = if self.config.is_garbler_side {
@@ -169,8 +167,7 @@ impl ThresholdPhase {
         // Step 3: Evaluate the reconstructed masked count using FSS key for interval [threshold + r0 + r1, MAX]
         // The reconstructed_masked_count = actual_count + r0 + r1
         // Convert count to bit representation
-        let mut count_bits = u128_to_bits(reconstructed_masked_count.val(), self.config.input_bit_length);
-        count_bits.reverse(); // Reverse to MSB-first order
+        let count_bits = u128_to_bits_msb(reconstructed_masked_count.val(), self.config.input_bit_length);
         
         // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
         // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,

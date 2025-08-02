@@ -186,8 +186,6 @@ impl FuzzyHeavyHittersProtocol {
                 }
             }
 
-            println!("Next heavy hitters found: {:?}", next_heavy_hitters);
-
             current_heavy_hitters = next_heavy_hitters;
             check_data_count += candidate_prefix_sets.len() * client_shares_list.len();
             threshold_data_count += candidate_prefix_sets.len();
@@ -307,8 +305,6 @@ impl FuzzyHeavyHittersProtocol {
 
             server_bits.push(server_bit);
         }
-
-        println!("Server {} computed bits: {:?}", if self.is_server1 { 1 } else { 0 }, server_bits);
 
         // Batch exchange bits between servers to get final results
         let final_results = if self.is_server1 {

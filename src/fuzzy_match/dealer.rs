@@ -232,7 +232,6 @@ impl FssDealer {
         let modulus = 1u128 << self.check_output_bit_length;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
-        println!("Dealer: Sending {} bytes of FSS keys", data.len());
         channel.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to write length: {}", e))?;
         channel.write_bytes(&data)
@@ -267,8 +266,8 @@ impl FssDealer {
             let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
                 // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
                 // Return 0 in the middle, 1 on left and right
-                let interval_start = sum % in_modulus;
-                let interval_end = (r0 + r1) % in_modulus;
+                let interval_start = (sum + 1) % in_modulus;
+                let interval_end = (r0 + r1 - 1) % in_modulus;
 
                 let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
                 let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
@@ -316,7 +315,6 @@ impl FssDealer {
     /// This simulates a trusted dealer generating FSS keys
     fn generate_fss_keys_for_threshold(&self) -> Result<(Vec<IntervalFSSKey<1>>, Vec<IntervalFSSKey<1>>, Vec<(u128, u128)>), String> {
         let modulus = 1u128 << self.check_output_bit_length;
-
         let mut keys_server0 = Vec::new();
         let mut keys_server1 = Vec::new();
         let mut random_pairs = Vec::new();
@@ -330,8 +328,7 @@ impl FssDealer {
 
             // Check if count_threshold + r0 + r1 would wrap around
             let sum = self.count_threshold + (r0 + r1) % modulus;
-            let wraps_around = sum >= modulus;
-            let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
+            let (alpha_bits, beta_bits, a, b, c) = if sum >= modulus {
                 // Wrap-around case: interval [threshold+r0+r1 mod modulus, r0+r1]
                 // Return 1 in the middle, 0 on left and right
                 let interval_start = sum % modulus;
@@ -350,7 +347,7 @@ impl FssDealer {
                 // No wrap-around case: interval [r0+r1, threshold+r0+r1]
                 // Return 1 on left and right, 0 in the middle
                 let interval_start = (r0 + r1) % modulus;
-                let interval_end = sum;
+                let interval_end = (sum + modulus - 1) % modulus;
             
                 let alpha_bits = u128_to_bits_msb(interval_start, self.check_output_bit_length);
                 let beta_bits = u128_to_bits_msb(interval_end, self.check_output_bit_length);
