@@ -149,6 +149,93 @@ pub fn query_point_to_u128s(query_point: &[Vec<bool>]) -> Vec<u128> {
     query_point.iter().map(|dim_bits| bits_to_u128(dim_bits)).collect()
 }
 
+/// Calculate distance between two points based on the distance metric
+pub fn calculate_distance(point1: &[u128], point2: &[u128], distance_metric: &str) -> u128 {
+    match distance_metric {
+        "Linf" => {
+            // L-infinity distance (max coordinate difference)
+            let mut l_inf_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l_inf_distance = l_inf_distance.max(diff);
+            }
+            l_inf_distance
+        },
+        "L1" => {
+            // L1 distance (Manhattan distance)
+            let mut l1_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l1_distance += diff;
+            }
+            l1_distance
+        },
+        "L2" => {
+            // L2 distance squared (to avoid sqrt)
+            let mut sum_of_squares = 0u128;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                sum_of_squares += diff * diff;
+            }
+            sum_of_squares
+        },
+        "L3" => {
+            // L3 distance (sum of cubes)^(1/3), but we return cubes for efficiency
+            let mut sum_of_cubes = 0u128;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                sum_of_cubes += diff * diff * diff;
+            }
+            sum_of_cubes
+        },
+        _ => {
+            // Default to L-infinity for unknown methods
+            let mut l_inf_distance = 0;
+            for dim in 0..point1.len() {
+                let diff = if point1[dim] > point2[dim] {
+                    point1[dim] - point2[dim]
+                } else {
+                    point2[dim] - point1[dim]
+                };
+                l_inf_distance = l_inf_distance.max(diff);
+            }
+            l_inf_distance
+        }
+    }
+}
+
+/// Get the distance threshold for comparison based on the distance metric
+pub fn get_distance_threshold(delta: u128, distance_metric: &str) -> u128 {
+    match distance_metric {
+        "Linf" | "L1" => delta,
+        "L2" => {
+            // For L2, we use squared distance, so threshold is delta^2
+            delta * delta
+        },
+        "L3" => {
+            // For L3, we use cubed distance, so threshold is delta^3
+            delta * delta * delta
+        },
+        _ => delta, // Default to delta for unknown methods
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

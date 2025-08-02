@@ -12,10 +12,9 @@ use crate::util::{u128_to_bits, query_point_to_u128s};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
 use crate::{Group, Share};
-use serde::{Deserialize, Serialize};
 
 /// Method for check phase comparison
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum CheckMethod {
     /// Use L-infinity distance equality test (original fuzzy matching behavior)
     Linf,
@@ -26,7 +25,7 @@ pub enum CheckMethod {
 }
 
 /// Data for check phase configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum CheckData {
     /// No additional data needed for L-infinity equality test
     Linf,
@@ -47,7 +46,7 @@ pub enum CheckData {
 }
 
 /// Configuration for the check phase
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CheckConfig {
     pub input_bit_length: usize,
     pub output_bit_length: usize,
@@ -265,6 +264,8 @@ impl CheckPhase {
         for dimension_result in &all_dimension_eval {
             aggregated_share = aggregated_share + *dimension_result;
         }
+
+        println!("Aggregated share before masking: {}", aggregated_share.val());
 
         // Step 3: Add random value to aggregated share and exchange with other server
         let masked_share = aggregated_share + ModInt::new(random_value, in_modulus);

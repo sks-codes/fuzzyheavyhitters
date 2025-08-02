@@ -3,14 +3,16 @@ use counttree::{
     util::u128_to_bits,
     fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckData},
     fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
-    data_structures::{modint::ModInt, payload::RingVec},
+    data_structures::payload::RingVec,
     fss::interval::IntervalFSSKey,
+    channel::CommTrackingChannel,
 };
-use scuttlebutt::{AesRng, Channel};
-use std::os::unix::net::UnixStream;
+use scuttlebutt::AesRng;
+use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, BufWriter};
 use std::thread;
 use std::sync::mpsc;
+use std::time::Duration;
 
 #[cfg(test)]
 mod tests {
@@ -96,8 +98,8 @@ mod tests {
             println!("--- Test {}/{}: Query Point {:?} ---", 
                 query_idx + 1, test_query_points.len(), query_point);
 
-            // Set up Unix socket pair for communication
-            let (stream1, stream2) = UnixStream::pair().expect("Failed to create Unix socket pair");
+            // Set up TCP server on localhost
+            let listener = TcpListener::bind("127.0.0.1:8080").expect("Failed to bind TCP listener");
             
             // Set up communication channel for threshold comparison
             let (sender, receiver) = mpsc::channel();
@@ -108,10 +110,14 @@ mod tests {
             let share_phase_clone = share_phase.clone();
             
             let garbler_handle = thread::spawn(move || {
+                // Connect as client
+                thread::sleep(Duration::from_millis(100)); // Give server time to start
+                let stream1 = TcpStream::connect("127.0.0.1:8080").expect("Failed to connect to TCP server");
+                
                 let mut rng = AesRng::new();
                 let reader = BufReader::new(stream1.try_clone().unwrap());
                 let writer = BufWriter::new(stream1);
-                let mut channel = Channel::new(reader, writer);
+                let mut channel = CommTrackingChannel::new(reader, writer);
                 
                 // Server 1 (Garbler) operations
                 let check_config_garbler = CheckConfig {
@@ -167,11 +173,12 @@ mod tests {
                 sender.send((match_results_server1, garbler_bit)).unwrap();
             });
             
-            // Server 0 (Evaluator) operations in main thread
+            // Server 0 (Evaluator) operations in main thread - accept connection
+            let (stream2, _) = listener.accept().expect("Failed to accept connection");
             let mut rng = AesRng::new();
             let reader = BufReader::new(stream2.try_clone().unwrap());
             let writer = BufWriter::new(stream2);
-            let mut channel = Channel::new(reader, writer);
+            let mut channel = CommTrackingChannel::new(reader, writer);
             
             let check_config_evaluator = CheckConfig {
                 input_bit_length: OUTPUT_BIT_LENGTH,
@@ -362,7 +369,7 @@ mod tests {
             NUM_CLIENTS, THRESHOLD, masked_threshold, query_point);
 
         // Step 5: Run the two-party computation
-        let (stream1, stream2) = UnixStream::pair().expect("Failed to create Unix socket pair");
+        let listener = TcpListener::bind("127.0.0.1:8081").expect("Failed to bind TCP listener");
         let (sender, receiver) = mpsc::channel();
         
         let query_point_clone = query_point.clone();
@@ -371,10 +378,14 @@ mod tests {
         let fss_key_1_clone = fss_key_1.clone();
         
         let garbler_handle = thread::spawn(move || {
+            // Connect as client
+            thread::sleep(Duration::from_millis(100)); // Give server time to start
+            let stream1 = TcpStream::connect("127.0.0.1:8081").expect("Failed to connect to TCP server");
+            
             let mut rng = AesRng::new();
             let reader = BufReader::new(stream1.try_clone().unwrap());
             let writer = BufWriter::new(stream1);
-            let mut channel = Channel::new(reader, writer);
+            let mut channel = CommTrackingChannel::new(reader, writer);
             
             // Server 1 operations
             let check_config_garbler = CheckConfig {
@@ -434,11 +445,12 @@ mod tests {
             sender.send((match_results_server1, garbler_result)).unwrap();
         });
         
-        // Server 0 operations in main thread
+        // Server 0 operations in main thread - accept connection
+        let (stream2, _) = listener.accept().expect("Failed to accept connection");
         let mut rng = AesRng::new();
         let reader = BufReader::new(stream2.try_clone().unwrap());
         let writer = BufWriter::new(stream2);
-        let mut channel = Channel::new(reader, writer);
+        let mut channel = CommTrackingChannel::new(reader, writer);
         
         let check_config_evaluator = CheckConfig {
             input_bit_length: OUTPUT_BIT_LENGTH,

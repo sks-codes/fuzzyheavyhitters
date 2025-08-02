@@ -9,9 +9,6 @@
 //!    and values are all 1
 //! 2. An interval FSS with left=1, mid=0, right=1 for the range [x-delta, x+delta]
 
-use std::sync::Arc;
-use std::cmp::max;
-use std::collections::HashSet;
 use rand::Rng;
 use blake3;
 
@@ -23,7 +20,10 @@ use crate::fss::{
 };
 use crate::data_structures::payload::RingVec;
 use crate::util::u128_to_bits;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::cmp::max;
+use std::collections::HashSet;
+use std::convert::TryInto;
 
 // Import strategies from the separate module
 use super::strategies::{
@@ -35,7 +35,7 @@ use super::strategies::{
 };
 
 /// Enumeration of different distance metrics
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DistanceMetric {
     /// L-infinity distance (max of absolute differences)
     LInfinity,
@@ -44,7 +44,7 @@ pub enum DistanceMetric {
 }
 
 /// Enumeration of dictionary types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DictionaryType {
     /// Known dictionary case - exact values in range
     Known,
@@ -53,7 +53,7 @@ pub enum DictionaryType {
 }
 
 /// Enumeration of different sharing methods available
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ShareMethod {
     /// Use OKVS for sharing
     OKVS,
@@ -62,7 +62,7 @@ pub enum ShareMethod {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ShareData {
     OKVS {
         r1: [u8; 16],
@@ -72,7 +72,7 @@ pub enum ShareData {
 }
 
 /// Configuration for the share phase
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShareConfig {
     /// The sharing method to use
     pub method: ShareMethod,
@@ -91,7 +91,7 @@ pub struct ShareConfig {
 }
 
 /// Represents the shared data for a range around input x
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SharedRange {
     OKVS {
         okvs_shares: Vec<Vec<u128>>, // One OKVS encoding per dimension
@@ -177,111 +177,99 @@ impl SharedRange {
     }
 
     /// Returns (SharedRange, rest)
-    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<(Self, &[u8]), String> {
+    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
         if bytes.is_empty() { return Err("Empty bytes for SharedRange".to_string()); }
-        let tag = bytes[0];
-        bytes = &bytes[1..];
+        let mut offset = 0;
+        let tag = bytes[offset];
+        offset += 1;
         match tag {
             0 => {
                 // OKVS
-                if bytes.len() < 2 { return Err("Too short for OKVS header".to_string()); }
-                let role = bytes[0] != 0;
-                let has_p = bytes[1];
-                bytes = &bytes[2..];
+                if bytes[offset..].len() < 2 { return Err("Too short for OKVS header".to_string()); }
+                let role = bytes[offset] != 0;
+                offset += 1;
+                let has_p = bytes[offset];
+                offset += 1;
                 let p = if has_p == 1 {
-                    if bytes.len() < 4 { return Err("Too short for OKVS p value".to_string()); }
                     let mut arr = [0u8; 4];
-                    arr.copy_from_slice(&bytes[..4]);
-                    bytes = &bytes[4..];
+                    arr.copy_from_slice(&bytes[offset..offset + 4]);
+                    offset += 4;
                     Some(u32::from_le_bytes(arr))
                 } else { None };
-                if bytes.len() < 4 { return Err("Too short for OKVS dim count".to_string()); }
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&bytes[..4]);
-                let dim_count = u32::from_le_bytes(arr) as usize;
-                bytes = &bytes[4..];
+                let dim_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
                 let mut okvs_shares = Vec::with_capacity(dim_count);
                 for _ in 0..dim_count {
-                    if bytes.len() < 4 { return Err("Too short for OKVS dim len".to_string()); }
-                    let mut arr = [0u8; 4];
-                    arr.copy_from_slice(&bytes[..4]);
-                    let dim_len = u32::from_le_bytes(arr) as usize;
-                    bytes = &bytes[4..];
+                    let dim_len = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                    offset += 4;
                     let mut dim = Vec::with_capacity(dim_len);
                     for _ in 0..dim_len {
-                        if bytes.len() < 16 { return Err("Too short for u128 in OKVS share".to_string()); }
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(&bytes[..16]);
-                        dim.push(u128::from_le_bytes(arr));
-                        bytes = &bytes[16..];
+                        dim.push(u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap()));
+                        offset += 16;
                     }
                     okvs_shares.push(dim);
                 }
-                Ok((SharedRange::OKVS { okvs_shares, role, p }, bytes))
+                Ok((SharedRange::OKVS { okvs_shares, role, p }, offset))
             }
             1 => {
                 // IntervalFSS
-                if bytes.len() < 5 { return Err("Too short for IntervalFSS header".to_string()); }
-                let role = bytes[0] != 0;
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&bytes[1..5]);
-                let key_count = u32::from_le_bytes(arr) as usize;
-                bytes = &bytes[5..];
+                if bytes[offset..].len() < 5 { return Err("Too short for IntervalFSS header".to_string()); }
+                let role = bytes[offset] != 0;
+                offset += 1;
+                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, rest) = IntervalFSSKey::<1>::from_bytes_partial(bytes)?;
+                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
                     keys.push(k);
-                    bytes = rest;
+                    offset += used_k;
                 }
-                Ok((SharedRange::IntervalFSS { keys, role }, bytes))
+                Ok((SharedRange::IntervalFSS { keys, role }, offset))
             }
             2 => {
                 // DistanceFSSL1
-                if bytes.len() < 5 { return Err("Too short for DistanceFSSL1 header".to_string()); }
-                let role = bytes[0] != 0;
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&bytes[1..5]);
-                let key_count = u32::from_le_bytes(arr) as usize;
-                bytes = &bytes[5..];
+                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL1 header".to_string()); }
+                let role = bytes[offset] != 0;
+                offset += 1;
+                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, rest) = DistanceFSSKey::<2>::from_bytes_partial(bytes)?;
+                    let (k, used_k) = DistanceFSSKey::<2>::from_bytes(&bytes[offset..], modulus);
                     keys.push(k);
-                    bytes = rest;
+                    offset += used_k;
                 }
-                Ok((SharedRange::DistanceFSSL1 { keys, role }, bytes))
+                Ok((SharedRange::DistanceFSSL1 { keys, role }, offset))
             }
             3 => {
                 // DistanceFSSL2
-                if bytes.len() < 5 { return Err("Too short for DistanceFSSL2 header".to_string()); }
-                let role = bytes[0] != 0;
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&bytes[1..5]);
-                let key_count = u32::from_le_bytes(arr) as usize;
-                bytes = &bytes[5..];
+                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL2 header".to_string()); }
+                let role = bytes[offset] != 0;
+                offset += 1;
+                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, rest) = DistanceFSSKey::<3>::from_bytes_partial(bytes)?;
+                    let (k, used_k) = DistanceFSSKey::<3>::from_bytes(&bytes[offset..], modulus);
                     keys.push(k);
-                    bytes = rest;
+                    offset += used_k;
                 }
-                Ok((SharedRange::DistanceFSSL2 { keys, role }, bytes))
+                Ok((SharedRange::DistanceFSSL2 { keys, role }, offset))
             }
             4 => {
                 // DistanceFSSL3
-                if bytes.len() < 5 { return Err("Too short for DistanceFSSL3 header".to_string()); }
-                let role = bytes[0] != 0;
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(&bytes[1..5]);
-                let key_count = u32::from_le_bytes(arr) as usize;
-                bytes = &bytes[5..];
+                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL3 header".to_string()); }
+                let role = bytes[offset] != 0;
+                offset += 1;
+                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, rest) = DistanceFSSKey::<4>::from_bytes_partial(bytes)?;
+                    let (k, used_k) = DistanceFSSKey::<4>::from_bytes(&bytes[offset..], modulus);
                     keys.push(k);
-                    bytes = rest;
+                    offset += used_k;
                 }
-                Ok((SharedRange::DistanceFSSL3 { keys, role }, bytes))
+                Ok((SharedRange::DistanceFSSL3 { keys, role }, offset))
             }
             _ => Err("Unknown SharedRange tag".to_string()),
         }
@@ -391,8 +379,7 @@ impl SharePhase {
         }
     }
 
-    /// Public method to evaluate at a specific point for a single dimension
-    /// This is for backward compatibility and specific use cases like check_phase
+    // Return shares of evaluation, where (y0 + y1) mod = true_result
     pub fn evaluate_at_single_dimension(
         &self,
         shared_range: &SharedRange,
@@ -790,15 +777,15 @@ impl SharePhase {
         let modulus = 1u128 << self.config.output_bit_length;
         let result = fss_key.eval_distance_fss(point_bits, self.config.input_bit_length, modulus);
         if !role {
-            Ok(result) // Server 0 returns the share directly
+            Ok(result)
         } else {
-            Ok((modulus - result) % modulus) // Server 1 returns the complement
+            Ok((modulus - result) % modulus)
         }
     }
 }
 
 /// Errors that can occur during the share phase
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum SharePhaseError {
     /// Invalid range parameters
     InvalidRange(String),

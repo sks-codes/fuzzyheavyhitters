@@ -1,6 +1,7 @@
 use crate::fss::left_interval::LIntervalFSSKey;
 use crate::fss::right_interval::{self, RIntervalFSSKey};
 use crate::data_structures::payload::RingVec;
+use std::convert::TryInto;
 
 const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
     [1, 0, 0, 0, 0, 0],
@@ -12,7 +13,7 @@ const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
 ];
 
 // N here is P+1, where P is the distance Lp norm
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DistanceFSSKey<const N: usize> {
     left_fss: LIntervalFSSKey<N>,
     right_fss: RIntervalFSSKey<N>,
@@ -20,8 +21,8 @@ pub struct DistanceFSSKey<const N: usize> {
 
 impl<const N: usize> DistanceFSSKey<N> {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let left_bytes = self.left_fss.to_bytes(modulus);
-        let right_bytes = self.right_fss.to_bytes(modulus);
+        let left_bytes = self.left_fss.to_bytes();
+        let right_bytes = self.right_fss.to_bytes();
         let mut out = Vec::new();
         out.extend_from_slice(&(left_bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&left_bytes);

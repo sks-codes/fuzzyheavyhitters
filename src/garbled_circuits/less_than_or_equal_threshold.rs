@@ -219,7 +219,7 @@ where
         let (sum2, carry2) = f.bin_addition(z3_wires, z1_wires)?;
         let overflow2 = carry2; 
         let x_lt_t_minus_y = f.negate(&overflow2)?;
-        
+
         let b_and_overflow2 = f.and(b_wire, &x_lt_t_minus_y)?;
         let first_part = f.and(&x_plus_y_not_overflow, &b_and_overflow2)?;
         

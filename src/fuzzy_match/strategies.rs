@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use rand::Rng;
 use blake3;
-use crate::util::u128_to_bits;
+use crate::util::{u128_to_bits, u128_to_bits_msb};
 
 /// Trait for different key-value pair preparation strategies
 pub trait KeyValuePairStrategy {
@@ -40,8 +40,7 @@ impl KeyValuePairStrategy for KnownLInfinityStrategy {
         let modulus_mask = (1u128 << output_bit_length) - 1;
 
         for key in left..=right {
-            let mut key_bits = u128_to_bits(key, input_bit_length);
-            key_bits.reverse();
+            let key_bits = u128_to_bits_msb(key, input_bit_length);
             
             let value = rand::rng().random::<u128>() & modulus_mask;
             // Generate u128 from Blake3 hash of key_bits
@@ -100,8 +99,7 @@ impl KeyValuePairStrategy for UnknownLInfinityStrategy {
 
         // Convert distinct prefixes to keys and generate corresponding values
         for (prefix, prefix_len) in distinct_prefixes {
-            let mut prefix_bits = u128_to_bits(prefix, prefix_len);
-            prefix_bits.reverse();
+            let prefix_bits = u128_to_bits_msb(prefix, prefix_len);
 
             println!("Prefix bits: {:?}", prefix_bits);
             
@@ -151,9 +149,7 @@ impl KeyValuePairStrategy for KnownLpStrategy {
         let modulus_mask = (1u128 << output_bit_length) - 1;
 
         for key in left..=right {
-            let mut key_bits = u128_to_bits(key, input_bit_length);
-            key_bits.reverse();
-            
+            let key_bits = u128_to_bits_msb(key, input_bit_length);
             // Calculate |key - x_i|^p
             let distance = if key >= x_i { key - x_i } else { x_i - key };
             let distance_p = compute_power_static(distance, self.p, output_bit_length) & modulus_mask;
@@ -219,8 +215,7 @@ impl KeyValuePairStrategy for UnknownLpStrategy {
 
         // Convert distinct prefixes to keys and generate corresponding values
         for (prefix, prefix_len) in distinct_prefixes {
-            let mut prefix_bits = u128_to_bits(prefix, prefix_len);
-            prefix_bits.reverse();
+            let prefix_bits = u128_to_bits_msb(prefix, prefix_len);
 
             println!("Prefix bits: {:?}, prefix_len: {}", prefix_bits, prefix_len);
             

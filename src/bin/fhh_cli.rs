@@ -14,12 +14,15 @@ use counttree::{
     },
     cli_config::CliConfig,
     channel::CommTrackingChannel,
+    util::{calculate_distance, get_distance_threshold},
 };
 use scuttlebutt::AbstractChannel;
 use clap::{App, Arg, SubCommand};
 use tarpc::server;
 use std::process;
 use std::thread;
+use std::thread::sleep;
+use std::time::Duration;
 use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{BufReader, BufWriter};
 use std::fs;
@@ -43,93 +46,6 @@ fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse query file {}: {}", file_path, e))
-}
-
-/// Calculate distance between two points based on the distance metric
-fn calculate_distance(point1: &[u128], point2: &[u128], distance_metric: &str) -> u128 {
-    match distance_metric {
-        "Linf" => {
-            // L-infinity distance (max coordinate difference)
-            let mut l_inf_distance = 0;
-            for dim in 0..point1.len() {
-                let diff = if point1[dim] > point2[dim] {
-                    point1[dim] - point2[dim]
-                } else {
-                    point2[dim] - point1[dim]
-                };
-                l_inf_distance = l_inf_distance.max(diff);
-            }
-            l_inf_distance
-        },
-        "L1" => {
-            // L1 distance (Manhattan distance)
-            let mut l1_distance = 0;
-            for dim in 0..point1.len() {
-                let diff = if point1[dim] > point2[dim] {
-                    point1[dim] - point2[dim]
-                } else {
-                    point2[dim] - point1[dim]
-                };
-                l1_distance += diff;
-            }
-            l1_distance
-        },
-        "L2" => {
-            // L2 distance squared (to avoid sqrt)
-            let mut sum_of_squares = 0u128;
-            for dim in 0..point1.len() {
-                let diff = if point1[dim] > point2[dim] {
-                    point1[dim] - point2[dim]
-                } else {
-                    point2[dim] - point1[dim]
-                };
-                sum_of_squares += diff * diff;
-            }
-            sum_of_squares
-        },
-        "L3" => {
-            // L3 distance (sum of cubes)^(1/3), but we return cubes for efficiency
-            let mut sum_of_cubes = 0u128;
-            for dim in 0..point1.len() {
-                let diff = if point1[dim] > point2[dim] {
-                    point1[dim] - point2[dim]
-                } else {
-                    point2[dim] - point1[dim]
-                };
-                sum_of_cubes += diff * diff * diff;
-            }
-            sum_of_cubes
-        },
-        _ => {
-            // Default to L-infinity for unknown methods
-            let mut l_inf_distance = 0;
-            for dim in 0..point1.len() {
-                let diff = if point1[dim] > point2[dim] {
-                    point1[dim] - point2[dim]
-                } else {
-                    point2[dim] - point1[dim]
-                };
-                l_inf_distance = l_inf_distance.max(diff);
-            }
-            l_inf_distance
-        }
-    }
-}
-
-/// Get the distance threshold for comparison based on the distance metric
-fn get_distance_threshold(delta: u128, distance_metric: &str) -> u128 {
-    match distance_metric {
-        "Linf" | "L1" => delta,
-        "L2" => {
-            // For L2, we use squared distance, so threshold is delta^2
-            delta * delta
-        },
-        "L3" => {
-            // For L3, we use cubed distance, so threshold is delta^3
-            delta * delta * delta
-        },
-        _ => delta, // Default to delta for unknown methods
-    }
 }
 
 /// Display results for known dictionary protocol
@@ -809,8 +725,8 @@ fn run_server(config_path: &str, is_server1: bool) -> Result<(), String> {
     let server0_to_server1_port = cli_config.network.server0_to_server1_port;
     // Set up inter-server communication
     let mut other_server_channel = if is_server1 {
-
         println!("Server {}: Connecting to Server 0 at {}:{}", server_id, server0_addr, server0_to_server1_port);
+        sleep(Duration::from_secs(1)); // Give time for server 0 to start
         let other_server_stream = std::net::TcpStream::connect((server0_addr.as_str(), server0_to_server1_port))
             .map_err(|e| format!("Failed to connect to server 0: {}", e))?;
         
@@ -923,6 +839,161 @@ fn run_server1(config_path: &str) -> Result<(), String> {
     run_server(config_path, true)
 }
 
+/// Run ground truth (non-secure plaintext) protocol for verification
+fn run_ground_truth(config_path: &str) -> Result<(), String> {
+    let start_time = Instant::now();
+    println!("Running Ground Truth (Plaintext) Protocol...");
+    
+    let cli_config = CliConfig::from_file(config_path)?;
+    let is_known_dictionary = cli_config.protocol.dictionary_type == "Known";
+    
+    // Load client data
+    println!("Loading client data from {}", cli_config.data_file);
+    let client_points = load_client_points(&cli_config.data_file)?;
+    println!("Loaded {} client points", client_points.len());
+    
+    if is_known_dictionary {
+        println!("\n=== Running Known Dictionary Ground Truth ===");
+        
+        // Load query points
+        println!("Loading query points from {}", cli_config.query_file);
+        let query_points = load_query_points(&cli_config.query_file)?;
+        println!("Loaded {} query points", query_points.len());
+        
+        // Calculate ground truth results for each query point
+        let mut ground_truth_results = Vec::new();
+        let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
+        println!("Distance threshold for delta {}: {}", cli_config.protocol.delta, distance_threshold);
+        
+        println!("\nCalculating ground truth for each query point...");
+        for (i, query_point) in query_points.iter().enumerate() {
+            let mut count = 0;
+            
+            // Count client points within delta distance of this query point
+            for client_point in &client_points {
+                let distance = calculate_distance(query_point, client_point, &cli_config.protocol.distance_metric);
+                
+                if distance <= distance_threshold {
+                    count += 1;
+                }
+            }
+            
+            let is_heavy_hitter = count >= cli_config.protocol.threshold as usize;
+            ground_truth_results.push(is_heavy_hitter);
+            
+            if cli_config.output.verbose {
+                let status = if is_heavy_hitter { "HEAVY HITTER" } else { "not heavy hitter" };
+                println!("Query {}: {:?} -> {} (count: {})", 
+                    i + 1, query_point, status, count);
+            }
+        }
+        
+        // Display summary
+        let total_heavy_hitters = ground_truth_results.iter().filter(|&&x| x).count();
+        println!("\n=== Ground Truth Results Summary ===");
+        println!("Protocol: Known Dictionary");
+        println!("Distance metric: {}", cli_config.protocol.distance_metric);
+        println!("Delta (distance threshold): {}", cli_config.protocol.delta);
+        println!("Threshold (minimum count): {}", cli_config.protocol.threshold);
+        println!("Total query points: {}", query_points.len());
+        println!("Heavy hitters found: {} ({:.1}%)", 
+            total_heavy_hitters, 
+            (total_heavy_hitters as f64 / query_points.len() as f64) * 100.0);
+        
+        // Save results if output file specified
+        if let Some(output_file) = &cli_config.output.output_file {
+            let results_data = serde_json::json!({
+                "protocol_type": "known_dictionary_ground_truth",
+                "config": {
+                    "distance_metric": cli_config.protocol.distance_metric,
+                    "delta": cli_config.protocol.delta.to_string(),
+                    "threshold": cli_config.protocol.threshold.to_string(),
+                    "dimensions": cli_config.protocol.dimensions.to_string(),
+                },
+                "results": query_points.iter().zip(ground_truth_results.iter()).enumerate().map(|(i, (query, result))| {
+                    serde_json::json!({
+                        "query_id": (i + 1).to_string(),
+                        "query_point": query.iter().map(|&x| x.to_string()).collect::<Vec<_>>(),
+                        "is_heavy_hitter": result
+                    })
+                }).collect::<Vec<_>>(),
+                "summary": {
+                    "total_queries": query_points.len().to_string(),
+                    "heavy_hitters": total_heavy_hitters.to_string(),
+                    "percentage": (total_heavy_hitters as f64 / query_points.len() as f64 * 100.0).to_string()
+                }
+            });
+            
+            fs::write(output_file, serde_json::to_string_pretty(&results_data)
+                .map_err(|e| format!("Failed to serialize results: {}", e))?)
+                .map_err(|e| format!("Failed to write results to {}: {}", output_file, e))?;
+            println!("Results saved to {}", output_file);
+        }
+        
+    } else {
+        println!("\n=== Running Unknown Dictionary Ground Truth ===");
+        
+        // Find all fuzzy heavy hitters using brute-force search
+        let ground_truth_heavy_hitters = find_fuzzy_heavy_hitters_bruteforce(
+            &client_points,
+            cli_config.protocol.delta,
+            cli_config.protocol.threshold as usize,
+            cli_config.protocol.input_bit_length,
+            &cli_config.protocol.distance_metric,
+        );
+        
+        // Display results
+        println!("\n=== Ground Truth Results Summary ===");
+        println!("Protocol: Unknown Dictionary");
+        println!("Distance metric: {}", cli_config.protocol.distance_metric);
+        println!("Delta (distance threshold): {}", cli_config.protocol.delta);
+        println!("Threshold (minimum count): {}", cli_config.protocol.threshold);
+        println!("Input bit length: {}", cli_config.protocol.input_bit_length);
+        println!("Dimensions: {}", cli_config.protocol.dimensions);
+        println!("Total client points: {}", client_points.len());
+        println!("Heavy hitters found: {}", ground_truth_heavy_hitters.len());
+        
+        if cli_config.output.verbose {
+            println!("\nHeavy hitter values:");
+            for (i, heavy_hitter) in ground_truth_heavy_hitters.iter().enumerate() {
+                println!("  {}: {:?}", i + 1, heavy_hitter);
+            }
+        }
+        
+        // Save results if output file specified
+        if let Some(output_file) = &cli_config.output.output_file {
+            let results_data = serde_json::json!({
+                "protocol_type": "unknown_dictionary_ground_truth",
+                "config": {
+                    "distance_metric": cli_config.protocol.distance_metric,
+                    "delta": cli_config.protocol.delta.to_string(),
+                    "threshold": cli_config.protocol.threshold.to_string(),
+                    "dimensions": cli_config.protocol.dimensions.to_string(),
+                    "input_bit_length": cli_config.protocol.input_bit_length.to_string()
+                },
+                "heavy_hitters": ground_truth_heavy_hitters.iter().map(|hh| {
+                    hh.iter().map(|&x| x.to_string()).collect::<Vec<_>>()
+                }).collect::<Vec<_>>(),
+                "summary": {
+                    "total_client_points": client_points.len().to_string(),
+                    "heavy_hitters_count": ground_truth_heavy_hitters.len().to_string(),
+                }
+            });
+            
+            fs::write(output_file, serde_json::to_string_pretty(&results_data)
+                .map_err(|e| format!("Failed to serialize results: {}", e))?)
+                .map_err(|e| format!("Failed to write results to {}: {}", output_file, e))?;
+            println!("Results saved to {}", output_file);
+        }
+    }
+    
+    let total_time = start_time.elapsed();
+    println!("\n=== Ground Truth Performance Summary ===");
+    println!("📊 Total computation time: {:.2?}", total_time);
+    
+    Ok(())
+}
+
 fn main() {
     let matches = App::new("Fuzzy Heavy Hitters CLI")
         .version("1.0")
@@ -987,6 +1058,18 @@ fn main() {
                         .default_value("fhh_config.json")
                 )
         )
+        .subcommand(
+            SubCommand::with_name("ground-truth")
+                .about("Run ground truth (non-secure plaintext) protocol for verification")
+                .arg(
+                    Arg::with_name("config")
+                        .short("c")
+                        .long("config")
+                        .value_name("FILE")
+                        .help("Configuration file path")
+                        .required(true)
+                )
+        )
         .get_matches();
 
     let result = match matches.subcommand() {
@@ -1010,6 +1093,10 @@ fn main() {
             let output_path = sub_matches.value_of("output").unwrap();
             generate_config(output_path)
         },
+        ("ground-truth", Some(sub_matches)) => {
+            let config_path = sub_matches.value_of("config").unwrap();
+            run_ground_truth(config_path)
+        },
         _ => {
             eprintln!("No subcommand specified. Use --help for usage information.");
             eprintln!("Available commands:");
@@ -1018,6 +1105,7 @@ fn main() {
             eprintln!("  server0       - Run as server 0");
             eprintln!("  server1       - Run as server 1");
             eprintln!("  generate-config - Generate sample configuration");
+            eprintln!("  ground-truth  - Run ground truth (non-secure) protocol");
             process::exit(1);
         }
     };

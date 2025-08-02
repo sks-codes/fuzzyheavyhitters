@@ -52,7 +52,7 @@ impl Client {
         // Custom serialization for Vec<SharedRange>
         let modulus = 1u128 << self.share_phase.config.output_bit_length;
         let mut data = Vec::new();
-        data.extend_from_slice(&(shares_server0.len() as u32).to_le_bytes());
+        data.extend_from_slice(&(shares_server0.len() as u64).to_le_bytes());
         for share in &shares_server0 {
             data.extend_from_slice(&share.to_bytes());
         }
@@ -65,7 +65,7 @@ impl Client {
             .map_err(|e| format!("Failed to flush to server 0: {}", e))?;
 
         let mut data = Vec::new();
-        data.extend_from_slice(&(shares_server1.len() as u32).to_le_bytes());
+        data.extend_from_slice(&(shares_server1.len() as u64).to_le_bytes());
         for share in &shares_server1 {
             data.extend_from_slice(&share.to_bytes());
         }

@@ -1,5 +1,4 @@
 use core::num;
-use std::cmp::{max, min};
 use crate::data_structures::modint::ModInt;
 use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits, 
             xor, and_bit, bytes_to_u128};
@@ -8,16 +7,15 @@ use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 use crate::data_structures::pair::Pair;
 
-use serde::Deserialize;
-use serde::Serialize;
-
 use rand_core::RngCore; 
 use rand::Rng;
 use std::cell::RefCell;
+use std::cmp::{max, min};
+use std::convert::TryInto;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub struct IntervalFSSCW<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], 
                 [u8; AES_BLOCK_SIZE]),
@@ -30,6 +28,27 @@ pub struct IntervalFSSCW<const N: usize> {
 }
 
 impl<const N: usize> IntervalFSSCW<N> {
+    pub fn bytes_size(modulus: u128) -> usize {
+        // Calculate the size of the serialized IntervalFSSCW<N> structure
+        let mut size = 0;
+        
+        // seeds: 2 * AES_BLOCK_SIZE
+        size += 2 * AES_BLOCK_SIZE;
+        
+        // bits: 1 byte (8 bools packed into 1 byte)
+        size += 1;
+        
+        // ys: 4 RingVec<N>
+        let ringvec_bytes_size = RingVec::<N>::byte_size_for_modulus(modulus);
+        size += 4 * ringvec_bytes_size;
+        
+        // y_bits: 1 RingVec<8> (8 ModInt values)
+        let y_bits_bytes_size = RingVec::<8>::byte_size_for_modulus(modulus);
+        size += y_bits_bytes_size;
+        
+        size
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         // seeds
@@ -37,10 +56,14 @@ impl<const N: usize> IntervalFSSCW<N> {
         out.extend_from_slice(&self.seeds.1);
         // bits (4 bools)
         let mut bits_byte = 0u8;
-        bits_byte |= (self.bits.0.first as u8) << 0;
-        bits_byte |= (self.bits.0.second as u8) << 1;
-        bits_byte |= (self.bits.1.first as u8) << 2;
-        bits_byte |= (self.bits.1.second as u8) << 3;
+        bits_byte |= (self.bits.0.0.first as u8) << 0;
+        bits_byte |= (self.bits.0.0.second as u8) << 1;
+        bits_byte |= (self.bits.0.1.first as u8) << 2;
+        bits_byte |= (self.bits.0.1.second as u8) << 3;
+        bits_byte |= (self.bits.1.0.first as u8) << 4;
+        bits_byte |= (self.bits.1.0.second as u8) << 5;
+        bits_byte |= (self.bits.1.1.first as u8) << 6;
+        bits_byte |= (self.bits.1.1.second as u8) << 7;
         out.push(bits_byte);
         // ys (4 RingVec<N>)
         out.extend(self.ys.0.0.to_bytes());
@@ -48,14 +71,17 @@ impl<const N: usize> IntervalFSSCW<N> {
         out.extend(self.ys.1.0.to_bytes());
         out.extend(self.ys.1.1.to_bytes());
         // y_bits (4 ModInt)
-        for pair in [&self.y_bits.0, &self.y_bits.1] {
-            for mint in [&pair.first, &pair.second] {
-                let mut buf = [0u8; 16];
-                let bytes = mint.to_u128().to_le_bytes();
-                buf.copy_from_slice(&bytes);
-                out.extend_from_slice(&buf);
-            }
-        }
+        let mut y_bits_list = Vec::new();
+        y_bits_list.push(self.y_bits.0.0.first.val());
+        y_bits_list.push(self.y_bits.0.0.second.val());
+        y_bits_list.push(self.y_bits.0.1.first.val());
+        y_bits_list.push(self.y_bits.0.1.second.val());
+        y_bits_list.push(self.y_bits.1.0.first.val());
+        y_bits_list.push(self.y_bits.1.0.second.val());
+        y_bits_list.push(self.y_bits.1.1.first.val());
+        y_bits_list.push(self.y_bits.1.1.second.val());
+        let y_bits_ringvec = RingVec::<8>::from_vec(y_bits_list, self.ys.0.0.modulus()).expect("Failed to create RingVec from y_bits");
+        out.extend(y_bits_ringvec.to_bytes());
         out
     }
 
@@ -67,33 +93,40 @@ impl<const N: usize> IntervalFSSCW<N> {
         offset += AES_BLOCK_SIZE;
         seeds1.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
+
         let bits_byte = bytes[offset];
         offset += 1;
-        let bits = (
+        let bits = ((
             Pair::new((bits_byte & 0x1) != 0, (bits_byte & 0x2) != 0),
             Pair::new((bits_byte & 0x4) != 0, (bits_byte & 0x8) != 0),
+        ), (
+            Pair::new((bits_byte & 0x10) != 0, (bits_byte & 0x20) != 0),
+            Pair::new((bits_byte & 0x40) != 0, (bits_byte & 0x80) != 0),
+        )
         );
+
         // ys
-        let (ys00, used00) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        let (ys00, used00) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
         offset += used00;
-        let (ys01, used01) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        let (ys01, used01) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
         offset += used01;
-        let (ys10, used10) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        let (ys10, used10) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
         offset += used10;
-        let (ys11, used11) = RingVec::<N>::from_bytes(&bytes[offset..], modulus);
+        let (ys11, used11) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
         offset += used11;
         // y_bits
-        let mut y_bits = (
-            Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
-            Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
+        let (y_bits_ringvec, used_y_bits) = RingVec::<8>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
+        let y_bits = (
+            (
+                Pair::new(ModInt::new(y_bits_ringvec[0], modulus), ModInt::new(y_bits_ringvec[1], modulus)),
+                Pair::new(ModInt::new(y_bits_ringvec[2], modulus), ModInt::new(y_bits_ringvec[3], modulus))
+            ),
+            (
+                Pair::new(ModInt::new(y_bits_ringvec[4], modulus), ModInt::new(y_bits_ringvec[5], modulus)),
+                Pair::new(ModInt::new(y_bits_ringvec[6], modulus), ModInt::new(y_bits_ringvec[7], modulus))
+            )
         );
-        for pair in [&mut y_bits.0, &mut y_bits.1] {
-            for mint in [&mut pair.first, &mut pair.second] {
-                let val = u128::from_le_bytes(bytes[offset..offset+16].try_into().unwrap());
-                *mint = ModInt::new(val, modulus);
-                offset += 16;
-            }
-        }
+        offset += used_y_bits;
         (
             IntervalFSSCW {
                 seeds: (seeds0, seeds1),
@@ -114,7 +147,7 @@ pub struct IntervalFSSData<const N: usize> {
     pub y_bits: (Pair<ModInt>, Pair<ModInt>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct IntervalFSSKey<const N: usize> {
     pub key_idx: bool,
     pub root_seed: [u8; AES_BLOCK_SIZE],

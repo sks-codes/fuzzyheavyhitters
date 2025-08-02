@@ -17,6 +17,7 @@ use std::thread;
 use std::time::Instant;
 use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{BufReader, BufWriter};
+use std::convert::TryInto;
 use rand::Rng;
 
 /// FSS key batch for check phase - contains keys for one server
@@ -40,31 +41,27 @@ impl FssKeyBatch {
         out
     }
 
-    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<Self, String> {
+    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
         if bytes.len() < 4 { return Err("Too short for FssKeyBatch keys len".to_string()); }
-        let mut arr = [0u8; 4];
-        arr.copy_from_slice(&bytes[..4]);
-        let key_count = u32::from_le_bytes(arr) as usize;
-        bytes = &bytes[4..];
+        let mut offset = 0;
+        let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
         let mut keys = Vec::with_capacity(key_count);
         for _ in 0..key_count {
-            let (k, rest) = IntervalFSSKey::<1>::from_bytes_partial(bytes)?;
+            let (k, key_used) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
             keys.push(k);
-            bytes = rest;
+            offset += key_used;
         }
-        if bytes.len() < 4 { return Err("Too short for FssKeyBatch random_values len".to_string()); }
-        arr.copy_from_slice(&bytes[..4]);
-        let val_count = u32::from_le_bytes(arr) as usize;
-        bytes = &bytes[4..];
+        if bytes[offset..].len() < 4 { return Err("Too short for FssKeyBatch random_values len".to_string()); }
+        let val_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
         let mut random_values = Vec::with_capacity(val_count);
         for _ in 0..val_count {
-            if bytes.len() < 16 { return Err("Too short for u128 in FssKeyBatch".to_string()); }
-            let mut arr128 = [0u8; 16];
-            arr128.copy_from_slice(&bytes[..16]);
-            random_values.push(u128::from_le_bytes(arr128));
-            bytes = &bytes[16..];
+            if bytes[offset..].len() < 16 { return Err("Too short for u128 in FssKeyBatch".to_string()); }
+            random_values.push(u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap()));
+            offset += 16;
         }
-        Ok(FssKeyBatch { keys, random_values })
+        Ok((FssKeyBatch { keys, random_values }, offset))
     }
 }
 
@@ -161,8 +158,6 @@ impl FssDealer {
 
             match signal_bytes {
                 DealerSignal::RequestCheckKeys => {
-                    println!("Dealer: Received key request from server 0");
-
                     // Send keys to both servers
                     let batch_server0 = FssKeyBatch {
                         keys: current_check_keys.0.clone(),
@@ -182,14 +177,10 @@ impl FssDealer {
                     self.write_fss_key_batch(channel_server1, &batch_server1)
                         .map_err(|e| format!("Failed to send keys to server 1: {}", e))?;
 
-                    println!("Dealer: Sent FSS keys to both servers");
-
                     // Generate new keys for next request
                     current_check_keys = self.generate_fss_keys_for_check()?;
                 }
                 DealerSignal::RequestThresholdKeys => {
-                    println!("Dealer: Received threshold key request from server 0");
-
                     // Create batches
                     let batch_server0 = FssKeyBatch {
                         keys: current_threshold_keys.0.clone(),
@@ -208,8 +199,6 @@ impl FssDealer {
                     // Send to server 1
                     self.write_fss_key_batch(channel_server1, &batch_server1)
                         .map_err(|e| format!("Failed to send threshold keys to server 1: {}", e))?;
-
-                    println!("Dealer: Sent threshold FSS keys to both servers");
 
                     // Generate new keys for next request
                     current_threshold_keys = self.generate_fss_keys_for_threshold()?;
@@ -243,6 +232,7 @@ impl FssDealer {
         let modulus = 1u128 << self.check_output_bit_length;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
+        println!("Dealer: Sending {} bytes of FSS keys", data.len());
         channel.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to write length: {}", e))?;
         channel.write_bytes(&data)

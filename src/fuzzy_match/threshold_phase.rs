@@ -6,15 +6,12 @@ use crate::data_structures::payload::RingVec;
 use crate::fss::interval::IntervalFSSKey;
 use crate::util::u128_to_bits;
 use crate::{Share, Group};
-
-
+use crate::channel::CommTrackingChannel;
 use std::convert::TryInto;
 use scuttlebutt::{AesRng, Block, AbstractChannel};
-use crate::channel::CommTrackingChannel;
-use serde::{Deserialize, Serialize};
 
 /// Method for threshold comparison
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ThresholdMethod {
     /// Use garbled circuits for threshold comparison
     GarbledCircuits,
@@ -23,7 +20,7 @@ pub enum ThresholdMethod {
 }
 
 /// Data for threshold phase configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum ThresholdData {
     /// No additional data needed for garbled circuits
     GarbledCircuits,
@@ -37,7 +34,7 @@ pub enum ThresholdData {
 }
 
 /// Configuration for the threshold phase
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ThresholdConfig {
     pub input_bit_length: usize,
     /// Whether this is the garbler side (true) or evaluator side (false)
@@ -92,6 +89,8 @@ impl ThresholdPhase {
         for result in match_results {
             aggregated_share = aggregated_share + *result;
         }
+
+        println!("Aggregated share: {}", aggregated_share.val());
 
         // Step 2: Compare aggregated share with threshold using garbled circuits
         // Both aggregated_share and threshold are already ModInt, so we can use them directly

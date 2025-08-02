@@ -1,7 +1,7 @@
 use std::ops::{Add, Sub, Mul, BitAnd, BitXor, Index, IndexMut};
 use rand::Rng;
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub struct RingVec<const N: usize> {
     val: [u128; N],
     modulus: u128,
@@ -132,8 +132,8 @@ impl<const N: usize> RingVec<N> {
     }
     
     /// Create RingVec from compressed byte representation
-    /// Requires modulus to be provided separately (assumed synchronized between parties)
-    pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<Self, String> {
+    /// Returns (RingVec, bytes_consumed) tuple to match pattern used in interval structures
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
         // Calculate bit width from modulus
         let bit_width = if modulus <= 1 {
             1
@@ -141,13 +141,23 @@ impl<const N: usize> RingVec<N> {
             (128 - (modulus - 1).leading_zeros()) as usize
         };
         
-        let val = decompress_ring_vec_data_adaptive::<N>(bytes, bit_width)?;
+        let total_bits = N * bit_width;
+        let padded_bits = (total_bits + 7) & !7; // Round up to nearest multiple of 8
+        let bytes_consumed = padded_bits / 8;
         
-        Ok(RingVec {
+        if bytes.len() < bytes_consumed {
+            return Err(format!("Not enough bytes: need {}, got {}", bytes_consumed, bytes.len()));
+        }
+        
+        let val = decompress_ring_vec_data_adaptive::<N>(&bytes[..bytes_consumed], bit_width)?;
+        
+        let ring_vec = RingVec {
             val,
             modulus,
             modulus_mask: modulus - 1,
-        })
+        };
+        
+        Ok((ring_vec, bytes_consumed))
     }
     
     /// Calculate the byte size needed for this RingVec's compressed representation
@@ -332,7 +342,7 @@ mod tests {
         
         // Test byte conversion
         let bytes = ring_vec.to_bytes();
-        let reconstructed = RingVec::<4>::from_bytes(&bytes, modulus).unwrap();
+        let (reconstructed, bytes_consumed) = RingVec::<4>::from_bytes(&bytes, modulus).unwrap();
         
         // Check that values are preserved
         for i in 0..4 {
@@ -341,6 +351,9 @@ mod tests {
         
         // Verify modulus is preserved
         assert_eq!(ring_vec.modulus(), reconstructed.modulus());
+        
+        // Verify bytes consumed matches bytes length
+        assert_eq!(bytes_consumed, bytes.len());
         
         // Check compression effectiveness
         let uncompressed_size = RingVec::<4>::uncompressed_size_bytes();
@@ -365,7 +378,7 @@ mod tests {
         let ring_vec = RingVec::new(values, modulus);
         
         let bytes = ring_vec.to_bytes();
-        let reconstructed = RingVec::<8>::from_bytes(&bytes, modulus).unwrap();
+        let (reconstructed, _) = RingVec::<8>::from_bytes(&bytes, modulus).unwrap();
         
         for i in 0..8 {
             assert_eq!(ring_vec[i], reconstructed[i]);
@@ -402,7 +415,7 @@ mod tests {
             assert_eq!(ring_vec.modulus_bit_width(), expected_bits);
             
             let bytes = ring_vec.to_bytes();
-            let reconstructed = RingVec::<4>::from_bytes(&bytes, modulus).unwrap();
+            let (reconstructed, bytes_consumed) = RingVec::<4>::from_bytes(&bytes, modulus).unwrap();
             
             for i in 0..4 {
                 assert_eq!(ring_vec[i], reconstructed[i]);
@@ -411,6 +424,7 @@ mod tests {
             // Expected byte size: ceil(4 * expected_bits / 8)
             let expected_byte_size = (4 * expected_bits + 7) / 8;
             assert_eq!(bytes.len(), expected_byte_size);
+            assert_eq!(bytes_consumed, expected_byte_size);
             
             println!("Modulus {} ({} bits): {} bytes", modulus, expected_bits, bytes.len());
         }

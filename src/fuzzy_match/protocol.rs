@@ -3,21 +3,21 @@
 //! This module provides a high-level interface for running the complete fuzzy heavy hitters protocol
 //! including share phase, check phase, and threshold phase.
 
-use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType};
+use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, ShareMethod, ShareData, SharedRange, DictionaryType, DistanceMetric};
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DealerSignal};
 use crate::fuzzy_match::client::{Client};
 use crate::data_structures::modint::ModInt;
-use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb};
+use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits, u128_to_bits_msb, get_distance_threshold};
 use crate::channel::CommTrackingChannel;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::thread::current;
-use serde::{Deserialize, Serialize};
 use std::time::Instant;
+use std::convert::TryInto;
 
 /// Configuration for the entire fuzzy heavy hitters protocol
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ProtocolConfig {
     /// Configuration for the share phase
     pub share_config: ShareConfig,
@@ -67,7 +67,6 @@ impl FuzzyHeavyHittersProtocol {
         client_channel.read_bytes(&mut len_bytes)
             .map_err(|e| format!("Failed to read length from client: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
-
         let mut shares_data = vec![0u8; len];
         client_channel.read_bytes(&mut shares_data)
             .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
@@ -77,16 +76,15 @@ impl FuzzyHeavyHittersProtocol {
         if bytes.len() < 4 {
             return Err("Too short for Vec<SharedRange> length".to_string());
         }
-        let mut arr = [0u8; 4];
-        arr.copy_from_slice(&bytes[..4]);
-        let count = u32::from_le_bytes(arr) as usize;
-        bytes = &bytes[4..];
+        let mut offset = 0;
+        let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
         let modulus = 1u128 << self.config.share_config.output_bit_length;
         let mut shares = Vec::with_capacity(count);
         for _ in 0..count {
-            let (share, rest) = SharedRange::from_bytes(bytes, modulus)?;
+            let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)?;
             shares.push(share);
-            bytes = rest;
+            offset += share_used;
         }
         Ok(shares)
     }
@@ -164,8 +162,6 @@ impl FuzzyHeavyHittersProtocol {
                 }
             }
 
-            println!("Candidate prefixes to test: {:?}", candidate_prefix_sets);
-
             if candidate_prefix_sets.is_empty() {
                 // No more prefixes to extend, we are done
                 break;
@@ -223,13 +219,21 @@ impl FuzzyHeavyHittersProtocol {
         rng: &mut AesRng,
     ) -> Result<Vec<bool>, String> {
         let mut server_bits = Vec::new();
+        let distance_threshold = if self.config.share_config.metric == DistanceMetric::LInfinity {
+            get_distance_threshold(self.config.delta, "Linf")
+        } else {
+            match self.config.share_config.metric {
+                DistanceMetric::Lp { p } => get_distance_threshold(self.config.delta, &format!("L{}", p)),
+                _ => return Err("Unsupported distance metric for threshold".to_string()),
+            }
+        };
 
         // Process each prefix set and collect our server's results
         for (prefix_idx, prefix_set) in prefix_sets.iter().enumerate() {
             // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
             let check_data_list = if matches!(self.config.check_config.method, CheckMethod::LpIntervalFSS) {
                 // Request check FSS keys from dealer
-                let batch = self.request_dealer(DealerSignal::RequestCheckKeys, dealer_channel)?;
+                let batch = self.request_dealer(DealerSignal::RequestCheckKeys, dealer_channel, 1u128 << self.config.check_config.output_bit_length)?;
                 
                 if batch.keys.len() < client_shares.len() {
                     return Err(format!("Dealer provided {} keys but {} are needed", 
@@ -240,7 +244,7 @@ impl FuzzyHeavyHittersProtocol {
                 let mut check_data_vec = Vec::new();
                 for i in 0..client_shares.len() {
                     check_data_vec.push(CheckData::LpIntervalFSS {
-                        threshold: self.config.delta,
+                        threshold: distance_threshold,
                         fss_key: batch.keys[i].clone(),
                         random_value: batch.random_values[i],
                     });
@@ -251,7 +255,7 @@ impl FuzzyHeavyHittersProtocol {
                 let single_check_data = match self.config.check_config.method {
                     CheckMethod::Linf => CheckData::Linf,
                     CheckMethod::LpGarbledCircuits => CheckData::LpGarbledCircuits {
-                        threshold: self.config.delta,
+                        threshold: distance_threshold,
                     },
                     CheckMethod::LpIntervalFSS => unreachable!(), // Already handled above
                 };
@@ -276,7 +280,7 @@ impl FuzzyHeavyHittersProtocol {
             // Handle ThresholdData - get from dealer if using IntervalFSS, otherwise use provided data
             let threshold_data_to_use = if matches!(self.config.threshold_config.method, ThresholdMethod::IntervalFSS) {
                 // Request threshold FSS keys from dealer
-                let batch = self.request_dealer(DealerSignal::RequestThresholdKeys, dealer_channel)?;
+                let batch = self.request_dealer(DealerSignal::RequestThresholdKeys, dealer_channel, 2u128)?;
                 
                 if batch.keys.is_empty() {
                     return Err("Dealer provided no threshold keys".to_string());
@@ -357,7 +361,7 @@ impl FuzzyHeavyHittersProtocol {
     }
 
     /// Request FSS keys from dealer
-    fn request_dealer(&self, signal: DealerSignal, dealer_channel: &mut CommTrackingChannel) -> Result<FssKeyBatch, String> {
+    fn request_dealer(&self, signal: DealerSignal, dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
         // Send DealerSignal using custom serialization
         let signal_bytes = signal.to_bytes();
         let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
@@ -379,8 +383,8 @@ impl FuzzyHeavyHittersProtocol {
             .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
         // Use output modulus from threshold config for deserialization
-        let modulus = 1u128 << self.config.threshold_config.output_bit_length;
-        FssKeyBatch::from_bytes(&batch_data, modulus)
+        let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+        Ok(fss_key_batch)
     }
 
     /// Send shutdown signal to dealer
