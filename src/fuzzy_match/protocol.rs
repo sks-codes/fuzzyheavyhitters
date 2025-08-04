@@ -260,20 +260,14 @@ impl FuzzyHeavyHittersProtocol {
                 vec![single_check_data; client_shares.len()]
             };
 
-            // Run check phase for all client shares with this prefix set
-            let mut match_results = Vec::new();
-            
-            for (i, share) in client_shares.iter().enumerate() {
-                let result = self.check_phase.run_fuzzy_match_check(
-                    share,
+            // Run batched check phase for all client shares with this prefix set
+            let match_results = self.check_phase.run_batch_fuzzy_match_check(
+                    client_shares,
                     prefix_set,
-                    &check_data_list[i], // Use the corresponding CheckData for this client share
+                    &check_data_list,
                     other_server_channel,
                     rng,
-                ).map_err(|e| format!("Check phase failed: {:?}", e))?;
-                
-                match_results.push(result);
-            }
+                ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
             // Handle ThresholdData - get from dealer if using IntervalFSS, otherwise use provided data
             let threshold_data_to_use = if matches!(self.config.threshold_config.method, ThresholdMethod::IntervalFSS) {

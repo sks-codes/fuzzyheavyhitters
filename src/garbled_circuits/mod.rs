@@ -8,3 +8,4 @@ pub mod greater_than;
 pub mod less_than_or_equal_threshold;
 pub mod greater_than_or_equal_threshold;
 pub mod equality_full;
+pub mod batch_equality_full;
