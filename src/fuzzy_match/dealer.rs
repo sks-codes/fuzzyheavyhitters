@@ -19,6 +19,7 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{BufReader, BufWriter};
 use std::convert::TryInto;
 use rand::Rng;
+use rayon::prelude::*;
 
 /// FSS key batch for check phase - contains keys for one server
 #[derive(Clone, Debug)]
@@ -247,8 +248,6 @@ impl FssDealer {
         let in_modulus = 1u128 << self.check_input_bit_length;
         let out_modulus = 1u128 << self.check_output_bit_length;
     
-        let mut keys_server0 = Vec::new();
-        let mut keys_server1 = Vec::new();
         let mut random_pairs = Vec::new();
     
         for _ in 0..self.n_clients {
@@ -259,51 +258,63 @@ impl FssDealer {
             random_pairs.push((r0, r1));
         }
     
-        for &(r0, r1) in &random_pairs {
-            // Check if distance_threshold + r0 + r1 would wrap around
-            let sum = self.distance_threshold + (r0 + r1) % in_modulus;
-            let wraps_around = sum >= in_modulus;
-            let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
-                // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
-                // Return 0 in the middle, 1 on left and right
-                let interval_start = (sum + 1) % in_modulus;
-                let interval_end = (r0 + r1 - 1) % in_modulus;
+        // Use parallel processing for FSS key generation
+        let key_pairs: Vec<(IntervalFSSKey<1>, IntervalFSSKey<1>)> = random_pairs
+            .par_iter()
+            .map(|&(r0, r1)| {
+                // Check if distance_threshold + r0 + r1 would wrap around
+                let sum = self.distance_threshold + (r0 + r1) % in_modulus;
+                let wraps_around = sum >= in_modulus;
+                let (alpha_bits, beta_bits, a, b, c) = if wraps_around {
+                    // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
+                    // Return 0 in the middle, 1 on left and right
+                    let interval_start = (sum + 1) % in_modulus;
+                    let interval_end = (r0 + r1 - 1) % in_modulus;
 
-                let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
-                let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
+                    let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
+                    let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
+                
+                    // For wrap-around: left=1, middle=0, right=1
+                    let a = RingVec::<1>::new([1], out_modulus); // left
+                    let b = RingVec::<1>::new([0], out_modulus); // middle
+                    let c = RingVec::<1>::new([1], out_modulus); // right
+
+                    (alpha_bits, beta_bits, a, b, c)
+                } else {
+                    // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
+                    // Return 1 inside interval (distance <= threshold), 0 outside
+                    let interval_start = (r0 + r1) % in_modulus;
+                    let interval_end = sum;
+
+                    let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
+                    let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
+
+                    // For no wrap-around: left=0, middle=1, right=0
+                    let a = RingVec::<1>::new([0], out_modulus); // left
+                    let b = RingVec::<1>::new([1], out_modulus); // middle
+                    let c = RingVec::<1>::new([0], out_modulus); // right
+
+                    (alpha_bits, beta_bits, a, b, c)
+                };
             
-                // For wrap-around: left=1, middle=0, right=1
-                let a = RingVec::<1>::new([1], out_modulus); // left
-                let b = RingVec::<1>::new([0], out_modulus); // middle
-                let c = RingVec::<1>::new([1], out_modulus); // right
-
-                (alpha_bits, beta_bits, a, b, c)
-            } else {
-                // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
-                // Return 1 inside interval (distance <= threshold), 0 outside
-                let interval_start = (r0 + r1) % in_modulus;
-                let interval_end = sum;
-
-                let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
-                let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
-
-                // For no wrap-around: left=0, middle=1, right=0
-                let a = RingVec::<1>::new([0], out_modulus); // left
-                let b = RingVec::<1>::new([1], out_modulus); // middle
-                let c = RingVec::<1>::new([0], out_modulus); // right
-
-                (alpha_bits, beta_bits, a, b, c)
-            };
+                let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
+                    &alpha_bits,
+                    &beta_bits,
+                    &a,
+                    &b,
+                    &c,
+                    out_modulus,
+                );
+            
+                (key0, key1)
+            })
+            .collect();
+    
+        // Split the parallel results into separate vectors
+        let mut keys_server0 = Vec::with_capacity(self.n_clients);
+        let mut keys_server1 = Vec::with_capacity(self.n_clients);
         
-            let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
-                &alpha_bits,
-                &beta_bits,
-                &a,
-                &b,
-                &c,
-                out_modulus,
-            );
-        
+        for (key0, key1) in key_pairs {
             keys_server0.push(key0);
             keys_server1.push(key1);
         }
