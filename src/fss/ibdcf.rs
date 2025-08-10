@@ -4,6 +4,7 @@ use crate::Group;
 
 use serde::Deserialize;
 use serde::Serialize;
+use std::time::Instant;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CorWord {
@@ -82,6 +83,7 @@ impl<T> TupleExt<T> for (T, T) {
 
 fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (prg::PrgSeed, prg::PrgSeed)) -> CorWord
 {
+    let start = Instant::now();
     let data = seeds.map(|s| s.expand());
     let keep = bit;
     let lose = !keep;
@@ -115,7 +117,6 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
 
         *bits.get_mut(b) = newbit;
     }
-
     cw
 }
 pub fn eval_str(keys : &Vec<(ibDCFKey, ibDCFKey)>, states: &Vec<(EvalState,EvalState)>, eval_string: &Vec<bool>) -> Vec<(EvalState,EvalState)> {

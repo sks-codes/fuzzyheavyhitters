@@ -1,0 +1,62 @@
+use counttree::sample_driving_data::{geo_to_grid};
+use serde_json;
+use std::error::Error;
+use std::fs::File;
+use std::io::BufWriter;
+use std::path::Path;
+use csv::Reader;
+
+fn read_csv_and_convert<P: AsRef<Path>>(path: P) -> Result<Vec<Vec<u128>>, Box<dyn Error>> {
+    let mut rdr = Reader::from_path(path)?;
+    
+    rdr.records().map(|record| {
+        let record = record?;
+        let start_lon = record[15].parse::<f64>()?;
+        let start_lat = record[16].parse::<f64>()?;
+        
+        // Convert to grid coordinates (same as csv_to_bitvecs function)
+        let (start_lat_grid, start_lon_grid) = geo_to_grid(start_lat, start_lon);
+        
+        // Convert to u128 and create point as [lat, lon]
+        Ok(vec![start_lat_grid as u128, start_lon_grid as u128])
+    }).collect()
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("Starting RideAustin client points JSON generation...");
+    
+    let input_file = "data/sample.csv";
+    let output_file = "data/ride-austin/client_points.json";
+    
+    // Check if input file exists
+    if !Path::new(input_file).exists() {
+        eprintln!("Error: Input file '{}' does not exist.", input_file);
+        eprintln!("Please make sure you have the ride data CSV file at this location.");
+        return Ok(());
+    }
+    
+    // Read and convert CSV data
+    println!("Reading and converting CSV data from {}...", input_file);
+    let client_points = read_csv_and_convert(input_file)?;
+    println!("Converted {} ride points to client format", client_points.len());
+    
+    // Write to JSON file in the same format as data/synthetic/client_points.json
+    println!("Writing client points JSON to {}...", output_file);
+    let file = File::create(output_file)?;
+    let writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, &client_points)?;
+    
+    println!("Successfully generated client points JSON!");
+    println!("Total points: {}", client_points.len());
+    println!("Output file: {}", output_file);
+    
+    // Print some sample statistics
+    if !client_points.is_empty() {
+        println!("\nSample points:");
+        for (i, point) in client_points.iter().take(5).enumerate() {
+            println!("  Point {}: [lat_grid: {}, lon_grid: {}]", i+1, point[0], point[1]);
+        }
+    }
+    
+    Ok(())
+}

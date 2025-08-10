@@ -4,7 +4,7 @@ use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrin
             xor, and_bit, bytes_to_u128};
 use crate::Group;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
-use crate::data_structures::payload::RingVec;
+use crate::data_structures::payload::{self, RingVec};
 use crate::data_structures::pair::Pair;
 
 use rand_core::RngCore; 
@@ -12,6 +12,7 @@ use rand::Rng;
 use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::convert::TryInto;
+use std::time::Instant;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
@@ -207,6 +208,7 @@ pub struct IntervalFSSEval<const N: usize> {
 fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128, left: bool, right: bool) -> IntervalFSSData<N> {
     let num_payload_bits = modulus.ilog2();
     let num_payload_bytes = ((num_payload_bits + 7) / 8) as usize;
+    let modulus_mask  = modulus - 1;
     FIXED_KEY_STREAM.with(|stream| {
         let mut s = stream.borrow_mut();
         s.set_key(&key);
@@ -220,28 +222,25 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128, left
             ),
         };
 
-        s.refill();
-        s.fill_bytes(&mut out.seeds.0);
-        s.refill();
-        s.fill_bytes(&mut out.seeds.1);
+        let mut payload_rnd = vec![0u8; num_payload_bytes * (N + 2) * 2 + AES_BLOCK_SIZE * 2];
+        s.fill_bytes(&mut payload_rnd);
+
+        out.seeds.0.copy_from_slice(&payload_rnd[payload_rnd.len() - 2 * AES_BLOCK_SIZE..payload_rnd.len() - AES_BLOCK_SIZE]);
+        out.seeds.1.copy_from_slice(&payload_rnd[payload_rnd.len() - AES_BLOCK_SIZE..]);
 
         out.bits.0 = Pair::new((out.seeds.0[0] & 0x1) == 0, out.seeds.0[0] & 0x2 == 0);
         out.bits.1 = Pair::new((out.seeds.1[0] & 0x1) == 0, out.seeds.1[0] & 0x2 == 0);
         out.seeds.0[0] &= 0xFC; // Zero out first two bits
         out.seeds.1[0] &= 0xFC; // Zero out first two bits
 
-        let mut payload_rnd = vec![0u8; num_payload_bytes * (N + 2) * 2];
-        s.refill();
-        s.fill_bytes(&mut payload_rnd);
-
         for i in 0..N {
-            out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) % modulus;
+            out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) & modulus_mask;
         }
         out.y_bits.0.first = ModInt::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
         out.y_bits.0.second = ModInt::new(bytes_to_u128(&payload_rnd[(N + 1) * num_payload_bytes..(N + 2) * num_payload_bytes]), modulus);
 
         for i in 0..N {
-            out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 2) * num_payload_bytes..(i + N + 3) * num_payload_bytes]) % modulus;
+            out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 2) * num_payload_bytes..(i + N + 3) * num_payload_bytes]) & modulus_mask;
         }
         out.y_bits.1.first = ModInt::new(bytes_to_u128(&payload_rnd[(2 * N + 2) * num_payload_bytes..(2 * N + 3) * num_payload_bytes]), modulus);
         out.y_bits.1.second = ModInt::new(bytes_to_u128(&payload_rnd[(2 * N + 3) * num_payload_bytes..(2 * N + 4) * num_payload_bytes]), modulus);
@@ -268,7 +267,6 @@ fn gen_cor_word<const N: usize>(
             gen_layer_data(eval1.seed, modulus, true, true)
         ));
     });
-
     let mut delta_seed = Vec::<([u8; 16], [u8; 16])>::new();
     let mut delta_bits = vec![];
     let mut delta_ys = vec![];

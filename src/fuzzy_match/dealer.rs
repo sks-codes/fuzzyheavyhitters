@@ -19,6 +19,7 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{BufReader, BufWriter};
 use std::convert::TryInto;
 use rand::Rng;
+use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 /// FSS key batch for check phase - contains keys for one server
@@ -129,7 +130,142 @@ impl FssDealer {
         }
     }
 
-    /// Run the dealer - listen for connections from both servers and handle key requests
+    /// Run the dealer with multiple channels - handle key requests from multiple parallel channels
+    pub fn run_parallel(
+        &self,  
+        channels_server0: &[Arc<Mutex<CommTrackingChannel>>],
+        channels_server1: &[Arc<Mutex<CommTrackingChannel>>],
+    ) -> Result<(), String> {
+        println!("FSS Dealer starting with {} channels per server...", channels_server0.len());
+
+        if channels_server0.len() != channels_server1.len() {
+            return Err(format!("Mismatch in channel count: server0 has {}, server1 has {}", 
+                             channels_server0.len(), channels_server1.len()));
+        }
+
+        // Generate initial FSS keys  
+        let current_check_keys = Arc::new(Mutex::new(self.generate_fss_keys_for_check()?));
+        let current_threshold_keys = Arc::new(Mutex::new(self.generate_fss_keys_for_threshold()?));
+
+        println!("Generated initial FSS keys, dealer ready");
+
+        // Process each channel pair in parallel - each gets its own persistent thread
+        channels_server0
+            .par_iter()
+            .zip(channels_server1.par_iter())
+            .enumerate()
+            .try_for_each(|(channel_idx, (server0_channel, server1_channel))| {
+                let check_keys = current_check_keys.clone();
+                let threshold_keys = current_threshold_keys.clone();
+                
+                // Each thread has its own local shutdown flag
+                let mut local_shutdown = false;
+                
+                // Lock the channels once at the beginning since this thread owns them
+                let mut server0_channel_guard = server0_channel.lock()
+                    .map_err(|e| format!("Failed to lock server0 channel {}: {}", channel_idx, e))?;
+                let mut server1_channel_guard = server1_channel.lock()
+                    .map_err(|e| format!("Failed to lock server1 channel {}: {}", channel_idx, e))?;
+                
+                // Each channel pair runs in its own persistent loop
+                loop {
+                    // Check if local shutdown was triggered
+                    if local_shutdown {
+                        println!("Channel {} terminating due to shutdown", channel_idx);
+                        break;
+                    }
+
+                    // Check if there's a signal waiting on the server0 channel
+                    match self.read_dealer_signal(&mut *server0_channel_guard) {
+                        Ok(signal) => {
+                            match signal {
+                                DealerSignal::RequestCheckKeys => {
+                                    println!("Dealer: Received check keys request on channel {}", channel_idx);
+                                    
+                                    // Get current keys and generate new ones
+                                    let (keys0, keys1, random_pairs) = {
+                                        let mut keys_guard = check_keys.lock().unwrap();
+                                        let current_keys = keys_guard.clone();
+                                        *keys_guard = self.generate_fss_keys_for_check().map_err(|e| format!("Failed to generate check keys: {}", e))?;
+                                        current_keys
+                                    };
+
+                                    // Send keys to both servers on this channel
+                                    let batch_server0 = FssKeyBatch {
+                                        keys: keys0,
+                                        random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
+                                    };
+
+                                    let batch_server1 = FssKeyBatch {
+                                        keys: keys1,
+                                        random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                                    };
+
+                                    let start = Instant::now();
+                                    // Send to server 0 on this channel
+                                    self.write_fss_key_batch(&mut *server0_channel_guard, &batch_server0)
+                                        .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
+                                    println!("Sent check keys to server 0 on channel {} in {:?}", channel_idx, start.elapsed());
+
+                                    // Send to server 1 on this channel
+                                    self.write_fss_key_batch(&mut *server1_channel_guard, &batch_server1)
+                                        .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+                                }
+                                DealerSignal::RequestThresholdKeys => {
+                                    println!("Dealer: Received threshold keys request on channel {}", channel_idx);
+                                    
+                                    // Get current keys and generate new ones
+                                    let (keys0, keys1, random_pairs) = {
+                                        let mut keys_guard = threshold_keys.lock().unwrap();
+                                        let current_keys = keys_guard.clone();
+                                        *keys_guard = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
+                                        current_keys
+                                    };
+
+                                    // Create batches
+                                    let batch_server0 = FssKeyBatch {
+                                        keys: keys0,
+                                        random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
+                                    };
+
+                                    let batch_server1 = FssKeyBatch {
+                                        keys: keys1,
+                                        random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                                    };
+
+                                    // Send to server 0 on this channel
+                                    self.write_fss_key_batch(&mut *server0_channel_guard, &batch_server0)
+                                        .map_err(|e| format!("Failed to send threshold keys to server 0 on channel {}: {}", channel_idx, e))?;
+
+                                    // Send to server 1 on this channel
+                                    self.write_fss_key_batch(&mut *server1_channel_guard, &batch_server1)
+                                        .map_err(|e| format!("Failed to send threshold keys to server 1 on channel {}: {}", channel_idx, e))?;
+                                }
+                                DealerSignal::Shutdown => {
+                                    println!("Dealer: Received shutdown signal on channel {}, terminating this thread", channel_idx);
+                                    local_shutdown = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("Dealer: Error reading from server 0 channel {}: {}, terminating thread", channel_idx, e);
+                            break;
+                        }
+                    }
+                    
+                    // No need for sleep since read_dealer_signal is blocking
+                }
+
+                Ok::<(), String>(())
+            })
+            .map_err(|e| format!("Parallel dealer processing failed: {}", e))?;
+
+        println!("All dealer channels terminated");
+        Ok(())
+    }
+
+    /// Run the dealer - listen for connections from both servers and handle key requests (original single-channel version)
     pub fn run(
         &self,  
         channel_server0: &mut CommTrackingChannel,
@@ -233,6 +369,7 @@ impl FssDealer {
         let modulus = 1u128 << self.check_output_bit_length;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
+        println!("Writing FSS key batch of size {} bytes to channel", data.len());
         channel.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to write length: {}", e))?;
         channel.write_bytes(&data)
@@ -371,6 +508,7 @@ impl FssDealer {
                 (alpha_bits, beta_bits, a, b, c)
             };
         
+            let start = Instant::now();
             let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(
                 &alpha_bits,
                 &beta_bits,
@@ -379,6 +517,7 @@ impl FssDealer {
                 &c,
                 2,
             );
+            println!("Generated keys in {:?}", start.elapsed());
         
             keys_server0.push(key0);
             keys_server1.push(key1);

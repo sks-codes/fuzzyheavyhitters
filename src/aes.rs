@@ -3,6 +3,7 @@ use core::arch::x86_64::{
 };
 
 use aes::block_cipher::{generic_array::GenericArray, Block, BlockCipher, NewBlockCipher};
+use aes::block_cipher::generic_array::typenum;
 use aes::Aes128;
 use aes_ctr::stream_cipher::{NewStreamCipher, SyncStreamCipher};
 use aes_ctr::Aes128Ctr;
@@ -13,6 +14,7 @@ use rand_core::RngCore;
 use serde::Deserialize;
 use serde::Serialize;
 use std::ops;
+use std::time::Instant;
 
 // AES key size in bytes. We always use AES-128,
 // which has 16-byte keys.
@@ -24,100 +26,83 @@ pub const AES_BLOCK_SIZE: usize = 16;
 // XXX Todo try using 8-way parallelism
 pub struct FixedKeyPrgStream {
     aes: Aes128,
-    ctr: __m128i,
-    buf: [u8; AES_BLOCK_SIZE * 8],
-    have: usize,
-    buf_ptr: usize,
+    ctr_generic_array: GenericArray<GenericArray<u8, typenum::U16>, typenum::U101>,
+    buf_blocks: GenericArray<GenericArray<u8, typenum::U16>, typenum::U101>,
     count: usize,
+    buf: [u8; 101 * AES_BLOCK_SIZE],
+    buf_ptr: usize,
+    have: usize,
 }
 
 
 impl FixedKeyPrgStream {
     pub fn new() -> Self {
         let key = GenericArray::from_slice(&[0; AES_KEY_SIZE]);
-
-        let ctr_init = FixedKeyPrgStream::load(&[0; AES_BLOCK_SIZE]);
+        // Initialize ctr_array and ctr_generic_array with counters from 0 to 100
+        let mut ctr_array = [unsafe { std::mem::zeroed() }; 101];
+        let mut ctr_generic_array = GenericArray::<GenericArray<u8, typenum::U16>, typenum::U101>::default();
+        for i in 0..=100 {
+            let mut ctr_bytes = [0u8; AES_BLOCK_SIZE];
+            ctr_bytes[8..].copy_from_slice(&(i as u64).to_be_bytes());
+            ctr_array[i] = FixedKeyPrgStream::load(&ctr_bytes);
+            ctr_generic_array[i].copy_from_slice(&ctr_bytes);
+        }
         FixedKeyPrgStream {
             aes: Aes128::new(&key),
-            ctr: ctr_init,
-            buf: [0; AES_BLOCK_SIZE * 8],
-            buf_ptr: AES_BLOCK_SIZE,
-            have: AES_BLOCK_SIZE,
+            ctr_generic_array: ctr_generic_array.clone(),
+            buf_blocks: ctr_generic_array,
             count: 0,
+            buf: [0; 101 * AES_BLOCK_SIZE],
+            buf_ptr: 0,
+            have: 0,
         }
     }
 
     pub fn set_key(&mut self, key: &[u8; 16]) {
-        self.ctr = FixedKeyPrgStream::load(key);
-        self.buf_ptr = AES_BLOCK_SIZE;
-        self.have = AES_BLOCK_SIZE;
+        for i in 0..self.count {
+            self.buf_blocks[i].copy_from_slice(&self.ctr_generic_array[i]);
+        }
+        self.buf_ptr = 0;
+        self.have = 0;
+        self.count = 0;
     }
 
     pub fn skip_block(&mut self) {
-        // Only allow skipping a block on a block boundary.
-        debug_assert_eq!(self.have % AES_BLOCK_SIZE, 0);
-        debug_assert_eq!(self.buf_ptr, AES_BLOCK_SIZE);
-        self.ctr = FixedKeyPrgStream::inc_be(self.ctr);
+        self.buf_ptr += AES_BLOCK_SIZE;
     }
 
     pub fn refill(&mut self) {
-        //println!("Refill");
-        debug_assert_eq!(self.buf_ptr, AES_BLOCK_SIZE);
+        self.have += AES_BLOCK_SIZE;
 
-        self.have = AES_BLOCK_SIZE;
-        self.buf_ptr = 0;
-
-        // Write counter into buffer.
-        FixedKeyPrgStream::store(self.ctr, &mut self.buf[0..AES_BLOCK_SIZE]);
-
-        let count_bytes = self.buf;
-        let mut gen = GenericArray::from_mut_slice(&mut self.buf[0..AES_BLOCK_SIZE]);
-        self.aes.encrypt_block(&mut gen);
-
+        let mut to_encrypt = self.ctr_generic_array[self.count];
+        self.aes.encrypt_block(&mut to_encrypt);
         // Compute:   AES_0000(ctr) XOR ctr
-        self.buf
-            .iter_mut()
-            .zip(count_bytes.iter())
+        to_encrypt.iter_mut()
+            .zip(self.ctr_generic_array[self.count].iter())
             .for_each(|(x1, x2)| *x1 ^= *x2);
-
-        self.ctr = FixedKeyPrgStream::inc_be(self.ctr);
-        self.count += AES_BLOCK_SIZE;
+        self.buf[self.count * AES_BLOCK_SIZE..(self.count + 1) * AES_BLOCK_SIZE]
+            .copy_from_slice(&to_encrypt);
+        self.count += 1;
     }
 
     pub fn refill8(&mut self) {
-        self.have = 8 * AES_BLOCK_SIZE;
-        self.buf_ptr = 0;
+        self.have += 8 * AES_BLOCK_SIZE;
 
-        let block = GenericArray::clone_from_slice(&[0u8; 16]);
-        let mut block8 = GenericArray::clone_from_slice(&[block; 8]);
-
-        let mut cnts = [[0u8; AES_BLOCK_SIZE]; 8];
+        // Create a reference to exactly 8 blocks for encryption
+        let mut blocks_to_encrypt = GenericArray::<GenericArray<u8, typenum::U16>, typenum::U8>::from_mut_slice(
+            &mut self.ctr_generic_array[self.count..self.count + 8]
+        ).clone();
+        
+        self.aes.encrypt_blocks(&mut blocks_to_encrypt);
+        
         for i in 0..8 {
-            // Write counter into buffer
-            FixedKeyPrgStream::store(self.ctr, &mut block8[i]);
-            FixedKeyPrgStream::store(self.ctr, &mut cnts[i]);
-            self.ctr = FixedKeyPrgStream::inc_be(self.ctr);
-        }
-
-        self.aes.encrypt_blocks(&mut block8);
-
-        for i in 0..8 {
-            // Compute:   AES_0000(ctr) XOR ctr
-            block8[i]
-                .iter_mut()
-                .zip(cnts[i].iter())
+            blocks_to_encrypt[i].iter_mut()
+                .zip(self.ctr_generic_array[self.count + i].iter())
                 .for_each(|(x1, x2)| *x1 ^= *x2);
+            self.buf[(self.count + i) * AES_BLOCK_SIZE..(self.count + i + 1) * AES_BLOCK_SIZE]
+                .copy_from_slice(&blocks_to_encrypt[i]);
         }
-
-        for i in 0..8 {
-            self.buf[i * AES_BLOCK_SIZE..(i + 1) * AES_BLOCK_SIZE].copy_from_slice(&block8[i]);
-        }
-
-        self.count += 8 * AES_BLOCK_SIZE;
-
-        //println!("Blocks: {:?}", self.buf[0]);
-        //println!("Blocks: {:?}", self.buf[1]);
-        //println!("Blocks: {:?}", self.buf[2]);
+        self.count += 8;
     }
 
     // From RustCrypto aesni crate
@@ -161,20 +146,21 @@ impl rand::RngCore for FixedKeyPrgStream {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         let mut dest_ptr = 0;
         while dest_ptr < dest.len() {
-            if self.buf_ptr == self.have {
-                if dest.len() > 4 * AES_BLOCK_SIZE {
+            if self.have < dest.len() - dest_ptr {
+                if dest.len() - dest_ptr - self.have > 4 * AES_BLOCK_SIZE {
                     self.refill8();
-                //self.refill();
                 } else {
                     self.refill();
                 }
             }
 
-            let to_copy = std::cmp::min(self.have - self.buf_ptr, dest.len() - dest_ptr);
+            let to_copy = std::cmp::min(self.have, dest.len() - dest_ptr);
+            // let start = Instant::now();
             dest[dest_ptr..dest_ptr + to_copy]
                 .copy_from_slice(&self.buf[self.buf_ptr..self.buf_ptr + to_copy]);
 
             self.buf_ptr += to_copy;
+            self.have -= to_copy;
             dest_ptr += to_copy;
         }
     }

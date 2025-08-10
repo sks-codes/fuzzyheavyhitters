@@ -57,13 +57,14 @@ async fn main() -> io::Result<()> {
     let mut wtr = Writer::from_path("src/bin/benchmarks/ibDCFbench.csv")?;
     wtr.write_record(&["string_length", "number_keys", "time", "avg_time", "size"])?;
 
-    let string_lengths = [128, 256, 384, 512, 640, 768, 896, 1024];
+    let string_lengths = [16, 128, 256, 384, 512, 640, 768, 896, 1024];
     let num_keys = 10000;
 
     for i in string_lengths{
         let start = Instant::now();
         let keys= generate_ibDCF_keys(i, num_keys);
         let delta = start.elapsed().as_secs_f64();
+        println!("Time to generate ibDCF keys for string length {}: {:?}", i, delta);
         let encoded: Vec<u8> = bincode::serialize(&keys.0[0]).unwrap();
         wtr.write_record(&[i.to_string(), num_keys.to_string(), delta.to_string(), (delta / (num_keys as f64)).to_string(), encoded.len().to_string()])?;
     }
@@ -73,7 +74,7 @@ async fn main() -> io::Result<()> {
     let mut wtr = Writer::from_path("src/bin/benchmarks/ibDCFbench.csv")?;
     wtr.write_record(&["string_length", "number_keys", "time", "avg_time", "size"])?;
 
-    let string_lengths = [128, 256, 384, 512, 640, 768, 896, 1024];
+    let string_lengths = [16, 128, 256, 384, 512, 640, 768, 896, 1024];
     let num_keys = 10000;
 
     for i in string_lengths{
