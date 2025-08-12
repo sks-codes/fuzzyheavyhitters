@@ -65,3 +65,7 @@ path = "src/bin/aes_benchmark.rs"
 [[bin]]
 name = "interval_fss_benchmark"
 path = "src/bin/interval_fss_benchmark.rs"
+
+[[bin]]
+name = "ldcf_benchmark"
+path = "src/bin/ldcf_benchmark.rs"

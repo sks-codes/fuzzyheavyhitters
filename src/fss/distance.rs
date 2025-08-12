@@ -1,5 +1,5 @@
-use crate::fss::left_interval::LIntervalFSSKey;
-use crate::fss::right_interval::{self, RIntervalFSSKey};
+use crate::fss::ldcf::LdcfKey;
+use crate::fss::rdcf::RdcfKey;
 use crate::data_structures::payload::RingVec;
 use std::convert::TryInto;
 
@@ -15,36 +15,34 @@ const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
 // N here is P+1, where P is the distance Lp norm
 #[derive(Clone, Debug, PartialEq)]
 pub struct DistanceFSSKey<const N: usize> {
-    left_fss: LIntervalFSSKey<N>,
-    right_fss: RIntervalFSSKey<N>,
+    left_fss: (LdcfKey<N>, LdcfKey<N>),
+    right_fss: (RdcfKey<N>, RdcfKey<N>),
 }
 
 impl<const N: usize> DistanceFSSKey<N> {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let left_bytes = self.left_fss.to_bytes();
-        let right_bytes = self.right_fss.to_bytes();
         let mut out = Vec::new();
-        out.extend_from_slice(&(left_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&left_bytes);
-        out.extend_from_slice(&(right_bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(&right_bytes);
+        out.extend_from_slice(&self.left_fss.0.to_bytes());
+        out.extend_from_slice(&self.left_fss.1.to_bytes());
+        out.extend_from_slice(&self.right_fss.0.to_bytes());
+        out.extend_from_slice(&self.right_fss.1.to_bytes());
         out
     }
 
     pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
         let mut offset = 0;
-        let left_len = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
-        offset += 4;
-        let (left_fss, _) = LIntervalFSSKey::<N>::from_bytes(&bytes[offset..offset+left_len], modulus);
-        offset += left_len;
-        let right_len = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
-        offset += 4;
-        let (right_fss, _) = RIntervalFSSKey::<N>::from_bytes(&bytes[offset..offset+right_len], modulus);
-        offset += right_len;
+        let (left_fss0, used_left0) = LdcfKey::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_left0;
+        let (left_fss1, used_left1) = LdcfKey::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_left1;
+        let (right_fss0, used_right0) = RdcfKey::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_right0;
+        let (right_fss1, used_right1) = RdcfKey::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_right1;
         (
             Self {
-                left_fss,
-                right_fss,
+                left_fss: (left_fss0, left_fss1),
+                right_fss: (right_fss0, right_fss1),
             },
             offset
         )
@@ -84,40 +82,50 @@ impl<const N: usize> DistanceFSSKey<N> {
         let left_payload = RingVec::<N>::new(x_powers, modulus);
         let mut out_payload = RingVec::<N>::zero(modulus);
         out_payload[N-1] = max_distance;
-        // Creating FSS for the range [left, x] first
-        let (left_key0, left_key1) = LIntervalFSSKey::<N>::gen_LIntervalFSSKey(
-            left_bits,
-            x_bits,
-            out_payload.clone(),
-            left_payload,
-            zero_payload.clone(),
+
+        let (key00, key10) = LdcfKey::gen_LdcfKey(
+            &left_bits,
+            &(out_payload - left_payload),
+            &zero_payload,
             modulus,
         );
 
-        let (right_key0, right_key1) = RIntervalFSSKey::<N>::gen_RIntervalFSSKey(
-            x_bits,
-            right_bits,
-            zero_payload,
-            right_payload,
-            out_payload,
+        let (key01, key11) = LdcfKey::gen_LdcfKey(
+            &x_bits,
+            &left_payload,
+            &zero_payload,
+            modulus,
+        );
+
+        let (key02, key12) = RdcfKey::gen_RdcfKey(
+            &x_bits,
+            &zero_payload,
+            &right_payload,
+            modulus,
+        );
+
+        let (key03, key13) = RdcfKey::gen_RdcfKey(
+            &right_bits,
+            &zero_payload,
+            &(out_payload - right_payload),
             modulus,
         );
 
         (
             Self {
-                left_fss: left_key0,
-                right_fss: right_key0,
+                left_fss: (key00, key01),
+                right_fss: (key02, key03),
             },
             Self {
-                left_fss: left_key1,
-                right_fss: right_key1,
+                left_fss: (key10, key11),
+                right_fss: (key12, key13),
             },
         )
     }
 
     pub fn eval_distance_fss(&self, x_bits: &[bool], input_len: usize, modulus: u128) -> u128 {
-        let left_eval = self.left_fss.eval_lintervalFSS(x_bits, modulus);
-        let right_eval = self.right_fss.eval_rintervalFSS(x_bits, modulus);
+        let left_eval = self.left_fss.0.eval_ldcf(x_bits, modulus) + self.left_fss.1.eval_ldcf(x_bits, modulus);
+        let right_eval = self.right_fss.0.eval_rdcf(x_bits, modulus) + self.right_fss.1.eval_rdcf(x_bits, modulus);
         let mut x = 0;
         for i in 0..x_bits.len() {
             if x_bits[i] {

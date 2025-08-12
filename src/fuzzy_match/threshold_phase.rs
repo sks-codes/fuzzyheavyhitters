@@ -1,11 +1,15 @@
 //! Threshold Phase Implementation
 use crate::garbled_circuits::greater_than_or_equal_threshold::{
     multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
-use crate::data_structures::modint::ModInt;
-use crate::data_structures::payload::RingVec;
-use crate::fss::interval::IntervalFSSKey;
+use crate::data_structures::{
+    modint::ModInt,
+    payload::RingVec,
+};
+use crate::fss::{
+    ldcf::LdcfKey,
+    rdcf::RdcfKey,
+};
 use crate::util::u128_to_bits_msb;
-use crate::{Share, Group};
 use crate::channel::CommTrackingChannel;
 use std::convert::TryInto;
 use scuttlebutt::{AesRng, Block, AbstractChannel};
@@ -27,7 +31,7 @@ pub enum ThresholdData {
     /// FSS key and random value for IntervalFSS privacy
     IntervalFSS {
         /// FSS key for this server
-        fss_key: IntervalFSSKey<1>,
+        fss_key: (LdcfKey<1>, RdcfKey<1>),
         /// Random value for this server (r0 for server 0, r1 for server 1)
         random_value: u128,
     },
@@ -117,7 +121,7 @@ impl ThresholdPhase {
         match_results: &[ModInt],
         threshold: u128,
         random_value: u128,
-        fss_key: &IntervalFSSKey<1>,
+        fss_key: &(LdcfKey<1>, RdcfKey<1>),
         channel: &mut CommTrackingChannel,
     ) -> Result<bool, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.input_bit_length;
@@ -172,7 +176,7 @@ impl ThresholdPhase {
         // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
         // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
         // we need to check if actual_count + r0 + r1 >= threshold + r0 + r1
-        let fss_result = fss_key.eval_intervalFSS(&count_bits, 2); // modulus 2 for binary output
+        let fss_result = fss_key.0.eval_ldcf(&count_bits, 2) + fss_key.1.eval_rdcf(&count_bits, 2);
 
         // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
         // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)

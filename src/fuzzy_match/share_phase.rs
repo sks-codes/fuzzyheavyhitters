@@ -15,11 +15,12 @@ use blake3;
 use crate::fss;
 use crate::okvs_f2k::{self, RbOkvsF2k};
 use crate::fss::{
-    interval::IntervalFSSKey,
+    ldcf::LdcfKey,
+    rdcf::RdcfKey,
     distance::DistanceFSSKey,
 };
 use crate::data_structures::payload::RingVec;
-use crate::util::u128_to_bits;
+use crate::util::{u128_to_bits, u128_to_bits_msb};
 use std::sync::Arc;
 use std::cmp::max;
 use std::collections::HashSet;
@@ -99,7 +100,7 @@ pub enum SharedRange {
         p: Option<u32>,
     },
     IntervalFSS {
-        keys: Vec<IntervalFSSKey<1>>, // One key per dimension
+        keys: Vec<(LdcfKey<1>, RdcfKey<1>)>, // One key pair per dimension
         role: bool,
     },
     DistanceFSSL1 {
@@ -145,7 +146,8 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
+                    out.extend_from_slice(&k.0.to_bytes());
+                    out.extend_from_slice(&k.1.to_bytes());
                 }
             }
             SharedRange::DistanceFSSL1 { keys, role } => {
@@ -220,9 +222,11 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
-                    keys.push(k);
-                    offset += used_k;
+                    let (k0, used_k0) = LdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
+                    offset += used_k0;
+                    let (k1, used_k1) = RdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
+                    offset += used_k1;
+                    keys.push((k0, k1));
                 }
                 Ok((SharedRange::IntervalFSS { keys, role }, offset))
             }
@@ -553,6 +557,7 @@ impl SharePhase {
         let left_payload = RingVec::<1>::new([1], modulus);
         let mid_payload = RingVec::<1>::new([0], modulus);
         let right_payload = RingVec::<1>::new([1], modulus);
+        let zero_payload = RingVec::<1>::zero(modulus);
 
         for (&alpha, &beta) in left_bound.iter().zip(right_bound.iter()) {
             if alpha > beta {
@@ -562,23 +567,26 @@ impl SharePhase {
             }
 
             // Convert bounds to bits representation
-            let mut alpha_bits = u128_to_bits(alpha, self.config.input_bit_length);
-            alpha_bits.reverse();
-            let mut beta_bits = u128_to_bits(beta, self.config.input_bit_length);
-            beta_bits.reverse();
+            let mut alpha_bits = u128_to_bits_msb(alpha, self.config.input_bit_length);
+            let mut beta_bits = u128_to_bits_msb(beta, self.config.input_bit_length);
 
             // Create Interval FSS keys for both servers
-            let (fss_key_0, fss_key_1) = IntervalFSSKey::<1>::gen_IntervalFSSKey(
-                &alpha_bits, 
-                &beta_bits, 
-                &left_payload, 
-                &mid_payload, 
-                &right_payload, 
-                modulus
+            let (fss_key_00, fss_key_10) = LdcfKey::<1>::gen_LdcfKey(
+                &alpha_bits,
+                &left_payload,
+                &mid_payload,
+                modulus,
             );
 
-            keys_0.push(fss_key_0);
-            keys_1.push(fss_key_1);
+            let (fss_key_01, fss_key_11) = RdcfKey::<1>::gen_RdcfKey(
+                &beta_bits,
+                &zero_payload,
+                &(right_payload - mid_payload),
+                modulus,
+            );
+
+            keys_0.push((fss_key_00, fss_key_01));
+            keys_1.push((fss_key_10, fss_key_11));
         }
         
         Ok((
@@ -596,12 +604,12 @@ impl SharePhase {
     /// Helper: Evaluate FSS at a single dimension (for backward compatibility) 
     fn evaluate_interval_fss_at_single_dimension(
         &self,
-        fss_key: &IntervalFSSKey<1>,
+        fss_key: &(LdcfKey<1>, RdcfKey<1>),
         point_bits: &[bool],
         role: bool,
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.output_bit_length;
-        let result = fss_key.eval_intervalFSS(point_bits, modulus);
+        let result = fss_key.0.eval_ldcf(point_bits, modulus) + fss_key.1.eval_rdcf(point_bits, modulus);
         Ok(result[0])
     }
 
@@ -626,12 +634,9 @@ impl SharePhase {
             }
 
             // Convert bounds to bits representation
-            let mut alpha_bits = u128_to_bits(alpha, self.config.input_bit_length);
-            alpha_bits.reverse();
-            let mut beta_bits = u128_to_bits(beta, self.config.input_bit_length);
-            beta_bits.reverse();
-            let mut center_bits = u128_to_bits(center, self.config.input_bit_length);
-            center_bits.reverse();
+            let mut alpha_bits = u128_to_bits_msb(alpha, self.config.input_bit_length);
+            let mut beta_bits = u128_to_bits_msb(beta, self.config.input_bit_length);
+            let mut center_bits = u128_to_bits_msb(center, self.config.input_bit_length);
 
             // Create Distance FSS keys for both servers
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<2>::gen_distance_fss_key(
@@ -680,12 +685,9 @@ impl SharePhase {
             }
 
             // Convert bounds to bits representation
-            let mut alpha_bits = u128_to_bits(alpha, self.config.input_bit_length);
-            alpha_bits.reverse();
-            let mut beta_bits = u128_to_bits(beta, self.config.input_bit_length);
-            beta_bits.reverse();
-            let mut center_bits = u128_to_bits(center, self.config.input_bit_length);
-            center_bits.reverse();
+            let mut alpha_bits = u128_to_bits_msb(alpha, self.config.input_bit_length);
+            let mut beta_bits = u128_to_bits_msb(beta, self.config.input_bit_length);
+            let mut center_bits = u128_to_bits_msb(center, self.config.input_bit_length);
 
             // Create Distance FSS keys for both servers
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<3>::gen_distance_fss_key(
@@ -734,12 +736,9 @@ impl SharePhase {
             }
 
             // Convert bounds to bits representation
-            let mut alpha_bits = u128_to_bits(alpha, self.config.input_bit_length);
-            alpha_bits.reverse();
-            let mut beta_bits = u128_to_bits(beta, self.config.input_bit_length);
-            beta_bits.reverse();
-            let mut center_bits = u128_to_bits(center, self.config.input_bit_length);
-            center_bits.reverse();
+            let mut alpha_bits = u128_to_bits_msb(alpha, self.config.input_bit_length);
+            let mut beta_bits = u128_to_bits_msb(beta, self.config.input_bit_length);
+            let mut center_bits = u128_to_bits_msb(center, self.config.input_bit_length);
 
             // Create Distance FSS keys for both servers
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<4>::gen_distance_fss_key(

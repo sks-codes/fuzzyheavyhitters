@@ -573,6 +573,7 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
         cli_config.protocol.output_bit_length,
         cli_config.protocol.check_output_bit_length,
         cli_config.protocol.num_clients,
+        cli_config.protocol.dimensions,
     );
 
     // Determine number of parallel channels (use specified num_threads or system parallelism)

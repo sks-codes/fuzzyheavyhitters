@@ -413,7 +413,6 @@ impl FuzzyHeavyHittersProtocol {
                         let mut check_data_vec = Vec::new();
                         for i in 0..client_shares.len() {
                             check_data_vec.push(CheckData::LpIntervalFSS {
-                                threshold: distance_threshold,
                                 fss_key: batch.keys[i].clone(),
                                 random_value: batch.random_values[i],
                             });
@@ -577,7 +576,6 @@ impl FuzzyHeavyHittersProtocol {
                 let mut check_data_vec = Vec::new();
                 for i in 0..client_shares.len() {
                     check_data_vec.push(CheckData::LpIntervalFSS {
-                        threshold: distance_threshold,
                         fss_key: batch.keys[i].clone(),
                         random_value: batch.random_values[i],
                     });
