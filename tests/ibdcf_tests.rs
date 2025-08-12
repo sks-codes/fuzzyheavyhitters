@@ -1,11 +1,11 @@
-use counttree::fss::ibdcf::{eval_str, ibDCFKey};
+use counttree::fss::ibdcf::{eval_str, IbDCFKey};
 use counttree::{add_bitstrings, bits_to_u32, u32_to_bits, MSB_u32_to_bits};
 
 #[test]
 fn ibdcf_complete() {
     let nbits = 5;
     let alpha = u32_to_bits(nbits, 21);
-    let (key0, key1) = ibDCFKey::gen_ibDCF(&alpha, false);
+    let (key0, key1) = IbDCFKey::gen_ibDCF(&alpha, false);
 
     for i in 0..(1 << nbits) {
         let alpha_eval = u32_to_bits(nbits, i);
@@ -48,7 +48,7 @@ fn dcf_output_test() {
     // let (k0, k1) = ibDCFKey::gen_ibDCF(&alpha_bits, false);
     let r = &[false];
     let beta = add_bitstrings(alpha_bits.as_slice(), r);
-    let x = ibDCFKey::gen_l_inf_ball(vec![alpha_bits.clone()], 1);
+    let x = IbDCFKey::gen_l_inf_ball(vec![alpha_bits.clone()], 1);
     let (kl0, kr0) = x.0[0].clone();
     let (kl1, kr1) = x.1[0].clone();
     println!("DCF outputs for α={} ({}),  beta={} ({:?}):", alpha, alpha_bits.iter().map(|&b| if b { '1' } else { '0' }).collect::<String>(), bits_to_u32(beta.as_slice()), beta.clone().iter().map(|&b| if b { '1' } else { '0' }).collect::<String>());
@@ -95,7 +95,7 @@ fn test_incremental_evaluation() {
     let alpha_bits = u32_to_bits(nbits, alpha);
 
     // Generate DCF keys
-    let (k0, k1) = ibDCFKey::gen_ibDCF(&alpha_bits, false);
+    let (k0, k1) = IbDCFKey::gen_ibDCF(&alpha_bits, false);
 
     println!("Testing incremental evaluation for α={:?}", alpha_bits);
     println!("Bit | Prefix | k0 | k1 | Combined | Expected");
@@ -160,7 +160,7 @@ fn test_incremental_interval_evaluation() {
     let alpha_bits = u32_to_bits(nbits, alpha);
 
     // Generate interval keys
-    let ((k0_left, k0_right), (k1_left, k1_right)) = ibDCFKey::gen_interval(&alpha_bits, &alpha_bits);
+    let ((k0_left, k0_right), (k1_left, k1_right)) = IbDCFKey::gen_interval(&alpha_bits, &alpha_bits);
 
     println!("Testing incremental interval evaluation for α={:?}", alpha_bits);
     println!("Bit | Prefix | k0_left | k1_left | k0_right | k1_right | Combined | Expected");
@@ -264,7 +264,7 @@ fn test_individual_dcfs() {
     //
     // // Test right-bound DCF (should be true when x > boundary)
     // let (right_key0, right_key1) = ibDCFKey::gen_ibDCF(&boundary_bits, false);
-    let ((left_key0, right_key0), (left_key1, right_key1)) = ibDCFKey::gen_interval(&boundary_bits, &boundary_bits);
+    let ((left_key0, right_key0), (left_key1, right_key1)) = IbDCFKey::gen_interval(&boundary_bits, &boundary_bits);
 
     // Test values
     let test_values = vec![8, 9, 10, 11, 12];
@@ -316,13 +316,13 @@ fn interval_test() {
 
         // Generate interval DCF pair
         let ((client_left, client_right), (server_left, server_right)) =
-            ibDCFKey::gen_interval(&left_bits, &right_bits);
+            IbDCFKey::gen_interval(&left_bits, &right_bits);
 
         for (test_val, expected) in tests {
             let test_bits = u32_to_bits(nbits, test_val);
 
             // Full evaluation function
-            let evaluate = |key: &ibDCFKey, test: &[bool]| {
+            let evaluate = |key: &IbDCFKey, test: &[bool]| {
                 let mut state = key.eval_init();
                 for bit in test {
                     state = key.eval_bit(&state, *bit);

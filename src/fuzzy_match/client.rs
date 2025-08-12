@@ -1,11 +1,5 @@
-//! Client Implementation for Fuzzy Heavy Hitters Protocol
-//! 
-//! This module implements the client-side functionality for the fuzzy heavy hitters protocol,
-//! including generating and distributing shares to servers.
-
 use crate::channel::CommTrackingChannel;
 use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange};
-use crate::fuzzy_match::protocol::ProtocolConfig;
 use scuttlebutt::AbstractChannel;
 
 /// Client structure that handles client-side operations

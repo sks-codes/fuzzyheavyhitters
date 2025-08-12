@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io::Write;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Experiment {
     pub metadata: Metadata,

@@ -1,18 +1,12 @@
-use fancy_garbling::{twopac::semihonest::{Evaluator, Garbler}, util, AllWire, BinaryBundle, BundleGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput, FancyReveal};
+use fancy_garbling::{twopac::semihonest::{Evaluator, Garbler}, AllWire, BinaryBundle, BundleGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput, FancyReveal};
 
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use scuttlebutt::{AbstractChannel, AesRng, Channel, SyncChannel};
+use scuttlebutt::{AbstractChannel, AesRng};
 
 use std::fmt::Debug;
 
-use std::{
-    io::{BufReader, BufWriter},
-    os::unix::net::UnixStream,
-};
-use std::io::{Read, Write};
-use std::time::Instant;
+use std::io::Write;
 use fancy_garbling::util::RngExt;
-use ocelot::ot::Sender;
 use rayon::prelude::*;
 
 /// A structure that contains both the garbler and the evaluators

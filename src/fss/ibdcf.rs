@@ -1,7 +1,5 @@
-use std::cmp::{max, min};
-use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits};
-use crate::Group;
-
+use crate::data_structures::prg;
+use crate::{MSB_u32_to_bits, add_bitstrings, subtract_bitstrings};
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::Instant;
@@ -14,7 +12,7 @@ pub struct CorWord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ibDCFKey {
+pub struct IbDCFKey {
     pub key_idx: bool,
     pub root_seed: prg::PrgSeed,
     pub cor_words: Vec<CorWord>,
@@ -119,7 +117,7 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
     }
     cw
 }
-pub fn eval_str(keys : &Vec<(ibDCFKey, ibDCFKey)>, states: &Vec<(EvalState,EvalState)>, eval_string: &Vec<bool>) -> Vec<(EvalState,EvalState)> {
+pub fn eval_str(keys : &Vec<(IbDCFKey, IbDCFKey)>, states: &Vec<(EvalState,EvalState)>, eval_string: &Vec<bool>) -> Vec<(EvalState,EvalState)> {
     let dim = keys.len();
     let mut new_states = Vec::with_capacity(dim);
 
@@ -134,10 +132,10 @@ pub fn eval_str(keys : &Vec<(ibDCFKey, ibDCFKey)>, states: &Vec<(EvalState,EvalS
 
 
 /// All-prefix DPF implementation.
-impl ibDCFKey
+impl IbDCFKey
 {
 
-    pub fn gen_ibDCF(alpha_bits: &[bool], side : bool) -> (ibDCFKey, ibDCFKey) {
+    pub fn gen_ibDCF(alpha_bits: &[bool], side : bool) -> (IbDCFKey, IbDCFKey) {
         let root_seeds = (prg::PrgSeed::random(), prg::PrgSeed::random());
         let root_bits = (false, true);
 
@@ -152,12 +150,12 @@ impl ibDCFKey
         }
 
         (
-            ibDCFKey {
+            IbDCFKey {
                 key_idx: false,
                 root_seed: root_seeds.0,
                 cor_words: cor_words.clone(),
             },
-            ibDCFKey {
+            IbDCFKey {
                 key_idx: true,
                 root_seed: root_seeds.1,
                 cor_words,
@@ -165,7 +163,7 @@ impl ibDCFKey
         )
     }
 
-    pub fn gen_interval(left_bits: &[bool], right_bits: &[bool]) -> ((ibDCFKey, ibDCFKey), (ibDCFKey, ibDCFKey)){
+    pub fn gen_interval(left_bits: &[bool], right_bits: &[bool]) -> ((IbDCFKey, IbDCFKey), (IbDCFKey, IbDCFKey)){
         // let r = &[false; 512];
         // let l_minus_one = left_bits.to_vec();
         // let r_plus_one = right_bits.to_vec();
@@ -174,7 +172,7 @@ impl ibDCFKey
         ((left_key.0, right_key.0), (left_key.1, right_key.1))
     }
 
-    pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(ibDCFKey, ibDCFKey)>, Vec<(ibDCFKey, ibDCFKey)>){
+    pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(IbDCFKey, IbDCFKey)>, Vec<(IbDCFKey, IbDCFKey)>){
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
         let delta = MSB_u32_to_bits(alpha[0].len() as u8, size);

@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul, BitAnd, BitXor, Index, IndexMut};
+use std::ops::{Add, Sub, Mul, Index, IndexMut};
 use rand::Rng;
 
 #[derive(Clone, Debug, Copy, PartialEq)]

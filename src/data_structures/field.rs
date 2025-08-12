@@ -2,7 +2,7 @@ use crate::data_structures::fastfield::FE;
 #[cfg(test)]
 use crate::Share;
 
-use num_bigint::{BigUint, RandBigInt};
+use num_bigint::BigUint;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cmp::Ordering;

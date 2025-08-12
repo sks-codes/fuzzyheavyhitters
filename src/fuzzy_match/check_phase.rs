@@ -1,9 +1,6 @@
-use std::convert::{TryFrom, TryInto};
-use scuttlebutt::{AesRng, Block, AbstractChannel};
 use crate::channel::CommTrackingChannel;
 use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
 use crate::garbled_circuits::{
-    equality_full::{multiple_gb_equality_test, multiple_ev_equality_test},
     batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
     less_than_or_equal_threshold::{multiple_gb_less_than_ss, multiple_ev_less_than_ss},
 };
@@ -13,9 +10,11 @@ use crate::fss::{
     rdcf::RdcfKey,
     dpf::DpfKey,
 };
-use crate::util::{query_point_to_u128s, u128_to_bits, u128_to_bits_msb};
+use crate::util::{u128_to_bits, u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
+use scuttlebutt::{AesRng, Block, AbstractChannel};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
+use std::convert::TryInto;
 
 /// Method for check phase comparison
 #[derive(Debug, Clone)]
@@ -36,7 +35,7 @@ pub enum CheckData {
     LinfGarbledCircuits,
     LinfDpf {
         fss_key: DpfKey<1>,
-        random_value: u128,
+        random_value: Vec<bool>,
     },
     /// Threshold value for Lp distance comparison with garbled circuits
     LpGarbledCircuits {
@@ -147,7 +146,7 @@ impl CheckPhase {
                 for check_data in check_data_list {
                     if let CheckData::LinfDpf { fss_key, random_value } = check_data {
                         fss_keys.push(fss_key.clone());
-                        random_values.push(*random_value);
+                        random_values.push(random_value.clone());
                     }
                 }
 
@@ -234,11 +233,118 @@ impl CheckPhase {
         &self,
         shared_ranges: &[SharedRange],
         query_point: &[Vec<bool>],
-        random_values: &[u128],
-        fss_keys: &[LdcfKey<1>],
+        random_values: &[Vec<bool>],
+        fss_keys: &[DpfKey<1>],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        unimplemented!()
+        let mut all_dimension_evals = Vec::new();
+
+        for shared_range in shared_ranges {
+            let mut dimension_eval_for_range = Vec::<bool>::new();
+            
+            for dim in 0..self.config.num_dimensions {
+                // Use the bits directly from query_point
+                let point_bits = &query_point[dim];
+                
+                // Evaluate at the specific dimension for this shared range
+                let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
+                let res_bits = u128_to_bits(res, self.config.output_bit_length);
+                dimension_eval_for_range.extend_from_slice(&res_bits);
+            }
+            
+            all_dimension_evals.push(dimension_eval_for_range);
+        }
+
+        let masked_evals = all_dimension_evals.iter().zip(random_values).map(|(evals, rand)| {
+            evals.iter().zip(rand.iter()).map(|(&eval_bit, &rand_bit)| {
+                eval_bit ^ rand_bit
+            }).collect::<Vec<bool>>()
+        }).collect::<Vec<Vec<bool>>>();
+
+        let mut masked_evals_u8s = Vec::new();
+        for masked_eval in masked_evals.iter() {
+            let u8s = bits_to_u8s(masked_eval);
+            masked_evals_u8s.extend_from_slice(&u8s);
+        }
+
+        let eval_bits_length = masked_evals[0].len();
+        let eval_bytes_length = (eval_bits_length + 7) / 8;
+
+        let reconstructed_masked_evals = if self.config.is_garbler_side {
+            let garbler_data_len = masked_evals_u8s.len() as u32;
+            channel.write_bytes(&garbler_data_len.to_le_bytes())
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send data length: {}", e)))?;
+            channel.write_bytes(&masked_evals_u8s)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            channel.flush();
+
+            let mut evaluator_data_len_bytes = [0u8; 4];
+            channel.read_bytes(&mut evaluator_data_len_bytes)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read data length: {}", e)))?;
+            let evaluator_data_len = u32::from_le_bytes(evaluator_data_len_bytes) as usize;
+            let mut evaluator_masked_evals_bytes = vec![0u8; evaluator_data_len];
+            channel.read_bytes(&mut evaluator_masked_evals_bytes)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+
+            let evaluator_masked_evals = evaluator_masked_evals_bytes.chunks_exact(eval_bytes_length)
+                .map(|chunk| {
+                    let bits = u8s_to_bits(chunk, eval_bits_length);
+                    bits.into_iter().collect::<Vec<bool>>()
+                })
+                .collect::<Vec<_>>();
+
+            masked_evals.iter().zip(evaluator_masked_evals.iter())
+                .map(|(garbler_eval, evaluator_eval)| {
+                    garbler_eval.iter().zip(evaluator_eval.iter())
+                        .map(|(&g, &e)| g ^ e)
+                        .collect::<Vec<bool>>()
+                })
+                .collect::<Vec<Vec<bool>>>()
+        } else {
+            let mut garbler_data_len_bytes = [0u8; 4];
+            channel.read_bytes(&mut garbler_data_len_bytes)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read data length: {}", e)))?;
+            let garbler_data_len = u32::from_le_bytes(garbler_data_len_bytes) as usize;
+            let mut garbler_masked_evals_bytes = vec![0u8; garbler_data_len];
+            channel.read_bytes(&mut garbler_masked_evals_bytes)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read garbler masked evals: {}", e)))?;
+
+            channel.write_bytes(&(masked_evals_u8s.len() as u32).to_le_bytes())
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send data length: {}", e)))?;
+            channel.write_bytes(&masked_evals_u8s)
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            channel.flush();
+
+            let garbler_masked_evals = garbler_masked_evals_bytes.chunks_exact(eval_bytes_length)
+                .map(|chunk| {
+                    let bits = u8s_to_bits(chunk, eval_bits_length);
+                    bits.into_iter().collect::<Vec<bool>>()
+                })
+                .collect::<Vec<_>>();
+
+            masked_evals.iter().zip(garbler_masked_evals.iter())
+                .map(|(evaluator_eval, garbler_eval)| {
+                    evaluator_eval.iter().zip(garbler_eval.iter())
+                        .map(|(&e, &g)| e ^ g)
+                        .collect::<Vec<bool>>()
+                })
+                .collect::<Vec<Vec<bool>>>()
+        };
+
+        let out_modulus = 1u128 << self.config.output_bit_length;
+        let mut results = Vec::new();
+        for (reconstructed_masked_eval, fss_key) in reconstructed_masked_evals.iter().zip(fss_keys.iter()) {
+            let fss_result = fss_key.eval_dpf(&reconstructed_masked_eval, out_modulus);
+
+            let result = if self.config.is_garbler_side {
+                ModInt::new(out_modulus - fss_result[0], out_modulus)
+            } else {
+                ModInt::new(fss_result[0], out_modulus)
+            };
+            results.push(result);
+        }
+
+        Ok(results)
     }
 
     /// Batch Lp distance check using garbled circuits

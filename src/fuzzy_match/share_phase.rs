@@ -1,29 +1,14 @@
-//! Share Phase Implementation
-//! 
-//! This module provides functionality for sharing either OKVS (Oblivious Key-Value Store)
-//! or Interval FSS (Function Secret Sharing) based on user input and threshold.
-//! 
-//! The share phase allows a user with an input x (u-bit string) and threshold delta
-//! to share either:
-//! 1. An OKVS that encodes all key-value pairs where keys are in range [x-delta, x+delta] 
-//!    and values are all 1
-//! 2. An interval FSS with left=1, mid=0, right=1 for the range [x-delta, x+delta]
-
-use rand::Rng;
 use blake3;
 
-use crate::fss;
-use crate::okvs_f2k::{self, RbOkvsF2k};
+use crate::okvs_f2k::RbOkvsF2k;
 use crate::fss::{
     ldcf::LdcfKey,
     rdcf::RdcfKey,
     distance::DistanceFSSKey,
 };
 use crate::data_structures::payload::RingVec;
-use crate::util::{u128_to_bits, u128_to_bits_msb};
-use std::sync::Arc;
+use crate::util::u128_to_bits_msb;
 use std::cmp::max;
-use std::collections::HashSet;
 use std::convert::TryInto;
 
 // Import strategies from the separate module

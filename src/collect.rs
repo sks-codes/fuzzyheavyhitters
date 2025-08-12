@@ -4,7 +4,7 @@ use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Group, Share};
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
-use crate::fss::ibdcf::{ibDCFKey, EvalState, eval_str};
+use crate::fss::ibdcf::{IbDCFKey, EvalState, eval_str};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
 use crate::garbled_circuits::equality::{multiple_gb_equality_test, multiple_ev_equality_test};
@@ -29,7 +29,7 @@ unsafe impl Sync for TreeNode {}
 pub struct KeyCollection<T,U>
 {
     depth: usize,
-    pub keys: Vec<(bool, Vec<(ibDCFKey, ibDCFKey)>)>,
+    pub keys: Vec<(bool, Vec<(IbDCFKey, IbDCFKey)>)>,
     frontier: Vec<TreeNode>,
     frontier_last: Vec<Result<U>>,
     rand_stream: prg::PrgStream,
@@ -59,7 +59,7 @@ where
         }
     }
 
-    pub fn add_key(&mut self, key: Vec<(ibDCFKey, ibDCFKey)>) {
+    pub fn add_key(&mut self, key: Vec<(IbDCFKey, IbDCFKey)>) {
         self.keys.push((true, key)); //TODO: come back and remove this bool
 
     }

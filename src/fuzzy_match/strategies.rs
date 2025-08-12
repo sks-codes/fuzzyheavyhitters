@@ -1,12 +1,7 @@
-//! Key-Value Pair Preparation Strategies
-//! 
-//! This module contains different strategies for preparing key-value pairs
-//! for OKVS encoding based on distance metrics and dictionary types.
-
+use crate::util::u128_to_bits_msb;
 use std::collections::HashSet;
 use rand::Rng;
 use blake3;
-use crate::util::{u128_to_bits, u128_to_bits_msb};
 
 /// Trait for different key-value pair preparation strategies
 pub trait KeyValuePairStrategy {
@@ -100,9 +95,6 @@ impl KeyValuePairStrategy for UnknownLInfinityStrategy {
         // Convert distinct prefixes to keys and generate corresponding values
         for (prefix, prefix_len) in distinct_prefixes {
             let prefix_bits = u128_to_bits_msb(prefix, prefix_len);
-
-            println!("Prefix bits: {:?}", prefix_bits);
-            
             let value = rand::rng().random::<u128>() & modulus_mask;
             // Generate u128 from Blake3 hash of prefix_bits
             let prefix_bits_bytes: Vec<u8> = prefix_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();

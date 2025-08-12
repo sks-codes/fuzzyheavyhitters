@@ -9,12 +9,10 @@ use aes_ctr::Aes128Ctr;
 
 use rand::Rng;
 use rand_core::RngCore;
-use num_bigint::RandBigInt;
 
 use serde::Deserialize;
 use serde::Serialize;
 use std::ops;
-use std::time::Instant;
 
 // AES key size in bytes. We always use AES-128,
 // which has 16-byte keys.

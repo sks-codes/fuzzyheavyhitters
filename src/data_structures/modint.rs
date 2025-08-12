@@ -1,5 +1,5 @@
 use std::ops::{Add, Sub, Mul};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use scuttlebutt::Block;
 use crate::{Group, Share};
 use rand::Rng;

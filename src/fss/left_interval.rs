@@ -1,10 +1,8 @@
 // The interval in this file is different.
 // If a prefix is LESS THAN the prefix of beta, it will take the mid payload.
 
-use core::num;
 use crate::data_structures::modint::ModInt;
-use crate::{add_bitstrings, bits_to_u32, data_structures::prg, subtract_bitstrings, u32_to_bits, MSB_u32_to_bits, 
-            xor, and_bit, bytes_to_u128};
+use crate::{xor, and_bit, bytes_to_u128};
 use crate::Group;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
@@ -12,7 +10,6 @@ use crate::data_structures::pair::Pair;
 
 use rand_core::RngCore; 
 use rand::Rng;
-use std::cmp::{max, min};
 use std::cell::RefCell;
 use std::convert::TryInto;
 

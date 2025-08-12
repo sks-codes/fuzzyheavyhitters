@@ -8,7 +8,7 @@ use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
 use counttree::config::Config;
-use counttree::fss::ibdcf::ibDCFKey;
+use counttree::fss::ibdcf::IbDCFKey;
 use counttree::string_to_bits;
 
 
@@ -19,14 +19,14 @@ fn sample_string(len: usize) -> String {
         .take(len / 8)
         .collect()
 }
-fn generate_ibDCF_keys(string_length : usize, num_keys : usize) -> (Vec<ibDCFKey>, Vec<ibDCFKey>) {
+fn generate_ibDCF_keys(string_length : usize, num_keys : usize) -> (Vec<IbDCFKey>, Vec<IbDCFKey>) {
 
     rayon::iter::repeat(0)
         .take(num_keys)
         .enumerate()
         .map(|(i, _)| {
             let data_string = sample_string(string_length);
-            let keys = ibDCFKey::gen_ibDCF(string_to_bits(&data_string).as_slice(), false);
+            let keys = IbDCFKey::gen_ibDCF(string_to_bits(&data_string).as_slice(), false);
             (keys.0.clone(), keys.1.clone())
         })
         .collect::<Vec<_>>()

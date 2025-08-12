@@ -5,14 +5,14 @@ use crate::data_structures::fastfield::FE;
 use serde::Deserialize;
 use serde::Serialize;
 use crate::data_structures::logexperiments::ServerSide;
-use crate::fss::ibdcf::ibDCFKey;
+use crate::fss::ibdcf::IbDCFKey;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResetRequest {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AddKeysRequest {
-    pub keys: Vec<Vec<(ibDCFKey, ibDCFKey)>>,
+    pub keys: Vec<Vec<(IbDCFKey, IbDCFKey)>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

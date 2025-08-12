@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 use csv::{Reader, Writer};
-use std::io::{BufReader, BufWriter};
+use std::io::BufWriter;
 
 // Austin bounding box
 const AUSTIN_CENTER: (f64, f64) = (30.267, -97.743);

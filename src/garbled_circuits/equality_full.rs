@@ -2,23 +2,14 @@ use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
 
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
-    FancyReveal, util,
+    FancyReveal,
     twopac::semihonest::{Evaluator, Garbler},
 };
-use fancy_garbling::util::RngExt;
-
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use ocelot::ot::Sender;
-use scuttlebutt::{AbstractChannel, AesRng, Channel, SyncChannel};
+use scuttlebutt::{AbstractChannel, AesRng};
 
-use std::fmt::{Binary, Debug};
-
-use std::{
-    io::{BufReader, BufWriter},
-    os::unix::net::UnixStream,
-};
-use std::io::{Read, Write};
-use std::time::Instant;
+use std::fmt::Debug;
+use std::io::Write;
 use rayon::prelude::*;
 
 use rand::Rng;

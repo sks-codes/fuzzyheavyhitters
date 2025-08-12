@@ -45,7 +45,7 @@ pub struct ProtocolParameters {
     pub dictionary_type: String,
     /// Threshold phase method ("GarbledCircuits" or "IntervalFSS")
     pub threshold_method: String,
-    /// Check phase method ("Linf", "LpGarbledCircuits", or "LpIntervalFSS")
+    /// Check phase method ("LinfGarbledCircuits", "LinfDpf", "LpGarbledCircuits", or "LpIntervalFSS")
     pub check_method: String,
     /// Distance metric ("Linf", "L1", "L2", "L3")
     pub distance_metric: String,
@@ -152,7 +152,8 @@ impl CliConfig {
 
         // Convert check method
         let check_method = match self.protocol.check_method.as_str() {
-            "Linf" => CheckMethod::Linf,
+            "LinfGarbledCircuits" => CheckMethod::LinfGarbledCircuits,
+            "LinfDpf" => CheckMethod::LinfDpf,
             "LpGarbledCircuits" => CheckMethod::LpGarbledCircuits,
             "LpIntervalFSS" => CheckMethod::LpIntervalFSS,
             other => return Err(format!("Unsupported check method: {}", other)),

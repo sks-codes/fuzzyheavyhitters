@@ -4,17 +4,9 @@
 //! with both servers in the same process for testing purposes.
 
 use counttree::{
-    fuzzy_match::{
-        protocol::FuzzyHeavyHittersProtocol,
-        dealer::FssDealer,
-        threshold_phase::ThresholdData,
-        check_phase::{CheckData, CheckMethod},
-        client::Client,
-        share_phase::SharedRange,
-    },
-    cli_config::CliConfig,
-    channel::CommTrackingChannel,
-    util::{calculate_distance, get_distance_threshold},
+    channel::CommTrackingChannel, cli_config::CliConfig, fuzzy_match::{
+        check_phase::{CheckData, CheckMethod}, client::Client, dealer::FssDealer, protocol::FuzzyHeavyHittersProtocol, share_phase::SharedRange, threshold_phase::ThresholdData
+    }, util::{bits_to_u128_msb, calculate_distance, calculate_optimistic_distance, get_distance_threshold}
 };
 use scuttlebutt::AbstractChannel;
 use clap::{App, Arg, SubCommand};
@@ -92,427 +84,6 @@ fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse query file {}: {}", file_path, e))
-}
-
-/// Display results for known dictionary protocol
-fn display_known_dictionary_results(
-    cli_config: &CliConfig,
-    query_points: &[Vec<u128>],
-    client_points: &[Vec<u128>],
-    final_results: &[bool],
-) -> Result<(), String> {
-    // Display results (final_results already contains the XOR of both servers' bits)
-    println!("=== Protocol Results ===");
-    let mut total_heavy_hitters = 0;
-    
-    for (i, query_point) in query_points.iter().enumerate() {
-        let final_result = final_results[i];
-        
-        if final_result {
-            total_heavy_hitters += 1;
-        }
-        
-        let status = if final_result { "HEAVY HITTER" } else { "not heavy hitter" };
-        
-        if cli_config.output.verbose {
-            println!("Query {}: {:?} -> {}", 
-                i + 1, query_point, status);
-        } else {
-            println!("Query {}: {:?} -> {}", i + 1, query_point, status);
-        }
-    }
-    
-    println!();
-    println!("Summary: {}/{} query points are heavy hitters", total_heavy_hitters, query_points.len());
-    
-    // Calculate expected results manually for comparison
-    println!("\n=== Expected Results (Manual Calculation) ===");
-    println!("Using distance metric: {}", cli_config.protocol.distance_metric);
-    let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
-    let mut expected_heavy_hitters = 0;
-    
-    for (i, query_point) in query_points.iter().enumerate() {
-        let mut count = 0;
-        
-        // Count client points within delta distance of this query point
-        for client_point in client_points {
-            let distance = calculate_distance(query_point, client_point, &cli_config.protocol.distance_metric);
-            
-            if distance <= distance_threshold {
-                count += 1;
-            }
-        }
-        
-        let is_expected_heavy_hitter = count >= cli_config.protocol.threshold as usize;
-        if is_expected_heavy_hitter {
-            expected_heavy_hitters += 1;
-        }
-        
-        let status = if is_expected_heavy_hitter { "HEAVY HITTER" } else { "not heavy hitter" };
-        let protocol_result = final_results[i];
-        let match_str = if is_expected_heavy_hitter == protocol_result { "✓" } else { "✗" };
-        
-        if cli_config.output.verbose {
-            println!("Query {}: {:?} -> {} (count: {}) {}", 
-                i + 1, query_point, status, count, match_str);
-        } else {
-            println!("Query {}: {:?} -> {} (count: {}) {}", 
-                i + 1, query_point, status, count, match_str);
-        }
-    }
-    
-    println!();
-    println!("Expected Summary: {}/{} query points are heavy hitters", expected_heavy_hitters, query_points.len());
-    
-    let matches = query_points.iter().enumerate().filter(|(i, _)| {
-        let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
-        let count = client_points.iter().filter(|client_point| {
-            let distance = calculate_distance(&query_points[*i], client_point, &cli_config.protocol.distance_metric);
-            distance <= distance_threshold
-        }).count();
-        let expected = count >= cli_config.protocol.threshold as usize;
-        expected == final_results[*i]
-    }).count();
-    
-    println!("Protocol Accuracy: {}/{} results match expected ({:.1}%)", 
-        matches, query_points.len(), (matches as f64 / query_points.len() as f64) * 100.0);
-    
-    Ok(())
-}
-
-/// Display results for unknown dictionary protocol
-fn display_unknown_dictionary_results(
-    cli_config: &CliConfig,
-    client_points: &[Vec<u128>],
-    heavy_hitter_values: &[Vec<u128>],
-) -> Result<(), String> {
-    println!("=== Unknown Dictionary Search Results ===");
-    println!("Found {} heavy hitter values", heavy_hitter_values.len());
-    
-    // Display the heavy hitter values
-    for (i, value_set) in heavy_hitter_values.iter().enumerate() {
-        println!("\nHeavy Hitter Value {}: {:?}", i + 1, value_set);
-    }
-    
-    // Manual verification: run brute-force search on plaintext to find all fuzzy heavy hitters
-    println!("\n=== Manual Verification (Brute-Force Ground Truth) ===");
-    
-    // Find all actual fuzzy heavy hitters by brute-force search
-    let actual_heavy_hitters = find_fuzzy_heavy_hitters_bruteforce(
-        client_points, 
-        cli_config.protocol.delta as u128, 
-        cli_config.protocol.threshold as usize,
-        cli_config.protocol.input_bit_length,
-        &cli_config.protocol.distance_metric,
-    );
-    
-    println!("Brute-force found {} actual fuzzy heavy hitters:", actual_heavy_hitters.len());
-    // for (i, heavy_hitter) in actual_heavy_hitters.iter().enumerate() {
-    //     println!("  {}: {:?}", i + 1, heavy_hitter);
-    // }
-    
-    // Compare protocol results with ground truth
-    println!("\n=== Protocol vs Ground Truth Comparison ===");
-    
-    let mut protocol_correct = 0;
-    let mut protocol_false_positives = 0;
-    
-    // Check each protocol result
-    for heavy_hitter in heavy_hitter_values {
-        let is_actual_heavy_hitter = actual_heavy_hitters.iter().any(|actual| {
-            // Check if this protocol result matches any actual heavy hitter
-            actual.len() == heavy_hitter.len() && 
-            actual.iter().zip(heavy_hitter.iter()).all(|(a, b)| a == b)
-        });
-        
-        if is_actual_heavy_hitter {
-            protocol_correct += 1;
-            println!("Protocol result {:?}: ✓ (correctly identified)", heavy_hitter);
-        } else {
-            protocol_false_positives += 1;
-            println!("Protocol result {:?}: ✗ (false positive)", heavy_hitter);
-        }
-    }
-    
-    // Check for missed heavy hitters
-    let mut missed_heavy_hitters = 0;
-    for actual_hh in &actual_heavy_hitters {
-        let found_by_protocol = heavy_hitter_values.iter().any(|protocol_hh| {
-            actual_hh.len() == protocol_hh.len() && 
-            actual_hh.iter().zip(protocol_hh.iter()).all(|(a, b)| a == b)
-        });
-        
-        if !found_by_protocol {
-            missed_heavy_hitters += 1;
-            // println!("Missed heavy hitter: {:?} (false negative)", actual_hh);
-        }
-    }
-    
-    println!("\n=== Final Verification Summary ===");
-    println!("Protocol found: {} heavy hitters", heavy_hitter_values.len());
-    println!("Ground truth: {} heavy hitters", actual_heavy_hitters.len());
-    println!("Correctly identified: {} / {}", protocol_correct, actual_heavy_hitters.len());
-    println!("False positives: {}", protocol_false_positives);
-    println!("False negatives: {}", missed_heavy_hitters);
-    
-    let precision = if heavy_hitter_values.is_empty() { 
-        1.0 
-    } else { 
-        protocol_correct as f64 / heavy_hitter_values.len() as f64 
-    };
-    let recall = if actual_heavy_hitters.is_empty() { 
-        1.0 
-    } else { 
-        protocol_correct as f64 / actual_heavy_hitters.len() as f64 
-    };
-    
-    println!("Precision: {:.1}%", precision * 100.0);
-    println!("Recall: {:.1}%", recall * 100.0);
-
-    Ok(())
-}
-
-/// Brute-force search to find all fuzzy heavy hitters in plaintext
-/// This serves as ground truth for verification
-fn find_fuzzy_heavy_hitters_bruteforce(
-    client_points: &[Vec<u128>],
-    delta: u128,
-    threshold: usize,
-    input_bit_length: usize,
-    distance_metric: &str,
-) -> Vec<Vec<u128>> {
-    if client_points.is_empty() {
-        return Vec::new();
-    }
-    
-    let dimensions = client_points[0].len();
-    let max_value = (1u128 << input_bit_length) - 1;
-    let total_space_size = (1u128 << input_bit_length).pow(dimensions as u32);
-    
-    println!("Running brute-force search over {}^{} = {} possible points...", 
-        1u128 << input_bit_length, dimensions, total_space_size);
-    
-    // Use prefix search if space is too large (> 1M points), otherwise brute force
-    if total_space_size > 100_000 {
-        println!("Space too large, using prefix-based search for efficiency...");
-        find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length, distance_metric)
-    } else {
-        println!("Using full brute-force search...");
-        let brute_force_result = find_heavy_hitters_full_search(client_points, delta, threshold, max_value, dimensions, distance_metric);
-        
-        println!("Also running prefix search for comparison...");
-        let prefix_result = find_heavy_hitters_prefix_search(client_points, delta, threshold, input_bit_length, distance_metric);
-            
-        println!("Brute force found {} heavy hitters", brute_force_result.len());
-        println!("Prefix search found {} heavy hitters", prefix_result.len());
-            
-        // Check if results match
-        let mut matches = 0;
-        for bf_hh in &brute_force_result {
-            if prefix_result.iter().any(|pr_hh| bf_hh == pr_hh) {
-                matches += 1;
-            }
-        }
-        println!("Methods agree on {} out of {} heavy hitters", matches, brute_force_result.len().max(prefix_result.len()));
-            
-        if brute_force_result.len() != prefix_result.len() || matches != brute_force_result.len() {
-            println!("WARNING: Brute force and prefix search results differ!");
-        }
-        
-        brute_force_result
-    }
-}
-
-/// Full brute-force search over all possible points
-fn find_heavy_hitters_full_search(
-    client_points: &[Vec<u128>],
-    delta: u128,
-    threshold: usize,
-    max_value: u128,
-    dimensions: usize,
-    distance_metric: &str,
-) -> Vec<Vec<u128>> {
-    let mut heavy_hitters = Vec::new();
-    let mut current_point = vec![0u128; dimensions];
-    let mut points_checked = 0;
-    
-    loop {
-        // Count how many client points are within delta distance of current_point
-        let mut count = 0;
-        let distance_threshold = get_distance_threshold(delta, distance_metric);
-        for client_point in client_points {
-            let distance = calculate_distance(&current_point, client_point, distance_metric);
-            
-            if distance <= distance_threshold {
-                count += 1;
-            }
-        }
-        
-        // If count meets threshold, this is a heavy hitter
-        if count >= threshold {
-            heavy_hitters.push(current_point.clone());
-        }
-        
-        points_checked += 1;
-        if points_checked % 100_000 == 0 {
-            println!("  Checked {} points, found {} heavy hitters so far...", points_checked, heavy_hitters.len());
-        }
-        
-        // Generate next point (increment like a counter in base (max_value + 1))
-        let mut carry = 1;
-        for dim in 0..dimensions {
-            current_point[dim] += carry;
-            if current_point[dim] > max_value {
-                current_point[dim] = 0;
-                carry = 1;
-            } else {
-                carry = 0;
-                break;
-            }
-        }
-        
-        // If we've wrapped around all dimensions, we're done
-        if carry == 1 {
-            break;
-        }
-    }
-    
-    println!("Full search completed. Checked {} points total.", points_checked);
-    heavy_hitters
-}
-
-/// Prefix-based search for large input spaces
-/// Uses a branch-and-bound approach: if a prefix can't possibly be a heavy hitter,
-/// don't explore its extensions
-fn find_heavy_hitters_prefix_search(
-    client_points: &[Vec<u128>],
-    delta: u128,
-    threshold: usize,
-    input_bit_length: usize,
-    distance_metric: &str,
-) -> Vec<Vec<u128>> {
-    let dimensions = client_points[0].len();
-    let mut heavy_hitters = Vec::new();
-    let mut prefixes_to_explore = vec![vec![vec![]; dimensions]]; // Start with empty prefixes
-    let mut prefixes_checked = 0;
-    
-    while !prefixes_to_explore.is_empty() {
-        let mut next_prefixes = Vec::new();
-        
-        for prefix_set in prefixes_to_explore {
-            prefixes_checked += 1;
-            if prefixes_checked % 10_000 == 0 {
-                println!("  Checked {} prefixes, found {} heavy hitters so far...", 
-                    prefixes_checked, heavy_hitters.len());
-            }
-            
-            // Check if this prefix set represents complete points
-            let is_complete = prefix_set.iter().all(|prefix| prefix.len() == input_bit_length);
-            
-            if is_complete {
-                // Convert prefix to actual point and check if it's a heavy hitter
-                let point: Vec<u128> = prefix_set.iter().map(|prefix| {
-                    // Convert from bit vector to u128 (MSB first, like brute-force search)
-                    prefix.iter().enumerate().fold(0u128, |acc, (i, &bit)| {
-                        if bit { acc | (1u128 << (input_bit_length - 1 - i)) } else { acc }
-                    })
-                }).collect();
-                
-                let count = count_nearby_points(client_points, &point, delta);
-                if count >= threshold {
-                    heavy_hitters.push(point);
-                }
-            } else {
-                // Get upper bound estimate for this prefix
-                let upper_bound = estimate_max_nearby_count_for_prefix(client_points, &prefix_set, delta, input_bit_length);
-                
-                if upper_bound >= threshold {
-                    // This prefix might lead to heavy hitters, so extend it
-                    // Find the first dimension that can be extended
-                    for dim in 0..dimensions {
-                        if prefix_set[dim].len() < input_bit_length {
-                            // Try extending with both 0 and 1
-                            for bit_value in [false, true] {
-                                let mut extended_prefix = prefix_set.clone();
-                                extended_prefix[dim].push(bit_value);
-                                next_prefixes.push(extended_prefix);
-                            }
-                            break; // Only extend one dimension at a time
-                        }
-                    }
-                }
-                // If upper_bound < threshold, we prune this branch
-            }
-        }
-        
-        prefixes_to_explore = next_prefixes;
-    }
-    
-    println!("Prefix search completed. Checked {} prefixes total.", prefixes_checked);
-    heavy_hitters
-}
-
-/// Count how many client points are within delta distance of a given point
-fn count_nearby_points(client_points: &[Vec<u128>], point: &[u128], delta: u128) -> usize {
-    client_points.iter().filter(|client_point| {
-        let mut l_inf_distance = 0;
-        for dim in 0..point.len() {
-            let diff = if point[dim] > client_point[dim] {
-                point[dim] - client_point[dim]
-            } else {
-                client_point[dim] - point[dim]
-            };
-            l_inf_distance = l_inf_distance.max(diff);
-        }
-        l_inf_distance <= delta
-    }).count()
-}
-
-/// Estimate the maximum number of nearby points for any complete point that extends this prefix
-/// This provides an upper bound for pruning
-fn estimate_max_nearby_count_for_prefix(
-    client_points: &[Vec<u128>],
-    prefix_set: &[Vec<bool>],
-    delta: u128,
-    input_bit_length: usize,
-) -> usize {
-    // For each client point, check if it could possibly be within delta of some extension of this prefix
-    client_points.iter().filter(|client_point| {
-        // For each dimension, check if the client point coordinate could be within delta
-        // of some value that extends the current prefix
-        prefix_set.iter().enumerate().all(|(dim, prefix)| {
-            if dim >= client_point.len() {
-                return true;
-            }
-            
-            // Convert current prefix to min and max possible values (MSB first)
-            let prefix_value = prefix.iter().enumerate().fold(0u128, |acc, (i, &bit)| {
-                if bit { acc | (1u128 << (input_bit_length - 1 - i)) } else { acc }
-            });
-            
-            let remaining_bits = input_bit_length - prefix.len();
-            let min_possible = prefix_value;
-            let max_possible = prefix_value | ((1u128 << remaining_bits) - 1);
-            
-            // Check if client point could be within delta of the range [min_possible, max_possible]
-            let client_coord = client_point[dim];
-            
-            // Check if there's any overlap between [client_coord - delta, client_coord + delta] 
-            // and [min_possible, max_possible]
-            let client_min = if client_coord >= delta {
-                client_coord - delta
-            } else {
-                0 // Can't go below 0
-            };
-            let client_max = if client_coord + delta <= (1u128 << input_bit_length) - 1 {
-                client_coord + delta
-            } else {
-                (1u128 << input_bit_length) - 1 // Can't exceed max value
-            };
-
-            !(client_max < min_possible || client_min > max_possible)
-        })
-    }).count()
 }
 
 /// Generate a sample configuration file
@@ -903,6 +474,89 @@ fn run_server1(config_path: &str, num_threads: usize) -> Result<(), String> {
     run_server(config_path, true, num_threads)
 }
 
+/// Prefix-based search for large input spaces
+/// Uses a branch-and-bound approach: if a prefix can't possibly be a heavy hitter,
+/// don't explore its extensions
+fn find_heavy_hitters_prefix_search(
+    client_points: &[Vec<u128>],
+    delta: u128,
+    threshold: usize,
+    input_bit_length: usize,
+    distance_metric: &str,
+) -> Vec<Vec<u128>> {
+    let dimensions = client_points[0].len();
+    let distance_threshold = get_distance_threshold(delta, distance_metric);
+    let mut heavy_hitters = Vec::new();
+    let mut prefixes_to_explore = vec![vec![vec![]; dimensions]]; // Start with empty prefixes
+    let mut prefixes_checked = 0;
+    
+    while !prefixes_to_explore.is_empty() {
+        let mut next_prefixes = Vec::new();
+        
+        for prefix_set in prefixes_to_explore {
+            prefixes_checked += 1;
+            if prefixes_checked % 10_000 == 0 {
+                println!("  Checked {} prefixes, found {} heavy hitters so far...", 
+                    prefixes_checked, heavy_hitters.len());
+            }
+
+            // Convert prefix to actual point and check if it's a heavy hitter
+            let point: Vec<u128> = prefix_set.iter().map(|prefix| {
+                bits_to_u128_msb(prefix)
+            }).collect();
+
+            // Check if this prefix set represents complete points
+            let is_complete = prefix_set.iter().all(|prefix| prefix.len() == input_bit_length);
+            if is_complete {
+                let count = client_points.iter().filter(|client_point| {
+                    calculate_distance(&point, client_point, distance_metric) <= distance_threshold
+                }).count();
+                if count >= threshold {
+                    heavy_hitters.push(point);
+                }
+            } else {
+                let point_max: Vec<u128> = point.iter().enumerate().map(|(i, p)| {
+                    p << (input_bit_length - prefix_set[i].len()) | ((1u128 << (input_bit_length - prefix_set[i].len())) - 1)
+                }).collect();
+                let point_min: Vec<u128> = point.iter().enumerate().map(|(i, p)| {
+                    p << (input_bit_length - prefix_set[i].len())
+                }).collect();
+
+                // Get upper bound estimate for this prefix
+                let upper_bound = client_points.iter().filter(|client_point| {
+                    client_point.iter().enumerate().all(|(dim, &coord)| {
+                        let dist = calculate_optimistic_distance(&point_max, &point_min, client_point, distance_metric);
+                        dist <= distance_threshold
+                    })
+                }).count();
+                
+                if upper_bound >= threshold {
+                    // This prefix might lead to heavy hitters, so extend it
+                    // Find the first dimension that can be extended
+                    for dim in 0..dimensions {
+                        if prefix_set[dim].len() < input_bit_length {
+                            // Try extending with both 0 and 1
+                            for bit_value in [false, true] {
+                                let mut extended_prefix = prefix_set.clone();
+                                extended_prefix[dim].push(bit_value);
+                                next_prefixes.push(extended_prefix);
+                            }
+                            break; // Only extend one dimension at a time
+                        }
+                    }
+                }
+                // If upper_bound < threshold, we prune this branch
+            }
+        }
+        
+        prefixes_to_explore = next_prefixes;
+    }
+    
+    println!("Prefix search completed. Checked {} prefixes total.", prefixes_checked);
+    heavy_hitters
+}
+
+
 /// Run ground truth (non-secure plaintext) protocol for verification
 fn run_ground_truth(config_path: &str) -> Result<(), String> {
     let start_time = Instant::now();
@@ -915,7 +569,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
     println!("Loading client data from {}", cli_config.data_file);
     let client_points = load_client_points(&cli_config.data_file)?;
     println!("Loaded {} client points", client_points.len());
-    
+
     if is_known_dictionary {
         println!("\n=== Running Known Dictionary Ground Truth ===");
         
@@ -923,37 +577,26 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
         println!("Loading query points from {}", cli_config.query_file);
         let query_points = load_query_points(&cli_config.query_file)?;
         println!("Loaded {} query points", query_points.len());
-        
-        // Calculate ground truth results for each query point
-        let mut ground_truth_results = Vec::new();
+
         let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
         println!("Distance threshold for delta {}: {}", cli_config.protocol.delta, distance_threshold);
         
+        // Calculate ground truth results for each query point
+        let mut heavy_hitters = Vec::new();
         println!("\nCalculating ground truth for each query point...");
         for (i, query_point) in query_points.iter().enumerate() {
             let mut count = 0;
             
-            // Count client points within delta distance of this query point
-            for client_point in &client_points {
-                let distance = calculate_distance(query_point, client_point, &cli_config.protocol.distance_metric);
-                
-                if distance <= distance_threshold {
-                    count += 1;
-                }
-            }
-            
-            let is_heavy_hitter = count >= cli_config.protocol.threshold as usize;
-            ground_truth_results.push(is_heavy_hitter);
-            
-            if cli_config.output.verbose {
-                let status = if is_heavy_hitter { "HEAVY HITTER" } else { "not heavy hitter" };
-                println!("Query {}: {:?} -> {} (count: {})", 
-                    i + 1, query_point, status, count);
+            let count = client_points.iter().filter(|client_point| {
+                calculate_distance(query_point, client_point, &cli_config.protocol.distance_metric) <= distance_threshold
+            }).count();
+            if count >= cli_config.protocol.threshold as usize {
+                heavy_hitters.push(query_point);
             }
         }
         
         // Display summary
-        let total_heavy_hitters = ground_truth_results.iter().filter(|&&x| x).count();
+        let total_heavy_hitters = heavy_hitters.len();  
         println!("\n=== Ground Truth Results Summary ===");
         println!("Protocol: Known Dictionary");
         println!("Distance metric: {}", cli_config.protocol.distance_metric);
@@ -974,7 +617,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                     "threshold": cli_config.protocol.threshold.to_string(),
                     "dimensions": cli_config.protocol.dimensions.to_string(),
                 },
-                "results": query_points.iter().zip(ground_truth_results.iter()).enumerate().map(|(i, (query, result))| {
+                "results": query_points.iter().zip(heavy_hitters.iter()).enumerate().map(|(i, (query, result))| {
                     serde_json::json!({
                         "query_id": (i + 1).to_string(),
                         "query_point": query.iter().map(|&x| x.to_string()).collect::<Vec<_>>(),
@@ -993,12 +636,11 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                 .map_err(|e| format!("Failed to write results to {}: {}", output_file, e))?;
             println!("Results saved to {}", output_file);
         }
-        
     } else {
         println!("\n=== Running Unknown Dictionary Ground Truth ===");
-        
-        // Find all fuzzy heavy hitters using brute-force search
-        let ground_truth_heavy_hitters = find_fuzzy_heavy_hitters_bruteforce(
+
+        // Find all fuzzy heavy hitters using prefix-based search
+        let ground_truth_heavy_hitters = find_heavy_hitters_prefix_search(
             &client_points,
             cli_config.protocol.delta,
             cli_config.protocol.threshold as usize,

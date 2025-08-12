@@ -10,13 +10,12 @@
 use num::traits::{Num, One, Zero};
 use serde::{Deserialize, Serialize};
 use std::cmp::{Eq, PartialEq};
-use std::convert::{From, TryFrom, TryInto};
+use std::convert::{From, TryFrom};
 use std::fmt::{self, Display, Formatter, LowerHex, UpperHex};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 use std::ops::{AddAssign, DivAssign, MulAssign, RemAssign, SubAssign};
 use scuttlebutt::Block;
-use scuttlebutt::serialization::CanonicalSerialize;
 
 // Here are the constants that determine our prime:
 //

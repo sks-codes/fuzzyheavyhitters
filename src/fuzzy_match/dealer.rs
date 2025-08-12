@@ -13,14 +13,9 @@ use crate::fss::{
     dpf::DpfKey,
 };
 use crate::data_structures::payload::RingVec;
-use crate::fuzzy_match::check_phase;
-use crate::util::{u128_to_bits, u128_to_bits_msb};
+use crate::util::{u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
 use crate::channel::CommTrackingChannel;
 use scuttlebutt::AbstractChannel;
-use std::thread;
-use std::time::Instant;
-use std::net::{TcpListener, TcpStream, SocketAddr};
-use std::io::{BufReader, BufWriter};
 use std::convert::TryInto;
 use rand::Rng;
 use std::sync::{Arc, Mutex};
@@ -76,7 +71,7 @@ impl FssKeyBatch {
 
 pub struct DpfKeyBatch {
     pub keys: Vec<DpfKey<1>>,
-    pub random_values: Vec<u128>,
+    pub random_values: Vec<Vec<bool>>,
 }
 
 impl DpfKeyBatch {
@@ -87,8 +82,9 @@ impl DpfKeyBatch {
             out.extend_from_slice(&k.to_bytes());
         }
         out.extend_from_slice(&(self.random_values.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(self.random_values[0].len() as u32).to_le_bytes());
         for v in &self.random_values {
-            out.extend_from_slice(&v.to_le_bytes());
+            out.extend_from_slice(&bits_to_u8s(v));
         }
         out
     }
@@ -107,11 +103,13 @@ impl DpfKeyBatch {
         if bytes[offset..].len() < 4 { return Err("Too short for DpfKeyBatch random_values len".to_string()); }
         let val_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
+        let val_length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;    
+        offset += 4;
+        let val_bytes_length = (val_length + 7) / 8;
         let mut random_values = Vec::with_capacity(val_count);
         for _ in 0..val_count {
-            if bytes[offset..].len() < 16 { return Err("Too short for u128 in DpfKeyBatch".to_string()); }
-            random_values.push(u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap()));
-            offset += 16;
+            random_values.push(u8s_to_bits(bytes[offset..offset + val_bytes_length].try_into().unwrap(), val_length));
+            offset += val_bytes_length;
         }
         Ok((DpfKeyBatch { keys, random_values }, offset))
     }
@@ -232,12 +230,12 @@ impl FssDealer {
 
                                     let batch_server0 = DpfKeyBatch {
                                         keys: keys0,
-                                        random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
+                                        random_values: random_pairs.iter().map(|(r0, _)| r0.clone()).collect(),
                                     };
 
                                     let batch_server1 = DpfKeyBatch {
                                         keys: keys1,
-                                        random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                                        random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
                                     };
 
                                     self.write_equality_key_batch(&mut *server0_channel_guard, &batch_server0)
@@ -277,10 +275,9 @@ impl FssDealer {
                                     check_keys = self.generate_fss_keys_for_check().map_err(|e| format!("Failed to generate check keys: {}", e))?;
                                 }
                                 DealerSignal::RequestThresholdKeys => {
-                                    let mut keys_guard = threshold_keys.lock().unwrap();
                                     // Get current keys
                                     let (keys0, keys1, random_pairs) = {
-                                        let current_keys = keys_guard.clone();
+                                        let current_keys = threshold_keys.clone();
                                         current_keys
                                     };
                                     
@@ -303,7 +300,7 @@ impl FssDealer {
                                     self.write_threshold_key_batch(&mut *server1_channel_guard, &batch_server1)
                                         .map_err(|e| format!("Failed to send threshold keys to server 1 on channel {}: {}", channel_idx, e))?;
 
-                                    *keys_guard = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
+                                    threshold_keys = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
                                 }
                                 DealerSignal::Shutdown => {
                                     println!("Dealer: Received shutdown signal on channel {}, terminating this thread", channel_idx);
@@ -372,7 +369,7 @@ impl FssDealer {
         Ok(())
     }
 
-    fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &ThresholdKeyBatch) -> Result<(), String> {
+    fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
         let modulus = 2u128;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
@@ -386,7 +383,7 @@ impl FssDealer {
         Ok(())
     }
 
-    fn generate_fss_keys_for_equality(&self) -> Result<(Vec<DpfKey<1>>, Vec<DpfKey<1>>, Vec<(u128, u128)>), String> {
+    fn generate_fss_keys_for_equality(&self) -> Result<(Vec<DpfKey<1>>, Vec<DpfKey<1>>, Vec<(Vec<bool>, Vec<bool>)>), String> {
         let in_modulus = 1u128 << self.check_input_bit_length;
         let out_modulus = 1u128 << self.check_output_bit_length;
 
@@ -401,7 +398,7 @@ impl FssDealer {
 
         let key_pairs: Vec<(DpfKey<1>, DpfKey<1>)> = random_pairs
             .par_iter()
-            .map(|&(r0, r1)| {
+            .map(|(r0, r1)| {
                 let sum_bits = r0.iter().zip(r1.iter())
                     .map(|(&b0, &b1)| b0 ^ b1)
                     .collect::<Vec<_>>();
@@ -414,6 +411,9 @@ impl FssDealer {
                 (key0, key1)
             })
             .collect();
+
+        let (key0s, key1s) = key_pairs.into_iter().unzip();
+        Ok((key0s, key1s, random_pairs))
     }
 
     /// Generate FSS keys for check phase comparison (Lp distance with IntervalFSS)
@@ -492,17 +492,9 @@ impl FssDealer {
                 }
             })
             .collect();
-    
-        // Split the parallel results into separate vectors
-        let mut keys_server0 = Vec::with_capacity(self.n_clients);
-        let mut keys_server1 = Vec::with_capacity(self.n_clients);
-        
-        for (key0, key1) in key_pairs {
-            keys_server0.push(key0);
-            keys_server1.push(key1);
-        }
-    
-        Ok((keys_server0, keys_server1, random_pairs))
+
+        let (key0s, key1s) = key_pairs.into_iter().unzip();
+        Ok((key0s, key1s, random_pairs))
     }
 
     /// Generate FSS keys for interval FSS threshold comparison

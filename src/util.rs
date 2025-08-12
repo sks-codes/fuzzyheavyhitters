@@ -145,8 +145,27 @@ pub fn bits_to_u128_msb(bits: &[bool]) -> u128 {
 
 /// Convert a query point (vector of bit vectors) to a vector of u128 values for debugging
 /// Each inner Vec<bool> represents the bits for one dimension
-pub fn query_point_to_u128s(query_point: &[Vec<bool>]) -> Vec<u128> {
+pub fn bool_vec_to_u128s(query_point: &[Vec<bool>]) -> Vec<u128> {
     query_point.iter().map(|dim_bits| bits_to_u128(dim_bits)).collect()
+}
+
+pub fn bits_to_u8s(bits: &[bool]) -> Vec<u8> {
+    bits.chunks(8).map(|chunk| {
+        chunk.iter().enumerate().fold(0u8, |acc, (i, &bit)| {
+            acc | ((bit as u8) << i)
+        })
+    }).collect()
+}
+
+pub fn u8s_to_bits(bytes: &[u8], len: usize) -> Vec<bool> {
+    let mut bits = Vec::new();
+    for &byte in bytes {
+        for i in 0..8 {
+            bits.push((byte >> i) & 1 == 1);
+        }
+    }
+    bits.truncate(len);
+    bits
 }
 
 /// Calculate distance between two points based on the distance metric
@@ -218,6 +237,19 @@ pub fn calculate_distance(point1: &[u128], point2: &[u128], distance_metric: &st
             l_inf_distance
         }
     }
+}
+
+pub fn calculate_optimistic_distance(point_max: &[u128], point_min: &[u128], point2: &[u128], distance_metric: &str) -> u128 {
+    let point_best = point_max.iter().zip(point_min.iter()).zip(point2.iter()).map(|((max, min), p2)| {
+        if max < p2 {
+            *max
+        } else if min <= p2 {
+            *p2
+        } else {
+            *min
+        }
+    }).collect::<Vec<u128>>();
+    calculate_distance(&point_best, point2, distance_metric)
 }
 
 /// Get the distance threshold for comparison based on the distance metric
@@ -367,7 +399,7 @@ mod tests {
             vec![false, true, true, false], // 6
             vec![true, true, true, true],   // 15
         ];
-        let result = query_point_to_u128s(&query_point);
+        let result = bool_vec_to_u128s(&query_point);
         assert_eq!(result, vec![5, 6, 15]);
     }
 }

@@ -1,7 +1,6 @@
 use crate::fss::ldcf::LdcfKey;
 use crate::fss::rdcf::RdcfKey;
 use crate::data_structures::payload::RingVec;
-use std::convert::TryInto;
 
 const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
     [1, 0, 0, 0, 0, 0],

@@ -27,11 +27,11 @@ use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
 use counttree::data_structures::logexperiments::{log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters, ServerSide};
-use counttree::fss::ibdcf::{eval_str, ibDCFKey};
+use counttree::fss::ibdcf::{eval_str, IbDCFKey};
 use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
 use counttree::sample_driving_data::{csv_to_bitvecs, save_heavy_hitters};
 
-type IntervalKey = (ibDCFKey, ibDCFKey);
+type IntervalKey = (IbDCFKey, IbDCFKey);
 fn long_context() -> context::Context {
     let mut ctx = context::current();
 
@@ -87,7 +87,7 @@ fn generate_keys(cfg: &config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<Interv
         .take(cfg.num_sites)
         .map(|_| {
             let data = generate_random_bit_vectors(cfg.data_len, cfg.n_dims);
-            let keys = ibDCFKey::gen_l_inf_ball(data, 1);
+            let keys = IbDCFKey::gen_l_inf_ball(data, 1);
             (keys.0.clone(), keys.1.clone())
         })
         .collect::<Vec<_>>()
@@ -139,7 +139,7 @@ async fn add_fuzzy_keys(
     for i in 0..nreqs {
         let sample = (rng.sample(zipf) as usize).saturating_sub(1);
         let key_str = augment_string(strings[sample].clone(), aug_len);
-        let (key0, key1) = ibDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
+        let (key0, key1) = IbDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
         addkey0.push(key0);
         addkey1.push(key1);
     }
@@ -367,7 +367,7 @@ async fn main() -> io::Result<()> {
         let mut addkey1 = Vec::with_capacity(nreqs);
 
         for _j in 0..nreqs {
-            let (key0, key1) = ibDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
+            let (key0, key1) = IbDCFKey::gen_l_inf_ball(strings[_j].clone(), cfg.ball_size as u32);
             addkey0.push(key0);
             addkey1.push(key1);
         }

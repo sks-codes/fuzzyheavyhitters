@@ -1,9 +1,7 @@
-//! Threshold Phase Implementation
 use crate::garbled_circuits::greater_than_or_equal_threshold::{
     multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
 use crate::data_structures::{
     modint::ModInt,
-    payload::RingVec,
 };
 use crate::fss::{
     ldcf::LdcfKey,
@@ -11,8 +9,7 @@ use crate::fss::{
 };
 use crate::util::u128_to_bits_msb;
 use crate::channel::CommTrackingChannel;
-use std::convert::TryInto;
-use scuttlebutt::{AesRng, Block, AbstractChannel};
+use scuttlebutt::{AesRng, AbstractChannel};
 
 /// Method for threshold comparison
 #[derive(Debug, Clone)]

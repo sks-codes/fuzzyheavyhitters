@@ -1,13 +1,11 @@
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
-    FancyReveal, util,
+    FancyReveal,
     twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use scuttlebutt::{AbstractChannel, AesRng, Channel, Block};
+use scuttlebutt::{AbstractChannel, AesRng, Block};
 use std::fmt::Debug;
-use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
 
 /// Bit width for comparison
 #[derive(Clone, Copy)]

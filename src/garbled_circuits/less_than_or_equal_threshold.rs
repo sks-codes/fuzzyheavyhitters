@@ -2,14 +2,12 @@ use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
 
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
-    FancyReveal, util,
+    FancyReveal,
     twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use scuttlebutt::{AbstractChannel, AesRng, Channel, Block};
-use std::{fmt::Debug, result};
-use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
+use scuttlebutt::{AbstractChannel, AesRng, Block};
+use std::fmt::Debug;
 use rand::Rng;
 
 /// Input structure for less than secret sharing comparison
