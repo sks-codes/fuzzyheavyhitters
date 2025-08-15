@@ -21,7 +21,7 @@ struct MultiComparisonInputs<F> {
 }
 
 /// Convert a u128 to Vec<u16> bits (LSB first)
-fn u128_to_u16_bits(x: u128, n: usize) -> Vec<u16> {
+pub fn u128_to_u16_bits(x: u128, n: usize) -> Vec<u16> {
     (0..n).map(|i| ((x >> i) & 1) as u16).collect()
 }
 
@@ -197,93 +197,6 @@ where
         .collect();
 
     MultiComparisonInputs { garbler_wires, evaluator_wires }
-}
-
-#[test]
-fn test_multi_greater_than_128() {
-    let gb_values = vec![
-        u128_to_u16_bits(5, 4),   // 0101 (LSB first)
-        u128_to_u16_bits(10, 5),  // 01010
-        u128_to_u16_bits(15, 5),  // 01111
-    ];
-    let ev_values = vec![
-        u128_to_u16_bits(3, 4),   // 1100
-        u128_to_u16_bits(12, 5),  // 00110
-        u128_to_u16_bits(15, 5),  // 01111
-    ];
-
-    let expected: Vec<bool> = gb_values.iter()
-        .zip(ev_values.iter())
-        .map(|(g, e)| {
-            let g_val = bool_vec_to_value(&g.iter().map(|&x| x != 0).collect::<Vec<bool>>(), BitWidth::Bits128)[0];
-            let e_val = bool_vec_to_value(&e.iter().map(|&x| x != 0).collect::<Vec<bool>>(), BitWidth::Bits128)[0];
-            g_val >= e_val
-        })
-        .collect();
-
-    let (sender, receiver) = UnixStream::pair().unwrap();
-
-    std::thread::spawn(move || {
-        let rng_gb = AesRng::new();
-        let reader = BufReader::new(sender.try_clone().unwrap());
-        let writer = BufWriter::new(sender);
-        let mut channel = Channel::new(reader, writer);
-        multiple_gb_greater_than(&mut rng_gb.clone(), &mut channel, &gb_values, BitWidth::Bits128);
-    });
-
-    let rng_ev = AesRng::new();
-    let reader = BufReader::new(receiver.try_clone().unwrap());
-    let writer = BufWriter::new(receiver);
-    let mut channel = Channel::new(reader, writer);
-
-    let results = multiple_ev_greater_than(&mut rng_ev.clone(), &mut channel, &ev_values, BitWidth::Bits128);
-    assert_eq!(results, expected);
-}
-
-#[test]
-fn test_multi_greater_than_256() {
-    // Helper to create LSB-ordered 256-bit values
-    fn make_value(high: u128, low: u128) -> Vec<u16> {
-        let mut bits = Vec::with_capacity(256);
-        // Low bits first (LSB)
-        bits.extend(u128_to_u16_bits(low, 128));
-        // Then high bits
-        bits.extend(u128_to_u16_bits(high, 128));
-        bits
-    }
-
-    // Garbler values
-    let gb_values = vec![
-        make_value(1, 0),  // High=1, Low=0
-        make_value(0, 1),  // High=0, Low=1
-    ];
-
-    // Evaluator values
-    let ev_values = vec![
-        make_value(0, 1),  // High=0, Low=1
-        make_value(1, 0),  // High=1, Low=0
-    ];
-
-    // Expected results: gb_value >= ev_value
-    let expected = vec![true, false];
-
-    let (sender, receiver) = UnixStream::pair().unwrap();
-
-    std::thread::spawn(move || {
-        let rng_gb = AesRng::new();
-        let reader = BufReader::new(sender.try_clone().unwrap());
-        let writer = BufWriter::new(sender);
-        let mut channel = Channel::new(reader, writer);
-        multiple_gb_greater_than(&mut rng_gb.clone(), &mut channel, &gb_values, BitWidth::Bits256);
-    });
-
-    let rng_ev = AesRng::new();
-    let reader = BufReader::new(receiver.try_clone().unwrap());
-    let writer = BufWriter::new(receiver);
-    let mut channel = Channel::new(reader, writer);
-
-    let results = multiple_ev_greater_than(&mut rng_ev.clone(), &mut channel, &ev_values, BitWidth::Bits256);
-    assert_eq!(results, expected);
 }
 
 pub fn block_to_bits(block: Block, lsb_first: bool) -> Vec<u16> {

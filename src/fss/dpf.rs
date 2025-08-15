@@ -374,8 +374,8 @@ impl<const N: usize> DpfKey<N>
     }
 
     pub fn eval_dpf(&self, idx: &[bool], modulus: u128) -> RingVec<N> {
-        debug_assert!(idx.len() <= self.domain_size());
-        debug_assert!(!idx.is_empty());
+        assert!(idx.len() <= self.domain_size());
+        assert!(!idx.is_empty());
         let mut state = self.eval_init(modulus);
 
         for i in 0..idx.len() {

@@ -241,7 +241,7 @@ mod tests {
             metric: DistanceMetric::LInfinity,
             dictionary_type: DictionaryType::Unknown,
             input_bit_length: 8,
-            output_bit_length: 20,
+            output_bit_length: 1,
             dimension: 2,
             data: ShareData::FSS,
         };

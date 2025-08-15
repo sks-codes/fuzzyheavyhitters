@@ -402,4 +402,32 @@ mod tests {
         let result = bool_vec_to_u128s(&query_point);
         assert_eq!(result, vec![5, 6, 15]);
     }
+
+    #[test]
+    fn test_u8_to_bits() {
+        let original_bits = [true, false, true];
+        let u8_value = bits_to_u8s(&original_bits);
+        let recovered_bits = u8s_to_bits(&u8_value, original_bits.len());
+        assert_eq!(recovered_bits, original_bits);
+
+        let original_bits = [false, true, false, true];
+        let u8_value = bits_to_u8s(&original_bits);
+        let recovered_bits = u8s_to_bits(&u8_value, original_bits.len());
+        assert_eq!(recovered_bits, original_bits);
+
+        let original_bits = [true, true, true, true];
+        let u8_value = bits_to_u8s(&original_bits);
+        let recovered_bits = u8s_to_bits(&u8_value, original_bits.len());
+        assert_eq!(recovered_bits, original_bits);
+
+        let original_bits = [false, true, false, true];
+        let u8_value = bits_to_u8s(&original_bits);
+        let recovered_bits = u8s_to_bits(&u8_value, original_bits.len());
+        assert_eq!(recovered_bits, original_bits);
+
+        let original_bits = [false, false, false, false, false];
+        let u8_value = bits_to_u8s(&original_bits);
+        let recovered_bits = u8s_to_bits(&u8_value, original_bits.len());
+        assert_eq!(recovered_bits, original_bits);
+    }
 }
