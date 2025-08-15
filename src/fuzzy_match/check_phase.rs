@@ -248,7 +248,7 @@ impl CheckPhase {
                 
                 // Evaluate at the specific dimension for this shared range
                 let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-                let res_bits = u128_to_bits_msb(res, self.config.in_bit_length);
+                let res_bits = u128_to_bits_msb(res, self.config.input_bit_length);
                 dimension_eval_for_range.extend_from_slice(&res_bits);
             }
             
