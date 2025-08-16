@@ -95,8 +95,6 @@ impl FuzzyHeavyHittersProtocol {
         dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<bool>, String> {
-        let mut rng = AesRng::new();
-        
         // Convert query points from u128 to Vec<Vec<bool>>
         let query_point_sets: Vec<Vec<Vec<bool>>> = query_points.iter()
             .map(|query_point| {
@@ -116,7 +114,6 @@ impl FuzzyHeavyHittersProtocol {
             client_shares,
             dealer_channels,
             other_server_channels,
-            &mut rng,
         )?;
 
         // Shutdown dealers using all dealer channels
@@ -136,8 +133,6 @@ impl FuzzyHeavyHittersProtocol {
         dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<Vec<u128>>, String> {
-        let mut rng = AesRng::new();
-        
         let max_bit_length = self.config.share_config.input_bit_length;
         let dimension = self.config.share_config.dimension;
 
@@ -180,7 +175,6 @@ impl FuzzyHeavyHittersProtocol {
                     client_shares_list,
                     dealer_channels,
                     other_server_channels,
-                    &mut rng,
                 )?
             };
 
@@ -225,7 +219,6 @@ impl FuzzyHeavyHittersProtocol {
         client_shares: &[SharedRange],
         dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        rng: &mut AesRng,
     ) -> Result<Vec<bool>, String> {
         if prefix_sets.is_empty() {
             return Ok(Vec::new());
@@ -308,7 +301,7 @@ impl FuzzyHeavyHittersProtocol {
                     } else if matches!(self.config.check_config.method, CheckMethod::LinfGarbledCircuits) {
                         vec![CheckData::LinfGarbledCircuits; client_shares.len()]
                     } else if matches!(self.config.check_config.method, CheckMethod::LpGarbledCircuits) {
-                        vec![CheckData::LpGarbledCircuits { threshold: distance_threshold }; client_shares.len()]
+                        vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; client_shares.len()]
                     } else {
                         return Err("Unsupported check method for parallel processing".to_string());
                     };
@@ -323,7 +316,6 @@ impl FuzzyHeavyHittersProtocol {
                         prefix_set,
                         &check_data_list,
                         &mut *locked_other_server_channel,
-                        &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
                     // Handle threshold data - get from dealer if using IntervalFSS, otherwise use garbled circuits

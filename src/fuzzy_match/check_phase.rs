@@ -1,4 +1,5 @@
 use crate::channel::CommTrackingChannel;
+use crate::fss;
 use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
 use crate::garbled_circuits::{
     batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
@@ -19,14 +20,14 @@ use std::convert::TryInto;
 /// Method for check phase comparison
 #[derive(Debug, Clone)]
 pub enum CheckMethod {
-    /// Use L-infinity distance comparison with garbled circuits
-    LinfGarbledCircuits,
-    /// Use L-infinity distance comparison with DPF
-    LinfDpf,
-    /// Use Lp distance comparison with garbled circuits
-    LpGarbledCircuits,
-    /// Use Lp distance comparison with IntervalFSS
-    LpIntervalFSS,
+    GC,
+    FSS,
+}
+
+#[derive(Debug, Clone)]
+pub enum CheckProperty {
+    Equality,
+    MuBounded,
 }
 
 /// Data for check phase configuration
@@ -40,7 +41,7 @@ pub enum CheckData {
     /// Threshold value for Lp distance comparison with garbled circuits
     LpGarbledCircuits {
         /// Threshold value for comparison
-        threshold: u128,
+        mu: u128,
     },
     /// FSS key, random value, and threshold for Lp distance comparison with IntervalFSS
     LpIntervalFSS {
@@ -52,13 +53,11 @@ pub enum CheckData {
 /// Configuration for the check phase
 #[derive(Debug, Clone)]
 pub struct CheckConfig {
-    pub input_bit_length: usize,
-    pub output_bit_length: usize,
-    /// Number of dimensions for evaluation
-    pub num_dimensions: usize,
-    /// Whether this is the garbler side (true) or evaluator side (false)
+    pub h2: usize, // Input bit length of Check Phase, which is the output bit length of Share Phase
+    pub h3: usize, // Output bit length of Check Phase, which is the input bit length of threshold phase
+    pub d: usize, /// Number of dimensions for evaluation
     pub is_garbler_side: bool,
-    /// Method to use for check phase
+    pub property: CheckProperty,
     pub method: CheckMethod,
 }
 
@@ -93,134 +92,162 @@ impl CheckPhase {
     pub fn new(config: CheckConfig, share_phase: SharePhase) -> Self {
         Self { config, share_phase }
     }
-    /// Run fuzzy match check for a d-dimensional query point against multiple shared ranges
-    /// This reduces communication rounds by batching multiple range checks
-    /// Input: query_point is a slice of Vec<bool> where each Vec<bool> represents the bits for one dimension
-    /// Input: shared_ranges is a slice of SharedRange objects to check against
-    /// Input: check_data_list is a slice of CheckData objects, one for each shared range
-    /// Returns: Vector of ModInt results, one for each shared range
+
     pub fn run_batch_fuzzy_match_check(
         &self,
         shared_ranges: &[SharedRange],
         query_point: &[Vec<bool>],
         check_data_list: &[CheckData],
         channel: &mut CommTrackingChannel,
-        rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
         if query_point.len() != self.config.num_dimensions {
             return Err(CheckPhaseError::InputLengthMismatch(
                 format!("Query point has {} dimensions but config expects {}", query_point.len(), self.config.num_dimensions)
             ));
         }
-
-        if shared_ranges.len() != check_data_list.len() {
-            return Err(CheckPhaseError::InputLengthMismatch(
-                format!("Number of shared ranges ({}) must match number of check data items ({})", 
-                        shared_ranges.len(), check_data_list.len())
-            ));
-        }
-
         if shared_ranges.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Ensure all CheckData items are the same type for efficient batching
-        let first_check_data = &check_data_list[0];
-        let all_same_type = check_data_list.iter().all(|cd| std::mem::discriminant(cd) == std::mem::discriminant(first_check_data));
-        
-        if !all_same_type {
             return Err(CheckPhaseError::InvalidConfig(
-                "All CheckData items must be the same type for batch processing".to_string()
+                "Shared ranges cannot be empty".to_string()
             ));
         }
 
-        // All CheckData items are the same type, we can batch efficiently
-        match (&self.config.method, first_check_data) {
-            (CheckMethod::LinfGarbledCircuits, CheckData::LinfGarbledCircuits) => {
-                self.run_batch_linf_check_gc(shared_ranges, query_point, channel, rng)
-            }
-            (CheckMethod::LinfDpf, CheckData::LinfDpf { .. }) => {
-                let mut fss_keys = Vec::new();
-                let mut random_values = Vec::new();
+        let evals = shared_ranges.iter().map(|range| {
+            (0..self.config.d).map(|i| {
+                self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i)
+                    .map_err(CheckPhaseError::from)
+            }).collect::<Result<Vec<u128>, _>>()
+        }).collect::<Result<Vec<Vec<u128>>, _>>()?;
 
-                for check_data in check_data_list {
-                    if let CheckData::LinfDpf { fss_key, random_value } = check_data {
-                        fss_keys.push(fss_key.clone());
-                        random_values.push(random_value.clone());
+        match &self.config.property {
+            CheckProperty::Equality => {
+                let inputs = evals.iter().map(|eval| {
+                    let input = Vec::new();
+                    for &val in eval {
+                        input.extend_from_slice(&u128_to_bits_msb(val, self.config.h2));
+                    }
+                    input
+                }).collect::<Vec<Vec<bool>>>();
+
+                match &self.config.method {
+                    CheckMethod::GC => {
+                        check_data_list.iter().for_each(|check_data| {
+                            match check_data {
+                                CheckData::LinfGarbledCircuits => {}
+                                _ => {
+                                    return Err(CheckPhaseError::InvalidConfig(
+                                        "Incorrect check data for garbled circuit equality testing. Currently only support LinfGarbledCircuits".to_string()
+                                    ));
+                                }
+                            }
+                        });
+                        self.batch_equality_testing_gc(&inputs, channel)
+                    }
+                    CheckMethod::FSS => {
+                        let mut fss_keys = Vec::new();
+                        let mut random_values = Vec::new();
+                        check_data_list.iter().for_each(|check_data| {
+                            match check_data {
+                                CheckData::LinfDpf { fss_key, random_value } => {
+                                    fss_keys.push(fss_key.clone());
+                                    random_values.push(random_value.clone());
+                                }
+                                _ => {
+                                    return Err(CheckPhaseError::InvalidConfig(
+                                        "Incorrect check data for FSS equality testing. Currently only support LinfDpf".to_string()
+                                    ));
+                                }
+                            }
+                        });
+                        self.batch_equality_testing_fss(inputs, fss_keys, random_values, channel)
+                    }
+                    _ => {
+                        return Err(CheckPhaseError::InvalidConfig(
+                            "Unsupported check method for equality check. Currently only support GC and FSS".to_string()
+                        ));
                     }
                 }
-
-                self.run_batch_linf_check_dpf(shared_ranges, query_point, &random_values, &fss_keys, channel)
             }
-            (CheckMethod::LpGarbledCircuits, CheckData::LpGarbledCircuits { threshold }) => {
-                let threshold_modint = ModInt::new(*threshold, 1 << self.config.input_bit_length);
-                self.run_batch_lp_distance_check_gc(shared_ranges, query_point, threshold_modint, channel, rng)
-            }
-            (CheckMethod::LpIntervalFSS, CheckData::LpIntervalFSS { .. }) => {
-                // For FSS, extract all the keys and random values for batch processing
-                let mut fss_keys = Vec::new();
-                let mut random_values = Vec::new();
-                
-                for check_data in check_data_list {
-                    if let CheckData::LpIntervalFSS { fss_key, random_value } = check_data {
-                        fss_keys.push(fss_key.clone());
-                        random_values.push(*random_value);
+            CheckProperty::MuBounded => {
+                let inputs = evals.iter().map(|eval| {
+                    let input = ModInt::zero(1u128 << self.config.h2);
+                    eval.iter().map(|&val| {
+                        input = input + ModInt::new(val, 1u128 << self.config.h2);
+                    });
+                    input
+                });
+                match &self.config.method {
+                    CheckMethod::GC => {
+                        let mut current_mu = ModInt::zero(1u128 << self.config.h2);
+                        check_data_list.iter().enumerate().for_each(|(i, check_data)| {
+                            match check_data {
+                                CheckData::LpGarbledCircuits { mu } => {
+                                    if i != 0 {
+                                        if current_mu.val() != *mu {
+                                            return Err(CheckPhaseError::InvalidConfig(
+                                                "All mu values must be the same for garbled circuit mu-bounded check".to_string()
+                                            ));
+                                        }
+                                    } else {
+                                        current_mu = ModInt(*mu, 1u128 << self.config.h2);
+                                    }
+                                }
+                                _ => {
+                                    return Err(CheckPhaseError::InvalidConfig(
+                                        "Incorrect check data for garbled circuit mu-bounded check. Currently only support LpGarbledCircuits".to_string()
+                                    ));
+                                }
+                            }
+                        });
+                        self.batch_mu_bounded_testing_gc(&inputs, &current_mu, channel)
+                    }
+                    CheckMethod::FSS => {
+                        let mut fss_keys = Vec::new();
+                        let mut random_values = Vec::new();
+                        check_data_list.iter().for_each(|check_data| {
+                            match check_data {
+                                CheckData::LpIntervalFSS { fss_key, random_value } => {
+                                    fss_keys.push(fss_key.clone());
+                                    random_values.push(ModInt::new(*random_value, 1u128 << self.config.h2));
+                                }
+                                _ => {
+                                    return Err(CheckPhaseError::InvalidConfig(
+                                        "Incorrect check data for FSS mu-bounded check. Currently only support LpIntervalFSS".to_string()
+                                    ));
+                                }
+                            }
+                        });
+                        self.batch_mu_bounded_testing_fss(&inputs, &fss_keys, &random_values, channel)
+                    }
+                    _ => {
+                        return Err(CheckPhaseError::InvalidConfig(
+                            "Unsupported check method for mu-bounded check. Currently only support GC and FSS".to_string()
+                        ));
                     }
                 }
-                
-                self.run_batch_lp_distance_check_intervalfss(
-                    shared_ranges, 
-                    query_point, 
-                    &random_values, 
-                    &fss_keys, 
-                    channel
-                )
             }
             _ => {
-                Err(CheckPhaseError::InvalidConfig(
-                    format!("Mismatch between check method {:?} and check data type", self.config.method)
-                ))
+                Err::CheckPhaseError::InvalidConfig(
+                    "Unsupported check property for batch fuzzy match check".to_string()
+                )
             }
         }
     }
 
-    /// Batch L-infinity distance equality test method
-    fn run_batch_linf_check_gc(
+    pub fn batch_equality_testing_gc(
         &self,
-        shared_ranges: &[SharedRange],
-        query_point: &[Vec<bool>],
+        inputs: &[Vec<bool>],
         channel: &mut CommTrackingChannel,
-        rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        // Step 1: For each shared range and each dimension, evaluate query_point with OKVS
-        let mut all_dimension_evals = Vec::new();
-        
-        for shared_range in shared_ranges {
-            let mut dimension_eval_for_range = Vec::<ModInt>::new();
-            
-            for dim in 0..self.config.num_dimensions {
-                // Use the bits directly from query_point
-                let point_bits = &query_point[dim];
-                
-                // Evaluate at the specific dimension for this shared range
-                let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-                dimension_eval_for_range.push(ModInt::new(res, 1 << self.config.input_bit_length));
-            }
-            
-            all_dimension_evals.push(dimension_eval_for_range);
-        }
-
-        // Step 2: Run batch equality test for all ranges at once
+        let mut rng = AesRng::new();
         let all_equality_results = if self.config.is_garbler_side {
-            batch_gb_equality_test(rng, channel, &all_dimension_evals)
+            batch_gb_equality_test(rng, channel, &inputs)
         } else {
-            batch_ev_equality_test(rng, channel, &all_dimension_evals)
+            batch_ev_equality_test(rng, channel, &inputs)
         };
 
-        // Step 3: Convert boolean results to ring shares using batched OT
         let ring_shares = self.batch_boolean_to_ring_share_modint(
             &all_equality_results,
-            1 << self.config.output_bit_length,
+            1 << self.config.h3,
             channel,
             rng,
             self.config.is_garbler_side,
@@ -229,168 +256,109 @@ impl CheckPhase {
         Ok(ring_shares)
     }
 
-    fn run_batch_linf_check_dpf(
+    pub fn batch_equality_testing_fss(
         &self,
-        shared_ranges: &[SharedRange],
-        query_point: &[Vec<bool>],
-        random_values: &[Vec<bool>],
+        inputs: &[Vec<bool>],
         fss_keys: &[DpfKey<1>],
+        random_values: &[Vec<bool>],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        let mut all_dimension_evals = Vec::new();
-
-        for shared_range in shared_ranges {
-            let mut dimension_eval_for_range = Vec::<bool>::new();
-            
-            for dim in 0..self.config.num_dimensions {
-                // Use the bits directly from query_point
-                let point_bits = &query_point[dim];
-                
-                // Evaluate at the specific dimension for this shared range
-                let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-                let res_bits = u128_to_bits_msb(res, self.config.input_bit_length);
-                dimension_eval_for_range.extend_from_slice(&res_bits);
-            }
-            
-            all_dimension_evals.push(dimension_eval_for_range);
+        if inputs.len() != fss_keys.len() {
+            return Err(CheckPhaseError::InputLengthMismatch(
+                format!("Number of inputs ({}) must match number of FSS keys ({})", inputs.len(), fss_keys.len()),
+            ));
+        }
+        if inputs.len() != random_values.len() {
+            return Err(CheckPhaseError::InputLengthMismatch(
+                format!("Number of inputs ({}) must match number of random values ({})", inputs.len(), random_values.len()),
+            ));
         }
 
-        let masked_evals = all_dimension_evals.iter().zip(random_values).map(|(evals, rand)| {
-            evals.iter().zip(rand.iter()).map(|(&eval_bit, &rand_bit)| {
-                eval_bit ^ rand_bit
+        let masked_values = inputs.iter().zip(random_values.iter()).map(|(input, rand)| {
+            input.iter().zip(rand.iter()).map(|(&input_bit, &rand_bit)| {
+                input_bit ^ rand_bit
             }).collect::<Vec<bool>>()
         }).collect::<Vec<Vec<bool>>>();
 
-        let mut masked_evals_u8s = Vec::new();
-        for masked_eval in masked_evals.iter() {
-            let u8s = bits_to_u8s(masked_eval);
-            masked_evals_u8s.extend_from_slice(&u8s);
-        }
+        let masked_values_u8s = masked_values.iter().map(|masked_eval| {
+            bits_to_u8s(masked_eval)
+        }).collect::<Vec<Vec<u8>>>();
 
-        let eval_bits_length = masked_evals[0].len();
-        let eval_bytes_length = (eval_bits_length + 7) / 8;
+        let num_values = masked_values_u8s.len();
+        let values_bytes_length = masked_values_u8s[0].len();
+        let values_bits_length = masked_values[0].len();
 
-        let reconstructed_masked_evals = if self.config.is_garbler_side {
-            let garbler_data_len = masked_evals_u8s.len() as u32;
-            channel.write_bytes(&garbler_data_len.to_le_bytes())
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send data length: {}", e)))?;
-            channel.write_bytes(&masked_evals_u8s)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+        let other_masked_values_u8s: Vec<Vec<u8>> = if self.config.is_garbler_side {
+            masked_values_u8s.iter().for_each(|u8s| {
+                channel.write_bytes(u8s)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            });
             channel.flush();
 
-            let mut evaluator_data_len_bytes = [0u8; 4];
-            channel.read_bytes(&mut evaluator_data_len_bytes)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read data length: {}", e)))?;
-            let evaluator_data_len = u32::from_le_bytes(evaluator_data_len_bytes) as usize;
-            let mut evaluator_masked_evals_bytes = vec![0u8; evaluator_data_len];
-            channel.read_bytes(&mut evaluator_masked_evals_bytes)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
-
-            let evaluator_masked_evals = evaluator_masked_evals_bytes.chunks_exact(eval_bytes_length)
-                .map(|chunk| {
-                    let bits = u8s_to_bits(chunk, eval_bits_length);
-                    bits.into_iter().collect::<Vec<bool>>()
-                })
-                .collect::<Vec<_>>();
-
-            masked_evals.iter().zip(evaluator_masked_evals.iter())
-                .map(|(garbler_eval, evaluator_eval)| {
-                    garbler_eval.iter().zip(evaluator_eval.iter())
-                        .map(|(&g, &e)| g ^ e)
-                        .collect::<Vec<bool>>()
-                })
-                .collect::<Vec<Vec<bool>>>()
+            (0..num_values).map(|_| {
+                let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
+                channel.read_bytes(&mut other_masked_eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                other_masked_eval_bytes
+            }).collect::<Vec<Vec<u8>>>()
         } else {
-            let mut garbler_data_len_bytes = [0u8; 4];
-            channel.read_bytes(&mut garbler_data_len_bytes)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read data length: {}", e)))?;
-            let garbler_data_len = u32::from_le_bytes(garbler_data_len_bytes) as usize;
-            let mut garbler_masked_evals_bytes = vec![0u8; garbler_data_len];
-            channel.read_bytes(&mut garbler_masked_evals_bytes)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read garbler masked evals: {}", e)))?;
+            let other_masked_values_u8s = (0..num_values).map(|_| {
+                let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
+                channel.read_bytes(&mut other_masked_eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                other_masked_eval_bytes
+            }).collect::<Vec<Vec<u8>>>();
 
-            channel.write_bytes(&(masked_evals_u8s.len() as u32).to_le_bytes())
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send data length: {}", e)))?;
-            channel.write_bytes(&masked_evals_u8s)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            masked_values_u8s.iter().for_each(|u8s| {
+                channel.write_bytes(u8s)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            });
             channel.flush();
-
-            let garbler_masked_evals = garbler_masked_evals_bytes.chunks_exact(eval_bytes_length)
-                .map(|chunk| {
-                    let bits = u8s_to_bits(chunk, eval_bits_length);
-                    bits.into_iter().collect::<Vec<bool>>()
-                })
-                .collect::<Vec<_>>();
-
-            masked_evals.iter().zip(garbler_masked_evals.iter())
-                .map(|(evaluator_eval, garbler_eval)| {
-                    evaluator_eval.iter().zip(garbler_eval.iter())
-                        .map(|(&e, &g)| e ^ g)
-                        .collect::<Vec<bool>>()
-                })
-                .collect::<Vec<Vec<bool>>>()
+            other_masked_values_u8s
         };
 
-        let out_modulus = 1u128 << self.config.output_bit_length;
-        let mut results = Vec::new();
-        for (reconstructed_masked_eval, fss_key) in reconstructed_masked_evals.iter().zip(fss_keys.iter()) {
-            let fss_result = fss_key.eval_dpf(&reconstructed_masked_eval, out_modulus);
+        let other_masked_values = other_masked_values_u8s.iter().map(|u8s| {
+            u8s_to_bits(u8s, masked_values[0].len())
+        }).collect::<Vec<Vec<bool>>>();
 
-            let result = if self.config.is_garbler_side {
-                ModInt::new(out_modulus - fss_result[0], out_modulus)
+        let combined_masked_values = masked_values.iter().zip(other_masked_values.iter()).map(|(eval, other_eval)| {
+            eval.iter().zip(other_eval.iter()).map(|(&eval_bit, &other_bit)| {
+                eval_bit ^ other_bit
+            }).collect::<Vec<bool>>()
+        }).collect::<Vec<Vec<bool>>>();
+
+        let result = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_eval, fss_key)| {
+            let fss_result = fss_key.eval_dpf(masked_eval, 1u128 << self.config.h3);
+            if self.config.is_garbler_side {
+                ModInt::new((1u128 << self.config.h3) - fss_result[0], 1u128 << self.config.h3)
             } else {
-                ModInt::new(fss_result[0], out_modulus)
-            };
-            results.push(result);
-        }
+                ModInt::new(fss_result[0], 1u128 << self.config.h3)
+            }
+        }).collect::<Vec<ModInt>>();
 
-        Ok(results)
+        result
     }
 
-    /// Batch Lp distance check using garbled circuits
-    fn run_batch_lp_distance_check_gc(
-        &self,
-        shared_ranges: &[SharedRange],
-        query_point: &[Vec<bool>],
-        threshold: ModInt,
+    pub fn batch_mu_bounded_testing_gc(
+        &self, 
+        inputs: &[ModInt],
+        mu: &ModInt,
         channel: &mut CommTrackingChannel,
-        rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        // Step 1: For each shared range, evaluate all dimensions and aggregate
-        let mut aggregated_shares = Vec::new();
-        let modulus = 1u128 << self.config.input_bit_length;
-        
-        for shared_range in shared_ranges {
-            let mut all_dimension_eval = Vec::<ModInt>::new();
-            
-            for dim in 0..self.config.num_dimensions {
-                let point_bits = &query_point[dim];
-                let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-                all_dimension_eval.push(ModInt::new(res, modulus));
-            }
-
-            // Aggregate dimensions for this range
-            let mut aggregated_share = ModInt::new(0, modulus);
-            for dimension_result in &all_dimension_eval {
-                aggregated_share = aggregated_share + *dimension_result;
-            }
-            aggregated_shares.push(aggregated_share);
-        }
-
-        // Step 2: Create threshold vector for batch comparison
-        let thresholds = vec![threshold; shared_ranges.len()];
-
-        // Step 3: Run batch comparison using garbled circuits
+        let mut rng = AesRng::new();
+        let inputs_bits = inputs.iter().map(|input| {
+            u128_to_bits_msb(input.val(), self.config.h2)
+        }).collect::<Vec<Vec<bool>>>();
+        let mu_bits = u128_to_bits_msb(mu.val(), self.config.h2);
         let comparison_results = if self.config.is_garbler_side {
-            multiple_gb_less_than_ss(rng, channel, &aggregated_shares, &thresholds)
+            multiple_gb_less_than_ss(rng, channel, &inputs_bits, &mu_bits)
         } else {
-            multiple_ev_less_than_ss(rng, channel, &aggregated_shares)
+            multiple_ev_less_than_ss(rng, channel, &inputs_bits)
         };
 
-        // Step 4: Convert boolean results to ring shares using batched OT
         let ring_shares = self.batch_boolean_to_ring_share_modint(
             &comparison_results,
-            1 << self.config.output_bit_length,
+            1 << self.config.h3,
             channel,
             rng,
             self.config.is_garbler_side,
@@ -399,153 +367,61 @@ impl CheckPhase {
         Ok(ring_shares)
     }
 
-    /// Batch Lp distance check using IntervalFSS
-    fn run_batch_lp_distance_check_intervalfss(
+    pub fn batch_mu_bounded_testing_fss(
         &self,
-        shared_ranges: &[SharedRange],
-        query_point: &[Vec<bool>],
-        random_values: &[u128],
+        inputs: &[ModInt],
         fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
+        random_values: &[ModInt],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        let in_modulus = 1u128 << self.config.input_bit_length;
-        let out_modulus = 1u128 << self.config.output_bit_length;
+        let masked_values = inputs.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
+            input + random_value
+        }).collect::<Vec<ModInt>>();
 
-        // Step 1: For each shared range, evaluate all dimensions and aggregate
-        let mut aggregated_shares = Vec::new();
-        
-        for shared_range in shared_ranges {
-            let mut all_dimension_eval = Vec::<ModInt>::new();
-            
-            for dim in 0..self.config.num_dimensions {
-                let point_bits = &query_point[dim];
-                let res = self.share_phase.evaluate_at_single_dimension(shared_range, point_bits, dim)?;
-                all_dimension_eval.push(ModInt::new(res, in_modulus));
-            }
+        let combined_masked_values = if self.config.is_garbler_side {
+            masked_values.iter().for_each(|masked_eval| {
+                let eval_bytes = masked_eval.val().to_le_bytes();
+                channel.write_bytes(&eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            });
+            channel.flush().map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
-            // Aggregate dimensions for this range
-            let mut aggregated_share = ModInt::new(0, in_modulus);
-            for dimension_result in &all_dimension_eval {
-                aggregated_share = aggregated_share + *dimension_result;
-            }
-            aggregated_shares.push(aggregated_share);
-        }
-
-        // Step 2: Add random values and exchange with other server (batched)
-        let masked_shares: Vec<ModInt> = aggregated_shares.iter().zip(random_values.iter())
-            .map(|(&share, &random_value)| share + ModInt::new(random_value, in_modulus))
-            .collect();
-
-        // Step 3: Exchange all masked shares in one communication round
-        let reconstructed_masked_distances = if self.config.is_garbler_side {
-            // Server 1 (garbler) sends all shares first, then receives all
-            for masked_share in &masked_shares {
-                let share_bytes = masked_share.val().to_le_bytes();
-                channel.write_bytes(&share_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
-            }
-            channel.flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
-
-            let mut reconstructed = Vec::new();
-            for masked_share in &masked_shares {
+            masked_values.iter().map(|&masked_value| {
                 let mut received_bytes = [0u8; 16];
                 channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
-                let other_masked_share = u128::from_le_bytes(received_bytes);
-                let other_masked_share_modint = ModInt::new(other_masked_share, in_modulus);
-                reconstructed.push(*masked_share + other_masked_share_modint);
-            }
-            reconstructed
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                masked_value + other_masked_value
+            }).collect::<Vec<ModInt>>()
         } else {
-            // Server 0 (evaluator) receives all shares first, then sends all
-            let mut other_masked_shares = Vec::new();
-            for _ in &masked_shares {
+            let combined_masked_values = masked_values.iter().map(|&masked_value| {
                 let mut received_bytes = [0u8; 16];
                 channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
-                let other_masked_share = u128::from_le_bytes(received_bytes);
-                other_masked_shares.push(ModInt::new(other_masked_share, in_modulus));
-            }
-            
-            for masked_share in &masked_shares {
-                let share_bytes = masked_share.val().to_le_bytes();
-                channel.write_bytes(&share_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
-            }
-            channel.flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
-            
-            masked_shares.iter().zip(other_masked_shares.iter())
-                .map(|(&m1, &m2)| m1 + m2)
-                .collect()
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                masked_value + other_masked_value
+            }).collect::<Vec<ModInt>>();
+
+            masked_values.iter().for_each(|masked_eval| {
+                let eval_bytes = masked_eval.val().to_le_bytes();
+                channel.write_bytes(&eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            });
+            channel.flush().map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            combined_masked_values
         };
 
-        // Step 4: Evaluate each reconstructed distance using FSS
-        let mut results = Vec::new();
-        for (reconstructed_distance, (fss_key0, fss_key1)) in reconstructed_masked_distances.iter().zip(fss_keys.iter()) {
-            let mut distance_bits = u128_to_bits_msb(reconstructed_distance.val(), self.config.input_bit_length);
-            let fss_result = fss_key0.eval_ldcf(&distance_bits, out_modulus) + fss_key1.eval_rdcf(&distance_bits, out_modulus);
+        let out_modulus = 1u128 << self.config.h3;
+        combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
+            let mut masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
+            let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
 
-            let result = if self.config.is_garbler_side {
+            if self.config.is_garbler_side {
                 ModInt::new(out_modulus - fss_result[0], out_modulus)
             } else {
                 ModInt::new(fss_result[0], out_modulus)
-            };
-            results.push(result);
-        }
-        
-        Ok(results)
-    }
-
-    /// Convert boolean share to ModInt ring share using OT
-    pub fn boolean_to_ring_share_modint(
-        &self,
-        boolean_share: bool,
-        modulus: u128,
-        channel: &mut CommTrackingChannel,
-        rng: &mut AesRng,
-        is_garbler_side: bool,
-    ) -> Result<ModInt, CheckPhaseError> {
-        if is_garbler_side {
-            // Garbler side: generate random shares and send via OT
-            let ring_share = ModInt::random(modulus);
-            let r0 = ModInt::zero(modulus) - ring_share;
-            let r1 = ModInt::one(modulus) - ring_share; 
-            
-            let r0_block: Block = r0.clone().try_into()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e)))?;
-            let r1_block: Block = r1.clone().try_into()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r1 to Block: {:?}", e)))?;
-            
-            let shares = if !boolean_share {
-                (r0_block, r1_block)
-            } else {
-                (r1_block, r0_block)
-            };
-            
-            let mut ot = OtSender::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e)))?;
-            
-            ot.send(channel, &[shares], rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT send failed: {:?}", e)))?;
-            
-            // Return r1 as the garbler's share
-            Ok(ring_share)
-        } else {
-            // Receiver side: receive share via OT
-            let mut ot = OtReceiver::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receiver init failed: {:?}", e)))?;
-            
-            let out_blocks = ot.receive(channel, &[boolean_share], rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receive failed: {:?}", e)))?;
-            
-            // Convert block to u128 and create ModInt with correct modulus
-            let raw_value: u128 = unsafe { std::mem::transmute(out_blocks[0]) };
-            let ring_share = ModInt::new(raw_value, modulus);
-            
-            Ok(ring_share)
-        }
+            }
+        }).collect::<Vec<ModInt>>()
     }
 
     /// Convert multiple boolean shares to ModInt ring shares using batched OT
