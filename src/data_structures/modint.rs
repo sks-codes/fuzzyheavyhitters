@@ -2,7 +2,6 @@ use std::ops::{Add, Sub, Mul};
 use std::convert::TryFrom;
 use scuttlebutt::Block;
 use crate::{Group, Share};
-use rand::Rng;
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub struct ModInt {

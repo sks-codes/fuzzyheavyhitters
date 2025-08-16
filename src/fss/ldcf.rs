@@ -1,6 +1,5 @@
 use crate::data_structures::modint::ModInt;
 use crate::{xor, and_bit, bytes_to_u128};
-use crate::Group;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 
@@ -139,7 +138,7 @@ pub struct LdcfEval<const N: usize> {
     pub y_bit: ModInt,
 }
 
-fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128, left: bool, right: bool) -> LdcfData<N> {
+fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> LdcfData<N> {
     let num_payload_bits = modulus.ilog2();
     let num_payload_bytes = ((num_payload_bits + 7) / 8) as usize;
     let modulus_mask  = modulus - 1;
@@ -185,15 +184,14 @@ fn gen_cor_word<const N: usize>(
     eval: &mut (LdcfEval<N>, LdcfEval<N>),
 ) -> LdcfCW<N>
 {
-    let modulus_mask = modulus - 1;
-    let mut data = (
-            gen_layer_data(eval.0.seed, modulus, true, true),
-            gen_layer_data(eval.1.seed, modulus, true, true)
+    let data = (
+            gen_layer_data(eval.0.seed, modulus),
+            gen_layer_data(eval.1.seed, modulus)
         );
-    let mut delta_seed = (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0), xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1));
-    let mut delta_bits = (data.0.bits.0 ^ data.1.bits.0, data.0.bits.1 ^ data.1.bits.1);
-    let mut delta_ys = (data.0.ys.0 - data.1.ys.0, data.0.ys.1 - data.1.ys.1);
-    let mut delta_y_bits = (data.0.y_bits.0 - data.1.y_bits.0, data.0.y_bits.1 - data.1.y_bits.1);
+    let delta_seed = (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0), xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1));
+    let delta_bits = (data.0.bits.0 ^ data.1.bits.0, data.0.bits.1 ^ data.1.bits.1);
+    let delta_ys = (data.0.ys.0 - data.1.ys.0, data.0.ys.1 - data.1.ys.1);
+    let delta_y_bits = (data.0.y_bits.0 - data.1.y_bits.0, data.0.y_bits.1 - data.1.y_bits.1);
 
     let mut cw = LdcfCW {
         seed: [0u8; 16],
@@ -257,7 +255,6 @@ impl<const N: usize> LdcfKey<N>
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
         let u = alpha_bits.len();
-        let modulus_mask = modulus - 1;
         let mut payload_left = vec![a.clone() - b.clone(); u];
         payload_left[0] = a.clone();
         let mut payload_right = vec![RingVec::<N>::zero(modulus); u];
@@ -311,14 +308,7 @@ impl<const N: usize> LdcfKey<N>
     }
 
     pub fn eval_bit(&self, state: &LdcfEval<N>, modulus: u128, dir: bool) -> LdcfEval<N> {
-        let modulus_mask = modulus - 1;
-        let data = gen_layer_data(state.seed, modulus, dir, !dir);
-        let mut new_y_bit = if !dir {
-            data.y_bits.0.clone()
-        } else {
-            data.y_bits.1.clone()
-        };
-
+        let data = gen_layer_data(state.seed, modulus);
         let cw = self.cor_words[state.level];
 
         let seed = if !dir {

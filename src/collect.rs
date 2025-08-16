@@ -1,6 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 use std::io::{BufReader, BufWriter};
-use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Group, Share};
+use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Share};
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ where
         }
 
         assert!(self.keys.len() > 0);
-        for i in 0..self.keys[0].1.len(){
+        for _ in 0..self.keys[0].1.len(){
             root.path.push(vec![]);
         }
 
@@ -145,7 +145,7 @@ where
                 node.key_states
                     .par_iter()
                     .map(|state| {
-                        let mut left_bits: Vec<bool> = state.iter()
+                        let left_bits: Vec<bool> = state.iter()
                             .map(|(left, right)| left.y_bit ^ left.bit ^ right.y_bit ^ gc_sender)
                             .collect();
                         // let mut right_bits: Vec<bool> = state.iter()
@@ -202,7 +202,7 @@ where
                             }
                         }
                         let mut ot = OtSender::init(&mut channel, &mut rng).unwrap();
-                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|e| {
+                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|_| {
                             println!("Error in tree_crawl ot send")
                         }).unwrap();
                     }
@@ -212,7 +212,7 @@ where
                         node_vals = out_blocks.into_iter()
                             .map(|b| {
                                 T::try_from(b)
-                                    .map_err(|e| {
+                                    .map_err(|_| {
                                         // eprintln!("Conversion error: {:?}", e);  // Changed to {:?}
                                         // e
                                     })
@@ -269,7 +269,7 @@ where
                     continue;
                 }
                 let end_idx = std::cmp::min(start_idx + chunk_size, results_by_node.len());
-                let mut chunk = results_by_node[start_idx..end_idx].to_vec();
+                let chunk = results_by_node[start_idx..end_idx].to_vec();
                 let chunk_bits : Vec<Vec<u16>> = chunk
                     .iter()
                     .map(|b| {
@@ -404,7 +404,7 @@ where
                             }
                         }
                         let mut ot = OtSender::init(&mut channel, &mut rng).unwrap();
-                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|e| {
+                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|_| {
                             println!("Error in tree_crawl ot send")
                         }).unwrap();
                     }
@@ -414,7 +414,7 @@ where
                         let out_blocks = ot.receive(&mut channel, doubled_binary_shares.as_slice(), &mut rng).unwrap();
                         let mut i = 0;
                         while i < out_blocks.len() - 1 {
-                            let val = U::try_from(BlockPair([out_blocks[i], out_blocks[i+1]])).map_err(|e| {}).unwrap();
+                            let val = U::try_from(BlockPair([out_blocks[i], out_blocks[i+1]])).map_err(|_| {}).unwrap();
                             node_vals.push(val);
                             i += 2;
                         }
@@ -465,7 +465,7 @@ where
                     continue;
                 }
                 let end_idx = std::cmp::min(start_idx + chunk_size, results_by_node.len());
-                let mut chunk = results_by_node[start_idx..end_idx].to_vec();
+                let chunk = results_by_node[start_idx..end_idx].to_vec();
                 let chunk_bits : Vec<Vec<u16>> = chunk
                     .iter()
                     .map(|b| {

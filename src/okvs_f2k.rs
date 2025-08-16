@@ -1,5 +1,5 @@
 use std::convert::TryInto;
-use std::ops::{BitXor, Shl, Shr};
+use std::ops::BitXor;
 use std::fmt::Debug;
 use blake3;
 

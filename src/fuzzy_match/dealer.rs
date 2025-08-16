@@ -426,9 +426,9 @@ impl FssDealer {
     
         for _ in 0..self.n_clients {
             // Generate random pair (r0, r1) for this check using standard rand
-            let mut std_rng = rand::thread_rng();
-            let r0 = std_rng.gen_range(0..in_modulus);
-            let r1 = std_rng.gen_range(0..in_modulus);
+            let mut std_rng = rand::rng();
+            let r0 = std_rng.random_range(0..in_modulus);
+            let r1 = std_rng.random_range(0..in_modulus);
             random_pairs.push((r0, r1));
         }
     
@@ -504,9 +504,9 @@ impl FssDealer {
         let mut random_pairs = Vec::new();
     
         // Generate random pair (r0, r1) for this query using standard rand
-        let mut std_rng = rand::thread_rng();
-        let r0 = std_rng.gen_range(0..modulus);
-        let r1 = std_rng.gen_range(0..modulus);
+        let mut std_rng = rand::rng();
+        let r0 = std_rng.random_range(0..modulus);
+        let r1 = std_rng.random_range(0..modulus);
         random_pairs.push((r0, r1));
 
         let zero_payload = RingVec::<1>::new([0], modulus); 

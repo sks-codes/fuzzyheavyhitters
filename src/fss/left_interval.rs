@@ -3,7 +3,6 @@
 
 use crate::data_structures::modint::ModInt;
 use crate::{xor, and_bit, bytes_to_u128};
-use crate::Group;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 use crate::data_structures::pair::Pair;
@@ -197,7 +196,7 @@ pub struct LIntervalFSSEval<const N: usize> {
     pub y_bit: Pair<ModInt>,
 }
 
-fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128, left: bool, right: bool) -> LIntervalFSSData<N> {
+fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> LIntervalFSSData<N> {
     let num_payload_bits = modulus.ilog2();
     let num_payload_bytes = ((num_payload_bits + 7) / 8) as usize;
     FIXED_KEY_STREAM.with(|stream| {
@@ -255,12 +254,11 @@ fn gen_cor_word<const N: usize>(
     eval: &mut Vec<(LIntervalFSSEval<N>, LIntervalFSSEval<N>)>,
 ) -> LIntervalFSSCW<N>
 {
-    let modulus_mask = modulus - 1;
     let mut data = vec![];
     eval.iter().for_each(|(eval0, eval1)| {
         data.push((
-            gen_layer_data(eval0.seed, modulus, true, true),
-            gen_layer_data(eval1.seed, modulus, true, true)
+            gen_layer_data(eval0.seed, modulus),
+            gen_layer_data(eval1.seed, modulus)
         ));
     });
 
@@ -523,7 +521,6 @@ impl<const N: usize> LIntervalFSSKey<N>
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
         let u = alpha_bits.len();
-        let modulus_mask = modulus - 1;
         let mut payload_left0 = vec![a.clone() - b.clone(); u];
         payload_left0[0] = a.clone();
         let mut payload_left1 = vec![a.clone() - c.clone(); u];
@@ -587,8 +584,7 @@ impl<const N: usize> LIntervalFSSKey<N>
     }
 
     pub fn eval_bit(&self, state: &LIntervalFSSEval<N>, modulus: u128, dir: bool) -> LIntervalFSSEval<N> {
-        let modulus_mask = modulus - 1;
-        let data = gen_layer_data(state.seed, modulus, dir, !dir);
+        let data = gen_layer_data(state.seed, modulus);
         let mut seed = if !dir {
             data.seeds.0.clone()
         } else {

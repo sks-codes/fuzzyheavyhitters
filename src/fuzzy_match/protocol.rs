@@ -4,7 +4,7 @@
 //! including share phase, check phase, and threshold phase.
 
 use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange, DistanceMetric};
-use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod};
+use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DpfKeyBatch, DealerSignal};
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distance_threshold};
@@ -77,7 +77,7 @@ impl FuzzyHeavyHittersProtocol {
         let mut offset = 0;
         let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
-        let modulus = 1u128 << self.config.share_config.output_bit_length;
+        let modulus = 1u128 << self.config.share_config.h2;
         let mut shares = Vec::with_capacity(count);
         for _ in 0..count {
             let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)?;
@@ -100,7 +100,7 @@ impl FuzzyHeavyHittersProtocol {
             .map(|query_point| {
                 query_point.iter()
                     .map(|&point| {
-                        u128_to_bits_msb(point, self.config.share_config.input_bit_length)
+                        u128_to_bits_msb(point, self.config.share_config.h1)
                     })
                     .collect()
             })
@@ -133,8 +133,8 @@ impl FuzzyHeavyHittersProtocol {
         dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<Vec<u128>>, String> {
-        let max_bit_length = self.config.share_config.input_bit_length;
-        let dimension = self.config.share_config.dimension;
+        let max_bit_length = self.config.share_config.h1;
+        let dimension = self.config.share_config.d;
 
         // Initialize with empty prefix for each dimension
         let mut current_heavy_hitters = vec![vec![vec![]; dimension]];
@@ -246,68 +246,80 @@ impl FuzzyHeavyHittersProtocol {
             .par_chunks_mut(chunk_size)
             .zip(prefix_sets.par_chunks(chunk_size))
             .zip(dealer_channels.par_iter())
+            .zip(other_server_channels.par_iter())
             .enumerate()
-            .try_for_each(|(chunk_idx, ((result_chunk, prefix_chunk), dealer_channel))| {
-                // Use the corresponding parallel channel to the other server for this thread
-                let other_server_channel = if chunk_idx < other_server_channels.len() {
-                    other_server_channels[chunk_idx].clone()
-                } else {
-                    // Fallback to round-robin if more chunks than channels
-                    other_server_channels[chunk_idx % other_server_channels.len()].clone()
-                };
-
+            .try_for_each(|(chunk_idx, (((result_chunk, prefix_chunk), dealer_channel), other_server_channel))| {
                 // Use the corresponding dealer channel for this thread
                 let mut dealer_channel_locked = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel: {}", e))?;
+                let mut other_server_channel_locked = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
                 let mut local_rng = AesRng::new();
 
                 // Process each prefix set in this chunk using the parallel channels
                 for (local_idx, prefix_set) in prefix_chunk.iter().enumerate() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
-                    let check_data_list = if matches!(self.config.check_config.method, CheckMethod::LpIntervalFSS) {
-                        // Request check FSS keys from dealer using the parallel dealer channel
-                        let batch = self.request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.output_bit_length)?;
+                    let check_data_list = match self.config.check_config.property {
+                        CheckProperty::Equality => {
+                            match self.config.check_config.method {
+                                CheckMethod::FSS => {
+                                    let batch = 
+                                        self.request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
-                        if batch.keys.len() < client_shares.len() {
-                            return Err(format!("Dealer provided {} keys but {} are needed", 
-                                             batch.keys.len(), client_shares.len()));
-                        }
-                        
-                        // Create CheckData for each client share using corresponding FSS key
-                        let mut check_data_vec = Vec::new();
-                        for i in 0..client_shares.len() {
-                            check_data_vec.push(CheckData::LpIntervalFSS {
-                                fss_key: batch.keys[i].clone(),
-                                random_value: batch.random_values[i],
-                            });
-                        }
-                        check_data_vec
-                    } else if matches!(self.config.check_config.method, CheckMethod::LinfDpf) {
-                        let batch = self.request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.output_bit_length)?;
+                                    if batch.keys.len() < client_shares.len() {
+                                        return Err(format!("Dealer provided {} keys but {} are needed", 
+                                                        batch.keys.len(), client_shares.len()));
+                                    }
 
-                        if batch.keys.len() < client_shares.len() {
-                            return Err(format!("Dealer provided {} keys but {} are needed", 
-                                             batch.keys.len(), client_shares.len()));
+                                    // Create CheckData for each client share using corresponding FSS key
+                                    let mut check_data_vec = Vec::new();
+                                    for i in 0..client_shares.len() {
+                                        check_data_vec.push(CheckData::LinfDpf {
+                                            fss_key: batch.keys[i].clone(),
+                                            random_value: batch.random_values[i].clone(),
+                                        });
+                                    }
+                                    check_data_vec
+                                }
+                                CheckMethod::GC => {
+                                    vec![CheckData::LinfGarbledCircuits; client_shares.len()]
+                                }
+                                _ => {
+                                    return Err("Unsupported check method for equality check. Currently only support GC and FSS".to_string());
+                                }
+                            }
                         }
+                        CheckProperty::MuBounded => {
+                            match self.config.check_config.method {
+                                CheckMethod::FSS => {
+                                    // Request check FSS keys from dealer using the parallel dealer channel
+                                    let batch = self.request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
-                        // Create CheckData for each client share using corresponding FSS key
-                        let mut check_data_vec = Vec::new();
-                        for i in 0..client_shares.len() {
-                            check_data_vec.push(CheckData::LinfDpf {
-                                fss_key: batch.keys[i].clone(),
-                                random_value: batch.random_values[i].clone(),
-                            });
+                                    if batch.keys.len() < client_shares.len() {
+                                        return Err(format!("Dealer provided {} keys but {} are needed", 
+                                                         batch.keys.len(), client_shares.len()));
+                                    }
+                                    
+                                    // Create CheckData for each client share using corresponding FSS key
+                                    let mut check_data_vec = Vec::new();
+                                    for i in 0..client_shares.len() {
+                                        check_data_vec.push(CheckData::LpIntervalFSS {
+                                            fss_key: batch.keys[i].clone(),
+                                            random_value: batch.random_values[i],
+                                        });
+                                    }
+                                    check_data_vec
+                                }
+                                CheckMethod::GC => {
+                                    vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; client_shares.len()]
+                                }
+                                _ => {
+                                    return Err("Unsupported check method for mu-bounded check. Currently only support GC and FSS".to_string());
+                                }
+                            }
                         }
-                        check_data_vec
-                    } else if matches!(self.config.check_config.method, CheckMethod::LinfGarbledCircuits) {
-                        vec![CheckData::LinfGarbledCircuits; client_shares.len()]
-                    } else if matches!(self.config.check_config.method, CheckMethod::LpGarbledCircuits) {
-                        vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; client_shares.len()]
-                    } else {
-                        return Err("Unsupported check method for parallel processing".to_string());
+                        _ => {
+                            return Err("Unsupported property for testing. Currently only support Equality and MuBounded.".to_string());
+                        }
                     };
-
-                    // Lock the parallel channel to the other server for this computation
-                    let mut locked_other_server_channel = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
 
                     // Run batched check phase for all client shares with this prefix set
                     // This uses garbled circuits that communicate with the other server via the parallel channel
@@ -315,7 +327,8 @@ impl FuzzyHeavyHittersProtocol {
                         client_shares,
                         prefix_set,
                         &check_data_list,
-                        &mut *locked_other_server_channel,
+                        &mut other_server_channel_locked,
+                        &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
                     // Handle threshold data - get from dealer if using IntervalFSS, otherwise use garbled circuits
@@ -342,14 +355,11 @@ impl FuzzyHeavyHittersProtocol {
                         &match_results,
                         self.config.threshold,
                         &threshold_data_to_use,
-                        &mut *locked_other_server_channel,
+                        &mut other_server_channel_locked,
                         &mut local_rng,
                     ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
                     result_chunk[local_idx] = server_bit;
-                    
-                    // Drop the lock to allow other threads to use the channel
-                    drop(locked_other_server_channel);
                 }
 
                 Ok::<(), String>(())

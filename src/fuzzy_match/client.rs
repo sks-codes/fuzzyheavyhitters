@@ -44,7 +44,7 @@ impl Client {
         channel_server1: &mut CommTrackingChannel,
     ) -> Result<(), String> {
         // Custom serialization for Vec<SharedRange>
-        let modulus = 1u128 << self.share_phase.config.output_bit_length;
+        let modulus = 1u128 << self.share_phase.config.h2;
         let mut data = Vec::new();
         data.extend_from_slice(&(shares_server0.len() as u64).to_le_bytes());
         for share in &shares_server0 {

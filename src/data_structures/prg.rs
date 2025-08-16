@@ -44,7 +44,7 @@ pub trait FromRng {
     fn from_rng(&mut self, stream: &mut (impl rand::Rng + rand_core::RngCore));
 
     fn randomize(&mut self) {
-        self.from_rng(&mut rand::thread_rng());
+        self.from_rng(&mut rand::rng());
     }
 }
 
@@ -154,7 +154,7 @@ impl PrgSeed {
 
     pub fn random() -> PrgSeed {
         let mut key: [u8; AES_KEY_SIZE] = [0; AES_KEY_SIZE];
-        rand::thread_rng().fill(&mut key);
+        rand::rng().fill(&mut key);
 
         PrgSeed { key }
     }

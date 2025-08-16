@@ -29,9 +29,6 @@ fn garbler_preprocess_greater_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) 
     for (y, t) in inputs_y.iter().zip(inputs_t.iter()) {
         assert_eq!(y.modulus(), t.modulus(), "y and t must have same modulus");
         
-        let modulus = y.modulus();
-        let bit_width = get_bit_width_from_modint(y);
-        
         // z1 = modulus - 1 - (t - y) mod modulus
         let z1_modint = *t - *y;
         let z1 = z1_modint.val();
@@ -213,14 +210,14 @@ where
         // Compute overflow(z3 + z2)
         // 1 is equivalent to x+y > mod - 1 
         // 0 is equivalent to x+y <= mod - 1
-        let (sum1, carry1) = f.bin_addition(z3_wires, z2_wires)?;
+        let (_, carry1) = f.bin_addition(z3_wires, z2_wires)?;
         let x_plus_y_overflow = carry1; 
         let x_plus_y_not_overflow = f.negate(&x_plus_y_overflow)?;
         
         // Compute overflow(z3_flipped + z1) 
         // 1 is equivalent to x >= (t-y) mod modulus
         // 0 is equivalent to x < (t-y) mod modulus
-        let (sum2, carry2) = f.bin_addition(&z3_flipped, z1_wires)?;
+        let (_, carry2) = f.bin_addition(&z3_flipped, z1_wires)?;
         let overflow2 = carry2; 
         let x_gt_t_minus_y = f.negate(&overflow2)?;
         

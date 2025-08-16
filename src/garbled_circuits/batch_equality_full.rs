@@ -1,5 +1,3 @@
-use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
-
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
     FancyReveal,
@@ -9,24 +7,15 @@ use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
 
 use std::fmt::Debug;
-use std::io::Write;
-use rayon::prelude::*;
 use rand::Rng;
 
 /// A structure that contains both the garbler and the evaluators
 /// wires for batch equality testing. This structure simplifies the API of the garbled circuit.
 struct BatchEQInputs<F> {
-    pub garbler_wires: Vec<BinaryBundle<F>>, // Flattened vector of all garbler wires
-    pub results_wires: Vec<F>, // Vector of result wires, one per batch
-    pub evaluator_wires: Vec<BinaryBundle<F>>, // Flattened vector of all evaluator wires
-    pub num_batches: usize, // Number of batches
-    pub dimensions_per_batch: usize, // Number of dimensions per batch (d)
-}
-
-pub fn garbler_preprocess_batch_equality_test(inputs: &[Vec<ModInt>]) -> Vec<Vec<u128>> {
-    inputs.iter().map(|inner_vec| 
-        inner_vec.iter().map(|x| x.val).collect()
-    ).collect()
+    pub garbler_wires: BinaryBundle<F>, // Flattened vector of all garbler wires
+    pub evaluator_wires: BinaryBundle<F>, // Flattened vector of all evaluator wires
+    pub item_length: usize, // Length of each item in the batch
+    pub item_count: usize, // Number of items in the batch
 }
 
 /// Batch equality test for garbler side
@@ -35,97 +24,74 @@ pub fn garbler_preprocess_batch_equality_test(inputs: &[Vec<ModInt>]) -> Vec<Vec
 pub fn batch_gb_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<ModInt>]
+    inputs: &[Vec<bool>]
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
-    if inputs.is_empty() {
-        return Vec::new();
-    }
-
-    let x_values = garbler_preprocess_batch_equality_test(inputs);
-    let bit_width = get_bit_width_from_modint(&inputs[0][0]);
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-
+    println!("Finished initializing garbler");
     // Generate random masks for each batch result
     let results: Vec<bool> = (0..inputs.len()).map(|_| rand::rng().random::<bool>()).collect();
-    
-    let wires = gb_set_batch_fancy_inputs(&mut gb, &x_values, &results, bit_width);
-
+    let wires = gb_set_batch_equality_inputs(&mut gb, inputs, &results);
+    println!("Set batch equality input");
     let eq_results = batch_fancy_equality(&mut gb, wires).unwrap();
+    println!("Batch equality test completed");
     gb.outputs(eq_results.wires()).unwrap();
-
-    channel.flush().unwrap();
+    println!("Garbler output!");
     let mut ack = [0u8; 1];
+    channel.flush().unwrap();
     channel.read_bytes(&mut ack).unwrap();
+    println!("Garbler received acknowledgement");
     
     results
 }
 
 /// The garbler's wire exchange method for batch equality
-fn gb_set_batch_fancy_inputs<F, E>(
+fn gb_set_batch_equality_inputs<F, E>(
     gb: &mut F, 
-    inputs: &[Vec<u128>], 
+    inputs: &[Vec<bool>], 
     results: &[bool], 
-    bit_width: usize
 ) -> BatchEQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
 {
-    let num_batches = inputs.len();
-    let dimensions_per_batch = if num_batches > 0 { inputs[0].len() } else { 0 };
-    
-    // Flatten all inputs into a single vector
-    let flattened_inputs: Vec<u128> = inputs.iter().flatten().cloned().collect();
-    let total_elements = flattened_inputs.len();
+    let mut garbler_circuit_inputs = results.iter().map(|&r| r as u16).collect::<Vec<u16>>();
+    inputs.iter().for_each(|input| {
+        garbler_circuit_inputs.extend(input.iter().map(|&x| x as u16));
+    });
 
     // Single call to encode all garbler inputs
-    let garbler_wires: Vec<BinaryBundle<F::Item>> = 
-        gb.bin_encode_many(&flattened_inputs, bit_width).unwrap();
+    let garbler_wires = 
+        BinaryBundle::new(gb.encode_many(&garbler_circuit_inputs, &vec![2; garbler_circuit_inputs.len()]).unwrap());
 
-    // Encode all result masks using encode_many
-    let results_u16: Vec<u16> = results.iter().map(|&r| r as u16).collect();
-    let results_wires = gb.encode_many(&results_u16, &vec![2; results_u16.len()]).unwrap();
-
+    let item_length = inputs[0].len();
+    let item_count = inputs.len();
     // Single call to receive all evaluator inputs
-    let evaluator_wires: Vec<BinaryBundle<F::Item>> = 
-        gb.bin_receive_many(total_elements, bit_width).unwrap();
+    let evaluator_wires =  
+        BinaryBundle::new(gb.receive_many(&vec![2; item_count * item_length]).unwrap());
 
     BatchEQInputs {
         garbler_wires,
-        results_wires,
         evaluator_wires,
-        num_batches,
-        dimensions_per_batch,
+        item_length,
+        item_count,
     }
-}
-
-pub fn evaluator_preprocess_batch_equality_test(inputs: &[Vec<ModInt>]) -> Vec<Vec<u128>> {
-    inputs.iter().map(|inner_vec| 
-        inner_vec.iter().map(|x| x.val).collect()
-    ).collect()
 }
 
 /// Batch equality test for evaluator side
 pub fn batch_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<ModInt>]
+    inputs: &[Vec<bool>]
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
-    if inputs.is_empty() {
-        return Vec::new();
-    }
-
     let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    let y_values = evaluator_preprocess_batch_equality_test(inputs);
-    let bit_width = get_bit_width_from_modint(&inputs[0][0]);
-    
-    let wires = ev_set_batch_fancy_inputs(&mut ev, &y_values, bit_width);
+
+    let wires = ev_set_batch_fancy_inputs(&mut ev, inputs);
     let eq_results = batch_fancy_equality(&mut ev, wires).unwrap();
     let outputs = ev.outputs(eq_results.wires()).unwrap().unwrap();
     
@@ -141,37 +107,30 @@ where
 /// The evaluator's wire exchange method for batch equality
 fn ev_set_batch_fancy_inputs<F, E>(
     ev: &mut F, 
-    inputs: &[Vec<u128>], 
-    bit_width: usize
+    inputs: &[Vec<bool>], 
 ) -> BatchEQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
 {
-    let num_batches = inputs.len();
-    let dimensions_per_batch = if num_batches > 0 { inputs[0].len() } else { 0 };
-    
-    // Flatten all inputs into a single vector
-    let flattened_inputs: Vec<u128> = inputs.iter().flatten().cloned().collect();
-    let total_elements = flattened_inputs.len();
-
+    let item_length = inputs[0].len();
+    let item_count = inputs.len();
     // Single call to receive all garbler inputs
-    let garbler_wires: Vec<BinaryBundle<F::Item>> = 
-        ev.bin_receive_many(total_elements, bit_width).unwrap();
+    let garbler_wires = 
+        BinaryBundle::new(ev.receive_many(&vec![2; item_count * item_length + item_count]).unwrap());
 
-    // Receive all result masks using receive_many
-    let results_wires = ev.receive_many(&vec![2; num_batches]).unwrap();
-
-    // Single call to encode all evaluator inputs
-    let evaluator_wires: Vec<BinaryBundle<F::Item>> = 
-        ev.bin_encode_many(&flattened_inputs, bit_width).unwrap();
+    let mut evaluator_circuit_inputs = Vec::new();   
+    inputs.iter().for_each(|input| {
+        evaluator_circuit_inputs.extend(input.iter().map(|&x| x as u16));
+    });
+    let evaluator_wires = 
+        BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
 
     BatchEQInputs {
         garbler_wires,
-        results_wires,
         evaluator_wires,
-        num_batches,
-        dimensions_per_batch,
+        item_length,
+        item_count,
     }
 }
 
@@ -184,88 +143,26 @@ where
     F: FancyReveal + Fancy + BinaryGadgets + FancyBinary + FancyArithmetic,
 {
     let garbler_wires = wire_inputs.garbler_wires;
-    let results_wires = wire_inputs.results_wires;
     let evaluator_wires = wire_inputs.evaluator_wires;
-    let num_batches = wire_inputs.num_batches;
-    let dimensions_per_batch = wire_inputs.dimensions_per_batch;
+    let item_length = wire_inputs.item_length;
+    let item_count = wire_inputs.item_count;
 
-    let mut final_results = Vec::new();
+    let mut final_results = Vec::with_capacity(item_count);
 
     // Process each batch separately using flattened indices
-    for batch_idx in 0..num_batches {
-        let start_idx = batch_idx * dimensions_per_batch;
-        let end_idx = start_idx + dimensions_per_batch;
-        
-        let mut equality_results = Vec::new();
+    for item_idx in 0..item_count {
+        let garbler_item_start = item_idx * item_length + item_count;
+        let evaluator_item_start = item_idx * item_length;
 
-        // Perform equality check for each dimension in this batch
-        for i in start_idx..end_idx {
-            let eq = f.bin_eq_bundles(&garbler_wires[i], &evaluator_wires[i])?;
-            equality_results.push(eq);
-        }
-
-        // AND all equality results for this batch
-        let and_result = f.and_many(&equality_results)?;
+        let equality_result = f.bin_eq_bundles(
+            &BinaryBundle::new(garbler_wires.wires()[garbler_item_start..garbler_item_start+item_length].to_vec()),
+            &BinaryBundle::new(evaluator_wires.wires()[evaluator_item_start..evaluator_item_start+item_length].to_vec()),
+        )?;
 
         // XOR with the result mask for this batch
-        let final_result = f.xor(&and_result, &results_wires[batch_idx])?;
+        let final_result = f.xor(&equality_result, &garbler_wires[item_idx])?;
         final_results.push(final_result);
     }
 
     Ok(BinaryBundle::new(final_results))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use scuttlebutt::{AesRng, Channel};
-    use std::io::{BufReader, BufWriter};
-    use std::os::unix::net::UnixStream;
-
-    #[test]
-    fn test_batch_equality() {
-        let (sender, receiver) = UnixStream::pair().unwrap();
-        let mut rng_gb = AesRng::new();
-        let mut rng_ev = AesRng::new();
-
-        let modulus = 1 << 16;
-        
-        // Create test data: 3 batches
-        // Batch 0: [0, 0] (should be equal)
-        // Batch 1: [0, 1] (should not be equal) 
-        // Batch 2: [0, 0, 0] (should be equal)
-        let gb_inputs = vec![
-            vec![ModInt::new(0, modulus), ModInt::new(0, modulus)],
-            vec![ModInt::new(0, modulus), ModInt::new(1, modulus)],
-            vec![ModInt::new(0, modulus), ModInt::new(0, modulus), ModInt::new(0, modulus)],
-        ];
-
-        let ev_inputs = vec![
-            vec![ModInt::new(0, modulus), ModInt::new(0, modulus)],
-            vec![ModInt::new(0, modulus), ModInt::new(0, modulus)],
-            vec![ModInt::new(0, modulus), ModInt::new(0, modulus), ModInt::new(0, modulus)],
-        ];
-
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                let mut channel = Channel::new(
-                    BufReader::new(sender.try_clone().unwrap()),
-                    BufWriter::new(sender),
-                );
-                let masks = batch_gb_equality_test(&mut rng_gb.clone(), &mut channel, &gb_inputs);
-                println!("Garbler masks: {:?}", masks);
-            });
-
-            s.spawn(|| {
-                let mut channel = Channel::new(
-                    BufReader::new(receiver.try_clone().unwrap()),
-                    BufWriter::new(receiver),
-                );
-                let results = batch_ev_equality_test(&mut rng_ev.clone(), &mut channel, &ev_inputs);
-                println!("Evaluator results: {:?}", results);
-                
-                // Results should be: [true, false, true] when XORed with garbler masks
-            });
-        });
-    }
 }

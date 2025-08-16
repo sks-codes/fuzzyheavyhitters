@@ -134,11 +134,11 @@ impl<const N: usize> DistanceFSSKey<N> {
             }
         }
         let mut left_x = x.clone();
-        for i in x_bits.len()..input_len {
+        for _ in x_bits.len()..input_len {
             left_x = (left_x << 1) ^ 1;
         }
         let mut right_x = x.clone();
-        for i in x_bits.len()..input_len {
+        for _ in x_bits.len()..input_len {
             right_x = right_x << 1;
         }
 

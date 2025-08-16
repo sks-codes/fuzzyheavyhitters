@@ -2,7 +2,6 @@ use crate::data_structures::prg;
 use crate::{MSB_u32_to_bits, add_bitstrings, subtract_bitstrings};
 use serde::Deserialize;
 use serde::Serialize;
-use std::time::Instant;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CorWord {
@@ -81,14 +80,13 @@ impl<T> TupleExt<T> for (T, T) {
 
 fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (prg::PrgSeed, prg::PrgSeed)) -> CorWord
 {
-    let start = Instant::now();
     let data = seeds.map(|s| s.expand());
     let keep = bit;
     let lose = !keep;
 
     // println!("Generating CorWord from PRG outputs with bits {:?} and {:?}", data.0.bits, data.1.bits);
 
-    let mut cw = CorWord {
+    let cw = CorWord {
         seed: data.0.seeds.get(lose) ^ data.1.seeds.get(lose),
         bits: (
             data.0.bits.0 ^ data.1.bits.0 ^ bit ^ true,

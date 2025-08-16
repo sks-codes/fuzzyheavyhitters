@@ -37,7 +37,7 @@ pub enum ThresholdData {
 /// Configuration for the threshold phase
 #[derive(Debug, Clone)]
 pub struct ThresholdConfig {
-    pub input_bit_length: usize,
+    pub h3: usize,
     /// Whether this is the garbler side (true) or evaluator side (false)
     pub is_garbler_side: bool,
     /// Method to use for threshold comparison
@@ -83,7 +83,7 @@ impl ThresholdPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<bool, ThresholdPhaseError> {
-        let modulus = 1u128 << self.config.input_bit_length;
+        let modulus = 1u128 << self.config.h3;
         // Step 1: Aggregate all ring shares
         // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
         let mut aggregated_share = ModInt::new(0, modulus);
@@ -121,7 +121,7 @@ impl ThresholdPhase {
         fss_key: &(LdcfKey<1>, RdcfKey<1>),
         channel: &mut CommTrackingChannel,
     ) -> Result<bool, ThresholdPhaseError> {
-        let modulus = 1u128 << self.config.input_bit_length;
+        let modulus = 1u128 << self.config.h3;
         
         // Step 1: Aggregate all ring shares locally
         // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
@@ -168,7 +168,7 @@ impl ThresholdPhase {
         // Step 3: Evaluate the reconstructed masked count using FSS key for interval [threshold + r0 + r1, MAX]
         // The reconstructed_masked_count = actual_count + r0 + r1
         // Convert count to bit representation
-        let count_bits = u128_to_bits_msb(reconstructed_masked_count.val(), self.config.input_bit_length);
+        let count_bits = u128_to_bits_msb(reconstructed_masked_count.val(), self.config.h3);
         
         // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
         // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
@@ -204,7 +204,7 @@ impl ThresholdPhase {
                     )),
                 }
                 
-                let modulus = 1u128 << self.config.input_bit_length;
+                let modulus = 1u128 << self.config.h3;
                 let threshold_modint = ModInt::new(threshold, modulus);
                 self.compare_with_threshold_gc(match_results, threshold_modint, channel, rng)
             }

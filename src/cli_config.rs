@@ -3,11 +3,10 @@
 //! This module defines configuration structures for the CLI application
 
 use serde::{Deserialize, Serialize};
-use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, ShareData, DictionaryType, DistanceMetric};
-use crate::fuzzy_match::check_phase::{CheckConfig, CheckMethod};
+use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, DictionaryType, DistanceMetric};
+use crate::fuzzy_match::check_phase::{CheckConfig, CheckMethod, CheckProperty};
 use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod};
 use crate::fuzzy_match::protocol::ProtocolConfig;
-use crate::Share;
 
 /// CLI configuration that combines all protocol parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,36 +31,25 @@ pub struct ProtocolParameters {
     /// Threshold for heavy hitters detection
     pub threshold: u128,
     /// Input bit length (for coordinates)
-    pub input_bit_length: usize,
+    pub h1: usize,
     /// Output bit length (for ring operations)
-    pub output_bit_length: usize,
+    pub h2: usize,
     /// Check phase output bit length (for aggregation)
-    pub check_output_bit_length: usize,
+    pub h3: usize,
     /// Number of dimensions
-    pub dimensions: usize,
+    pub d: usize,
     /// Share phase method ("OKVS" or "IntervalFSS")
     pub share_method: String,
     /// Dictionary type ("Known" or "Unknown")
     pub dictionary_type: String,
+    pub check_method: String, // ("GC", "FSS")
+    pub check_property: String, // ("Equality", "MuBounded")
     /// Threshold phase method ("GarbledCircuits" or "IntervalFSS")
     pub threshold_method: String,
-    /// Check phase method ("LinfGarbledCircuits", "LinfDpf", "LpGarbledCircuits", or "LpIntervalFSS")
-    pub check_method: String,
     /// Distance metric ("Linf", "L1", "L2", "L3")
     pub distance_metric: String,
     /// Number of clients participating in the protocol
     pub num_clients: usize,
-    /// OKVS parameters (if using OKVS sharing)
-    pub okvs: Option<OkvsConfig>,
-}
-
-/// OKVS-specific configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OkvsConfig {
-    /// Random seed 1 for OKVS
-    pub r1: [u8; 16],
-    /// Random seed 2 for OKVS  
-    pub r2: [u8; 16],
 }
 
 /// Network configuration
@@ -98,22 +86,9 @@ impl CliConfig {
     /// Convert CLI config to protocol config for a specific server
     pub fn to_protocol_config(&self, is_server1: bool) -> Result<ProtocolConfig, String> {
         // Convert share method and data
-        let (share_method, share_data) = match self.protocol.share_method.as_str() {
-            "OKVS" => {
-                // Get OKVS configuration
-                let okvs_config = self.protocol.okvs.as_ref()
-                    .ok_or("OKVS configuration required for OKVS share method")?;
-
-                let share_data = ShareData::OKVS {
-                    r1: okvs_config.r1,
-                    r2: okvs_config.r2,
-                };
-                
-                (ShareMethod::OKVS, share_data)
-            },
-            "FSS" => {
-                (ShareMethod::FSS, ShareData::FSS)
-            }
+        let share_method = match self.protocol.share_method.as_str() {
+            "OKVS" => ShareMethod::OKVS,
+            "FSS" => ShareMethod::FSS,
             other => return Err(format!("Unsupported share method: {}", other)),
         };
 
@@ -137,10 +112,30 @@ impl CliConfig {
             method: share_method,
             dictionary_type,
             metric: distance_metric,
-            input_bit_length: self.protocol.input_bit_length,
-            output_bit_length: self.protocol.output_bit_length,
-            dimension: self.protocol.dimensions,
-            data: share_data,
+            h1: self.protocol.h1,
+            h2: self.protocol.h2,
+            d: self.protocol.d,
+        };
+
+        // Convert check method
+        let check_method = match self.protocol.check_method.as_str() {
+            "GC" => CheckMethod::GC,
+            "FSS" => CheckMethod::FSS,
+            other => return Err(format!("Unsupported check method: {}", other)),
+        };
+        let check_property = match self.protocol.check_property.as_str() {
+            "Equality" => CheckProperty::Equality,
+            "MuBounded" => CheckProperty::MuBounded,
+            other => return Err(format!("Unsupported check property: {}", other)),
+        };
+
+        let check_config = CheckConfig {
+            h2: self.protocol.h2,
+            h3: self.protocol.h3,
+            d: self.protocol.d,
+            is_garbler_side: is_server1,
+            property: check_property,
+            method: check_method,
         };
 
         // Convert threshold method and data
@@ -150,25 +145,8 @@ impl CliConfig {
             other => return Err(format!("Unsupported threshold method: {}", other)),
         };
 
-        // Convert check method
-        let check_method = match self.protocol.check_method.as_str() {
-            "LinfGarbledCircuits" => CheckMethod::LinfGarbledCircuits,
-            "LinfDpf" => CheckMethod::LinfDpf,
-            "LpGarbledCircuits" => CheckMethod::LpGarbledCircuits,
-            "LpIntervalFSS" => CheckMethod::LpIntervalFSS,
-            other => return Err(format!("Unsupported check method: {}", other)),
-        };
-
-        let check_config = CheckConfig {
-            input_bit_length: self.protocol.output_bit_length,
-            output_bit_length: self.protocol.check_output_bit_length,
-            num_dimensions: self.protocol.dimensions,
-            is_garbler_side: is_server1,
-            method: check_method,
-        };
-
         let threshold_config = ThresholdConfig {
-            input_bit_length: self.protocol.check_output_bit_length,
+            h3: self.protocol.h3,
             is_garbler_side: is_server1,
             method: threshold_method,
         };
@@ -186,22 +164,9 @@ impl CliConfig {
     /// Convert CLI config to share config for client
     pub fn to_share_config(&self) -> Result<ShareConfig, String> {
         // Convert share method and data
-        let (share_method, share_data) = match self.protocol.share_method.as_str() {
-            "OKVS" => {
-                // Get OKVS configuration
-                let okvs_config = self.protocol.okvs.as_ref()
-                    .ok_or("OKVS configuration required for OKVS share method")?;
-
-                let share_data = ShareData::OKVS {
-                    r1: okvs_config.r1,
-                    r2: okvs_config.r2,
-                };
-                
-                (ShareMethod::OKVS, share_data)
-            },
-            "FSS" => {
-                (ShareMethod::FSS, ShareData::FSS)
-            }
+        let share_method = match self.protocol.share_method.as_str() {
+            "OKVS" => ShareMethod::OKVS,
+            "FSS" => ShareMethod::FSS,
             other => return Err(format!("Unsupported share method: {}", other)),
         };
 
@@ -225,10 +190,9 @@ impl CliConfig {
             method: share_method,
             dictionary_type,
             metric: distance_metric,
-            input_bit_length: self.protocol.input_bit_length,
-            output_bit_length: self.protocol.output_bit_length,
-            dimension: self.protocol.dimensions,
-            data: share_data,
+            h1: self.protocol.h1,
+            h2: self.protocol.h2,
+            d: self.protocol.d,
         })
     }
 

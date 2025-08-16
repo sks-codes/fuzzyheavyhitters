@@ -9,8 +9,6 @@ use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
 
 use std::fmt::Debug;
-use std::io::Write;
-use rayon::prelude::*;
 
 use rand::Rng;
 

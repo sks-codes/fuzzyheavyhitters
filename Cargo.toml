@@ -69,3 +69,7 @@ path = "src/bin/interval_fss_benchmark.rs"
 [[bin]]
 name = "ldcf_benchmark"
 path = "src/bin/ldcf_benchmark.rs"
+
+[[bin]]
+name = "batch_equality_gc_benchmark"
+path = "src/bin/batch_equality_gc_benchmark.rs"

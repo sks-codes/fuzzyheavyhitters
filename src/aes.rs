@@ -5,16 +5,6 @@ use core::arch::x86_64::{
 use aes::block_cipher::{generic_array::GenericArray, Block, BlockCipher, NewBlockCipher};
 use aes::block_cipher::generic_array::typenum;
 use aes::Aes128;
-use aes_ctr::stream_cipher::{NewStreamCipher, SyncStreamCipher};
-use aes_ctr::Aes128Ctr;
-
-use rand::Rng;
-use rand_core::RngCore;
-
-use serde::Deserialize;
-use serde::Serialize;
-use std::ops;
-use std::time::Instant;
 
 // AES key size in bytes. We always use AES-128,
 // which has 16-byte keys.

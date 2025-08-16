@@ -19,22 +19,17 @@ struct LessThanSSInputs<F> {
     pub evaluator_z3_wires: Vec<BinaryBundle<F>>, // x
 }
 
-fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
-    assert_eq!(inputs_y.len(), inputs_t.len(), "y and t inputs must have same length");
-    
+fn garbler_preprocess_less_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<u128>, Vec<u128>, Vec<bool>) {
     let mut z1_values = Vec::new();
     let mut z2_values = Vec::new(); 
     let mut b_values = Vec::new();
     
-    for (y, t) in inputs_y.iter().zip(inputs_t.iter()) {
+    for y in ys.iter() {
         assert_eq!(y.modulus(), t.modulus(), "y and t must have same modulus");
         
-        let modulus = y.modulus();
-        let bit_width = get_bit_width_from_modint(y);
-        
         // z1 = modulus - 1 - (t - y) mod modulus
-        let z1_modint = *t - *y;
-        let z1 = modulus - 1 - z1_modint.val();
+        let z1_modint = *y - *t - ModInt::one(y.modulus());
+        let z1 = z1_modint.val();
         
         // z2 = y  
         let z2 = y.val();
@@ -50,26 +45,16 @@ fn garbler_preprocess_less_than_ss(inputs_y: &[ModInt], inputs_t: &[ModInt]) -> 
     (z1_values, z2_values, b_values)
 }
 
-/// Evaluator preprocessing: x
-fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
-    inputs_x.iter().map(|x| {
-        let z3 = x.val();
-        z3
-    }).collect()
-}
-
 pub fn multiple_gb_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
     inputs_y: &[ModInt], // Garbler's y values
-    inputs_t: &[ModInt], // Garbler's t values (thresholds)
+    input_t: &ModInt, // Garbler's t values (thresholds)
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
-    assert_eq!(inputs_y.len(), inputs_t.len(), "y and t inputs must have same length");
-
-    let (z1_values, z2_values, b_values) = garbler_preprocess_less_than_ss(inputs_y, inputs_t);
+    let (z1_values, z2_values, b_values) = garbler_preprocess_less_than_ss(inputs_y, input_t);
     let bit_width = get_bit_width_from_modint(&inputs_y[0]);
     
     let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
@@ -129,6 +114,14 @@ where
         garbler_mask_wires,
         evaluator_z3_wires,
     }
+}
+
+/// Evaluator preprocessing: x
+fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<u128> {
+    inputs_x.iter().map(|x| {
+        let z3 = x.val();
+        z3
+    }).collect()
 }
 
 pub fn multiple_ev_less_than_ss<C>(
@@ -207,14 +200,14 @@ where
         // Compute overflow(z3 + z2)
         // 1 is equivalent to x+y > mod - 1 
         // 0 is equivalent to x+y <= mod - 1
-        let (sum1, carry1) = f.bin_addition(z3_wires, z2_wires)?;
+        let (_, carry1) = f.bin_addition(z3_wires, z2_wires)?;
         let x_plus_y_overflow = carry1; 
         let x_plus_y_not_overflow = f.negate(&x_plus_y_overflow)?;
         
         // Compute overflow(z3 + z1) 
         // 1 is equivalent to x > (t-y) mod modulus
         // 0 is equivalent to x <= (t-y) mod modulus
-        let (sum2, carry2) = f.bin_addition(z3_wires, z1_wires)?;
+        let (_, carry2) = f.bin_addition(z3_wires, z1_wires)?;
         let overflow2 = carry2; 
         let x_lt_t_minus_y = f.negate(&overflow2)?;
 

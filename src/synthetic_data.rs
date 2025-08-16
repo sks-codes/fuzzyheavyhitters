@@ -84,7 +84,7 @@ impl SyntheticDataGenerator {
 
     /// Generate a complete synthetic dataset
     pub fn generate(&self) -> SyntheticDataset {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut clusters = Vec::new();
         let mut all_client_points = Vec::new();
         let mut server_query_points = Vec::new();
@@ -165,7 +165,7 @@ impl SyntheticDataGenerator {
             
             // Generate cluster size within bounds
             let cluster_size = if lower_bound <= upper_bound {
-                rng.gen_range(lower_bound..=upper_bound)
+                rng.random_range(lower_bound..=upper_bound)
             } else {
                 // Fallback: distribute remaining points evenly
                 remaining_points / remaining_clusters
@@ -221,7 +221,7 @@ impl SyntheticDataGenerator {
     fn generate_random_point(&self, rng: &mut impl Rng) -> Vec<u128> {
         let mut point = Vec::with_capacity(self.config.dimensions);
         for _ in 0..self.config.dimensions {
-            let coord = rng.gen_range(
+            let coord = rng.random_range(
                 self.config.coordinate_bounds.0..=self.config.coordinate_bounds.1
             );
             point.push(coord);
@@ -235,8 +235,8 @@ impl SyntheticDataGenerator {
         
         for i in 0..self.config.dimensions {
             // Generate random offset within cluster radius
-            let offset = rng.gen_range(0..=self.config.max_cluster_radius);
-            let direction = if rng.gen_bool(0.5) { 1 } else { -1 };
+            let offset = rng.random_range(0..=self.config.max_cluster_radius);
+            let direction = if rng.random_bool(0.5) { 1 } else { -1 };
             
             // Apply offset to center coordinate, ensuring we stay within bounds
             let new_coord = if direction > 0 {

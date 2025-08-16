@@ -5,9 +5,7 @@ use scuttlebutt::{AbstractChannel, AesRng};
 
 use std::fmt::Debug;
 
-use std::io::Write;
 use fancy_garbling::util::RngExt;
-use rayon::prelude::*;
 
 /// A structure that contains both the garbler and the evaluators
 /// wires. This structure simplifies the API of the garbled circuit.

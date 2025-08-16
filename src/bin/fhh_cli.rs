@@ -3,11 +3,17 @@
 //! This CLI allows running the complete fuzzy heavy hitters protocol locally
 //! with both servers in the same process for testing purposes.
 
-use counttree::{
-    channel::CommTrackingChannel, cli_config::CliConfig, fuzzy_match::{
-        check_phase::{CheckData, CheckMethod}, client::Client, dealer::FssDealer, protocol::FuzzyHeavyHittersProtocol, share_phase::SharedRange, threshold_phase::ThresholdData
-    }, util::{bits_to_u128_msb, calculate_distance, calculate_optimistic_distance, get_distance_threshold}
+use counttree::channel::CommTrackingChannel;
+use counttree::cli_config::{CliConfig, ProtocolParameters, NetworkConfig, OutputConfig};
+use counttree::fuzzy_match::{
+    protocol::FuzzyHeavyHittersProtocol,
+    share_phase::SharedRange,
+    check_phase::{CheckData, CheckMethod},
+    threshold_phase::ThresholdData,
+    client::Client,
+    dealer::FssDealer,
 };
+use counttree::util::{bits_to_u128_msb, calculate_distance, calculate_optimistic_distance, get_distance_threshold};
 use scuttlebutt::AbstractChannel;
 use clap::{App, Arg, SubCommand};
 use tarpc::server;
@@ -94,20 +100,17 @@ fn generate_config(output_path: &str) -> Result<(), String> {
         protocol: counttree::cli_config::ProtocolParameters {
             delta: 5,
             threshold: 3,
-            input_bit_length: 10,
-            output_bit_length: 16,
-            check_output_bit_length: 20, // output_bit_length + 4 for aggregation
-            dimensions: 2,
+            h1: 10,
+            h2: 16,
+            h3: 20, // output_bit_length + 4 for aggregation
+            d: 2,
             share_method: "OKVS".to_string(), // Can also be "IntervalFSS"
             dictionary_type: "Known".to_string(), // Can also be "Unknown"
+            check_method: "FSS".to_string(), // Can also be "GC"
+            check_property: "Equality".to_string(), // Can also be "MuBounded"
             threshold_method: "GarbledCircuits".to_string(), // Can also be "IntervalFSS"
-            check_method: "Linf".to_string(), // Can also be "LpGarbledCircuits" or "LpIntervalFSS"
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
             num_clients: 100, // Number of clients participating in the protocol
-            okvs: Some(counttree::cli_config::OkvsConfig {
-                r1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-                r2: [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
-            }),
         },
         network: counttree::cli_config::NetworkConfig {
             server0_addr: "127.0.0.1".to_string(),
@@ -141,10 +144,10 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
     let dealer = FssDealer::new(
         distance_threshold,
         cli_config.protocol.threshold,
-        cli_config.protocol.output_bit_length,
-        cli_config.protocol.check_output_bit_length,
+        cli_config.protocol.h2,
+        cli_config.protocol.h3,
         cli_config.protocol.num_clients,
-        cli_config.protocol.dimensions,
+        cli_config.protocol.d,
     );
 
     // Determine number of parallel channels (use specified num_threads or system parallelism)
@@ -615,7 +618,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                     "distance_metric": cli_config.protocol.distance_metric,
                     "delta": cli_config.protocol.delta.to_string(),
                     "threshold": cli_config.protocol.threshold.to_string(),
-                    "dimensions": cli_config.protocol.dimensions.to_string(),
+                    "dimensions": cli_config.protocol.d.to_string(),
                 },
                 "results": query_points.iter().zip(heavy_hitters.iter()).enumerate().map(|(i, (query, result))| {
                     serde_json::json!({
@@ -644,7 +647,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
             &client_points,
             cli_config.protocol.delta,
             cli_config.protocol.threshold as usize,
-            cli_config.protocol.input_bit_length,
+            cli_config.protocol.h1,
             &cli_config.protocol.distance_metric,
         );
         
@@ -654,8 +657,8 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
         println!("Distance metric: {}", cli_config.protocol.distance_metric);
         println!("Delta (distance threshold): {}", cli_config.protocol.delta);
         println!("Threshold (minimum count): {}", cli_config.protocol.threshold);
-        println!("Input bit length: {}", cli_config.protocol.input_bit_length);
-        println!("Dimensions: {}", cli_config.protocol.dimensions);
+        println!("Input bit length: {}", cli_config.protocol.h1);
+        println!("Dimensions: {}", cli_config.protocol.d);
         println!("Total client points: {}", client_points.len());
         println!("Heavy hitters found: {}", ground_truth_heavy_hitters.len());
         
@@ -674,8 +677,8 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                     "distance_metric": cli_config.protocol.distance_metric,
                     "delta": cli_config.protocol.delta.to_string(),
                     "threshold": cli_config.protocol.threshold.to_string(),
-                    "dimensions": cli_config.protocol.dimensions.to_string(),
-                    "input_bit_length": cli_config.protocol.input_bit_length.to_string()
+                    "dimensions": cli_config.protocol.d.to_string(),
+                    "input_bit_length": cli_config.protocol.h1.to_string()
                 },
                 "heavy_hitters": ground_truth_heavy_hitters.iter().map(|hh| {
                     hh.iter().map(|&x| x.to_string()).collect::<Vec<_>>()
