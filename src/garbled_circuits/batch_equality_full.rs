@@ -1,3 +1,4 @@
+use crate::channel::CommTrackingChannel;
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
     FancyReveal,
@@ -21,28 +22,22 @@ struct BatchEQInputs<F> {
 /// Batch equality test for garbler side
 /// Takes a vector of vectors of ModInt and returns a vector of booleans
 /// Each boolean indicates whether all ModInt values in the corresponding inner vector are equal to zero
-pub fn batch_gb_equality_test<C>(
+pub fn batch_gb_equality_test(
     rng: &mut AesRng,
-    channel: &mut C,
+    channel: &mut CommTrackingChannel,
     inputs: &[Vec<bool>]
 ) -> Vec<bool>
-where
-    C: AbstractChannel + Clone,
+// where
+//     C: AbstractChannel + Clone,
 {
-    let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    println!("Finished initializing garbler");
-    // Generate random masks for each batch result
+    let mut gb = Garbler::<CommTrackingChannel, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
     let results: Vec<bool> = (0..inputs.len()).map(|_| rand::rng().random::<bool>()).collect();
     let wires = gb_set_batch_equality_inputs(&mut gb, inputs, &results);
-    println!("Set batch equality input");
     let eq_results = batch_fancy_equality(&mut gb, wires).unwrap();
-    println!("Batch equality test completed");
     gb.outputs(eq_results.wires()).unwrap();
-    println!("Garbler output!");
     let mut ack = [0u8; 1];
     channel.flush().unwrap();
     channel.read_bytes(&mut ack).unwrap();
-    println!("Garbler received acknowledgement");
     
     results
 }

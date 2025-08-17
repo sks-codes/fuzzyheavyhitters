@@ -340,7 +340,7 @@ impl FssDealer {
         DealerSignal::from_bytes(&data)
     }
 
-    fn write_equality_key_batch(&self, channel: &mut CommTrackingChannel, batch: &DpfKeyBatch) -> Result<(), String> {
+    pub fn write_equality_key_batch(&self, channel: &mut CommTrackingChannel, batch: &DpfKeyBatch) -> Result<(), String> {
         let modulus = 1u128 << self.check_output_bit_length;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
@@ -355,7 +355,7 @@ impl FssDealer {
     }
 
     /// Write an FSS key batch to the channel
-    fn write_check_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
+    pub fn write_check_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
         let modulus = 1u128 << self.check_output_bit_length;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();
@@ -383,7 +383,7 @@ impl FssDealer {
         Ok(())
     }
 
-    fn generate_fss_keys_for_equality(&self) -> Result<(Vec<DpfKey<1>>, Vec<DpfKey<1>>, Vec<(Vec<bool>, Vec<bool>)>), String> {
+    pub fn generate_fss_keys_for_equality(&self) -> Result<(Vec<DpfKey<1>>, Vec<DpfKey<1>>, Vec<(Vec<bool>, Vec<bool>)>), String> {
         let in_modulus = 1u128 << self.check_input_bit_length;
         let out_modulus = 1u128 << self.check_output_bit_length;
 
@@ -418,7 +418,7 @@ impl FssDealer {
 
     /// Generate FSS keys for check phase comparison (Lp distance with IntervalFSS)
     /// This simulates a trusted dealer generating FSS keys for distance threshold comparison
-    fn generate_fss_keys_for_check(&self) -> Result<(Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(u128, u128)>), String> {
+    pub fn generate_fss_keys_for_check(&self) -> Result<(Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(u128, u128)>), String> {
         let in_modulus = 1u128 << self.check_input_bit_length;
         let out_modulus = 1u128 << self.check_output_bit_length;
     

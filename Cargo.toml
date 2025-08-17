@@ -73,3 +73,7 @@ path = "src/bin/ldcf_benchmark.rs"
 [[bin]]
 name = "batch_equality_gc_benchmark"
 path = "src/bin/batch_equality_gc_benchmark.rs"
+
+[[bin]]
+name = "batch_mu_bounded_gc_benchmark"
+path = "src/bin/batch_mu_bounded_gc_benchmark.rs"

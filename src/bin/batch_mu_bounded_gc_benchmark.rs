@@ -1,4 +1,5 @@
 use counttree::channel::CommTrackingChannel;
+use counttree::data_structures::modint::ModInt;
 use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
 use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
 use scuttlebutt::{AesRng, Channel};
@@ -35,18 +36,16 @@ fn setup_evaluator_channel(port: u16) -> Result<CommTrackingChannel, Box<dyn std
     Ok(CommTrackingChannel::new(reader, writer))
 }
 
-fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
     let mut rng = rand::thread_rng();
     (0..num_inputs)
         .map(|_| {
-            (0..input_bit_length)
-                .map(|_| rng.gen::<bool>())
-                .collect()
+            ModInt::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
 
-fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize, mu: u128) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running as GARBLER");
     
     println!("Parameters:");
@@ -61,7 +60,7 @@ fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: u
         h3,
         d,
         is_garbler_side: true,
-        property: CheckProperty::Equality,
+        property: CheckProperty::MuBounded,
         method: CheckMethod::GC,
     };
     
@@ -79,8 +78,9 @@ fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: u
     let check_phase = CheckPhase::new(config, share_phase);
     
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2);
+    let modulus = 1u128 << (h2 as u128);
+    println!("Generating {} test inputs with modulus {}", num_tests, modulus);
+    let inputs = generate_test_inputs(num_tests, modulus);
     
     // Setup communication channel
     let mut channel = setup_garbler_channel(port)?;
@@ -89,8 +89,9 @@ fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: u
     let mut rng = AesRng::new();
     let start_time = Instant::now();
     
-    let _results = check_phase.batch_equality_testing_gc(
+    let _results = check_phase.batch_mu_bounded_testing_gc(
         &inputs,
+        &ModInt::new(mu, modulus),
         &mut channel,
         &mut rng,
     ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
@@ -111,7 +112,7 @@ fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: u
     Ok(())
 }
 
-fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize, mu: u128) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running as EVALUATOR");
     
     println!("Parameters:");
@@ -126,7 +127,7 @@ fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests:
         h3,
         d,
         is_garbler_side: false,
-        property: CheckProperty::Equality,
+        property: CheckProperty::MuBounded,
         method: CheckMethod::GC,
     };
     
@@ -144,9 +145,10 @@ fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests:
     let check_phase = CheckPhase::new(config, share_phase);
     
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2);
-    
+    let modulus = 1u128 << (h2 as u128);
+    println!("Generating {} test inputs with modulus {}", num_tests, modulus);
+    let inputs = generate_test_inputs(num_tests, modulus);
+
     // Setup communication channel
     let mut channel = setup_evaluator_channel(port)?;
     
@@ -154,8 +156,9 @@ fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests:
     let mut rng = AesRng::new();
     let start_time = Instant::now();
     
-    let _results = check_phase.batch_equality_testing_gc(
+    let _results = check_phase.batch_mu_bounded_testing_gc(
         &inputs,
+        &ModInt::new(mu, modulus),
         &mut channel,
         &mut rng,
     ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
@@ -207,11 +210,12 @@ fn main() {
     let h3 = 20;  // Output bit length
     let d = 3;   // Number of dimensions
     let num_tests = 21000; // Number of equality tests to perform
+    let mu = 1000;
     
 
     let result = match role.to_lowercase().as_str() {
-        "garbler" => run_garbler_benchmark(port, h2, h3, d, num_tests),
-        "evaluator" => run_evaluator_benchmark(port, h2, h3, d, num_tests),
+        "garbler" => run_garbler_benchmark(port, h2, h3, d, num_tests, mu),
+        "evaluator" => run_evaluator_benchmark(port, h2, h3, d, num_tests, mu),
         _ => {
             eprintln!("Invalid role '{}'. Must be 'garbler' or 'evaluator'", role);
             std::process::exit(1);
