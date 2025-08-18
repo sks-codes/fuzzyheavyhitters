@@ -19,3 +19,4 @@ data/synthetic/
 !data/*_config.json
 !src/bin/amazon.json
 !src/bin/config.json
+*.log

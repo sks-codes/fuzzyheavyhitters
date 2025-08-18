@@ -51,10 +51,6 @@ name = "fhh_cli"
 path = "src/bin/fhh_cli.rs"
 
 [[bin]]
-name = "garbled_circuit_socket_demo"
-path = "src/bin/garbled_circuit_socket_demo.rs"
-
-[[bin]]
 name = "ride_austin_json_generator"
 path = "src/bin/ride_austin_json_generator.rs"
 

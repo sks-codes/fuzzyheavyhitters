@@ -119,7 +119,7 @@ impl FuzzyHeavyHittersProtocol {
         // Shutdown dealers using all dealer channels
         for (i, dealer_channel) in dealer_channels.iter().enumerate() {
             let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel {}: {}", i, e))?;
-            self.shutdown_dealer(&mut *locked_dealer_channel)?;
+            shutdown_dealer(&mut *locked_dealer_channel)?;
         }
 
         Ok(final_results)
@@ -207,7 +207,7 @@ impl FuzzyHeavyHittersProtocol {
         // Shutdown dealers using all dealer channels
         for (i, dealer_channel) in dealer_channels.iter().enumerate() {
             let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel {}: {}", i, e))?;
-            self.shutdown_dealer(&mut *locked_dealer_channel)?;
+            shutdown_dealer(&mut *locked_dealer_channel)?;
         }
 
         Ok(final_heavy_hitters)
@@ -262,7 +262,7 @@ impl FuzzyHeavyHittersProtocol {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
                                     let batch = 
-                                        self.request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
+                                        request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < client_shares.len() {
                                         return Err(format!("Dealer provided {} keys but {} are needed", 
@@ -291,7 +291,7 @@ impl FuzzyHeavyHittersProtocol {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
                                     // Request check FSS keys from dealer using the parallel dealer channel
-                                    let batch = self.request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
+                                    let batch = request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < client_shares.len() {
                                         return Err(format!("Dealer provided {} keys but {} are needed", 
@@ -334,7 +334,7 @@ impl FuzzyHeavyHittersProtocol {
                     // Handle threshold data - get from dealer if using IntervalFSS, otherwise use garbled circuits
                     let threshold_data_to_use = if matches!(self.config.threshold_config.method, ThresholdMethod::IntervalFSS) {
                         // Request threshold FSS keys from dealer using the parallel dealer channel
-                        let batch = self.request_dealer_threshold(&mut dealer_channel_locked, 2u128)?;
+                        let batch = request_dealer_threshold(&mut dealer_channel_locked, 2u128)?;
                         
                         if batch.keys.is_empty() {
                             return Err("Dealer provided no threshold keys".to_string());
@@ -439,100 +439,100 @@ impl FuzzyHeavyHittersProtocol {
         }
         Ok(bits[0])
     }
+}
 
-    /// Request FSS keys from dealer
-    fn request_dealer_check(&self, dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
-        // Send DealerSignal using custom serialization
-        let signal = DealerSignal::RequestCheckKeys;
-        let signal_bytes = signal.to_bytes();
-        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-        dealer_channel.write_bytes(&len_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-        dealer_channel.write_bytes(&signal_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-        dealer_channel.flush()
-            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+/// Request FSS keys from dealer
+pub fn request_dealer_check(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+    // Send DealerSignal using custom serialization
+    let signal = DealerSignal::RequestCheckKeys;
+    let signal_bytes = signal.to_bytes();
+    let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
+    dealer_channel.write_bytes(&len_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+    dealer_channel.write_bytes(&signal_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
+    dealer_channel.flush()
+        .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
-        // Receive FSS key batch from dealer
-        let mut len_bytes = [0u8; 8];
-        dealer_channel.read_bytes(&mut len_bytes)
-            .map_err(|e| format!("Failed to read key batch length: {}", e))?;
-        let len = u64::from_le_bytes(len_bytes) as usize;
+    // Receive FSS key batch from dealer
+    let mut len_bytes = [0u8; 8];
+    dealer_channel.read_bytes(&mut len_bytes)
+        .map_err(|e| format!("Failed to read key batch length: {}", e))?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
 
-        let mut batch_data = vec![0u8; len];
-        dealer_channel.read_bytes(&mut batch_data)
-            .map_err(|e| format!("Failed to read key batch data: {}", e))?;
+    let mut batch_data = vec![0u8; len];
+    dealer_channel.read_bytes(&mut batch_data)
+        .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
-        // Use output modulus from threshold config for deserialization
-        let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
-        Ok(fss_key_batch)
-    }
+    // Use output modulus from threshold config for deserialization
+    let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    Ok(fss_key_batch)
+}
 
-    fn request_dealer_equality(&self, dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
-        // Send DealerSignal using custom serialization
-        let signal = DealerSignal::RequestEqualityKeys;
-        let signal_bytes = signal.to_bytes();
-        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-        dealer_channel.write_bytes(&len_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-        dealer_channel.write_bytes(&signal_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-        dealer_channel.flush()
-            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+pub fn request_dealer_equality(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
+    // Send DealerSignal using custom serialization
+    let signal = DealerSignal::RequestEqualityKeys;
+    let signal_bytes = signal.to_bytes();
+    let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
+    dealer_channel.write_bytes(&len_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+    dealer_channel.write_bytes(&signal_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
+    dealer_channel.flush()
+        .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
-        // Receive FSS key batch from dealer
-        let mut len_bytes = [0u8; 8];
-        dealer_channel.read_bytes(&mut len_bytes)
-            .map_err(|e| format!("Failed to read key batch length: {}", e))?;
-        let len = u64::from_le_bytes(len_bytes) as usize;
+    // Receive FSS key batch from dealer
+    let mut len_bytes = [0u8; 8];
+    dealer_channel.read_bytes(&mut len_bytes)
+        .map_err(|e| format!("Failed to read key batch length: {}", e))?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
 
-        let mut batch_data = vec![0u8; len];
-        dealer_channel.read_bytes(&mut batch_data)
-            .map_err(|e| format!("Failed to read key batch data: {}", e))?;
+    let mut batch_data = vec![0u8; len];
+    dealer_channel.read_bytes(&mut batch_data)
+        .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
-        // Use output modulus from threshold config for deserialization
-        let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
-        Ok(fss_key_batch)
-    }
+    // Use output modulus from threshold config for deserialization
+    let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    Ok(fss_key_batch)
+}
 
-    fn request_dealer_threshold(&self, dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
-        // Send DealerSignal using custom serialization
-        let signal = DealerSignal::RequestThresholdKeys;
-        let signal_bytes = signal.to_bytes();
-        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-        dealer_channel.write_bytes(&len_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-        dealer_channel.write_bytes(&signal_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-        dealer_channel.flush()
-            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+pub fn request_dealer_threshold(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+    // Send DealerSignal using custom serialization
+    let signal = DealerSignal::RequestThresholdKeys;
+    let signal_bytes = signal.to_bytes();
+    let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
+    dealer_channel.write_bytes(&len_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+    dealer_channel.write_bytes(&signal_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
+    dealer_channel.flush()
+        .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
-        // Receive FSS key batch from dealer
-        let mut len_bytes = [0u8; 8];
-        dealer_channel.read_bytes(&mut len_bytes)
-            .map_err(|e| format!("Failed to read key batch length: {}", e))?;
-        let len = u64::from_le_bytes(len_bytes) as usize;
+    // Receive FSS key batch from dealer
+    let mut len_bytes = [0u8; 8];
+    dealer_channel.read_bytes(&mut len_bytes)
+        .map_err(|e| format!("Failed to read key batch length: {}", e))?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
 
-        let mut batch_data = vec![0u8; len];
-        dealer_channel.read_bytes(&mut batch_data)
-            .map_err(|e| format!("Failed to read key batch data: {}", e))?;
+    let mut batch_data = vec![0u8; len];
+    dealer_channel.read_bytes(&mut batch_data)
+        .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
-        // Use output modulus from threshold config for deserialization
-        let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
-        Ok(fss_key_batch)
-    }
+    // Use output modulus from threshold config for deserialization
+    let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    Ok(fss_key_batch)
+}
 
-    /// Send shutdown signal to dealer
-    fn shutdown_dealer(&self, dealer_channel: &mut CommTrackingChannel) -> Result<(), String> {
-        // Send shutdown signal using custom serialization
-        let signal_bytes = DealerSignal::Shutdown.to_bytes();
-        let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-        dealer_channel.write_bytes(&len_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-        dealer_channel.write_bytes(&signal_bytes)
-            .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-        dealer_channel.flush()
-            .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
-        Ok(())
-    }
+/// Send shutdown signal to dealer
+pub fn shutdown_dealer(dealer_channel: &mut CommTrackingChannel) -> Result<(), String> {
+    // Send shutdown signal using custom serialization
+    let signal_bytes = DealerSignal::Shutdown.to_bytes();
+    let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
+    dealer_channel.write_bytes(&len_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
+    dealer_channel.write_bytes(&signal_bytes)
+        .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
+    dealer_channel.flush()
+        .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+    Ok(())
 }

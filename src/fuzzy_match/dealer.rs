@@ -116,7 +116,7 @@ impl DpfKeyBatch {
 }
 
 /// Signal sent from servers to the dealer
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DealerSignal {
     RequestEqualityKeys,
     RequestCheckKeys,
@@ -218,8 +218,13 @@ impl FssDealer {
                         break;
                     }
 
+                    let server0_signal = self.read_dealer_signal(&mut *server0_channel_guard);
+                    let server1_signal = self.read_dealer_signal(&mut *server1_channel_guard);
+                    assert_eq!(server0_signal.clone().unwrap(), server1_signal.unwrap(),
+                        "Signals from both servers should match");
+
                     // Check if there's a signal waiting on the server0 channel
-                    match self.read_dealer_signal(&mut *server0_channel_guard) {
+                    match server0_signal {
                         Ok(signal) => {
                             match signal {
                                 DealerSignal::RequestEqualityKeys => {
@@ -327,7 +332,7 @@ impl FssDealer {
     }
 
     /// Read a dealer signal from the channel
-    fn read_dealer_signal(&self, channel: &mut CommTrackingChannel) -> Result<DealerSignal, String> {
+    pub fn read_dealer_signal(&self, channel: &mut CommTrackingChannel) -> Result<DealerSignal, String> {
         // Read the length first
         let mut len_bytes = [0u8; 8];
         channel.read_bytes(&mut len_bytes)
@@ -369,7 +374,7 @@ impl FssDealer {
         Ok(())
     }
 
-    fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
+    pub fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
         let modulus = 2u128;
         let data = batch.to_bytes(modulus);
         let len_bytes = (data.len() as u64).to_le_bytes();

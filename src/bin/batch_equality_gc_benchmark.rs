@@ -80,7 +80,7 @@ fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: u
     
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2);
+    let inputs = generate_test_inputs(num_tests, h2*d);
     
     // Setup communication channel
     let mut channel = setup_garbler_channel(port)?;
@@ -145,7 +145,7 @@ fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests:
     
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2);
+    let inputs = generate_test_inputs(num_tests, h2*d);
     
     // Setup communication channel
     let mut channel = setup_evaluator_channel(port)?;
