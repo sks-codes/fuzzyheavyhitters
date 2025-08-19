@@ -4,7 +4,7 @@
 //! with both servers in the same process for testing purposes.
 
 use counttree::channel::CommTrackingChannel;
-use counttree::cli_config::{CliConfig, ProtocolParameters, NetworkConfig, OutputConfig};
+use counttree::configs::cli_config::{CliConfig, ProtocolParameters, NetworkConfig, OutputConfig};
 use counttree::fuzzy_match::{
     protocol::FuzzyHeavyHittersProtocol,
     share_phase::SharedRange,
@@ -97,7 +97,7 @@ fn generate_config(output_path: &str) -> Result<(), String> {
     let sample_config = CliConfig {
         data_file: "data/synthetic/client_points.json".to_string(),
         query_file: "data/synthetic/server_points.json".to_string(),
-        protocol: counttree::cli_config::ProtocolParameters {
+        protocol: ProtocolParameters {
             delta: 5,
             threshold: 3,
             h1: 10,
@@ -112,7 +112,7 @@ fn generate_config(output_path: &str) -> Result<(), String> {
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
             num_clients: 100, // Number of clients participating in the protocol
         },
-        network: counttree::cli_config::NetworkConfig {
+        network: NetworkConfig {
             server0_addr: "127.0.0.1".to_string(),
             server1_addr: "127.0.0.1".to_string(),
             server0_to_server1_port: 8000,
@@ -121,7 +121,7 @@ fn generate_config(output_path: &str) -> Result<(), String> {
             client_to_server0_port: 7000,
             client_to_server1_port: 7001,
         },
-        output: counttree::cli_config::OutputConfig {
+        output: OutputConfig {
             verbose: true,
             show_intermediate: false,
             output_file: Some("results.json".to_string()),
