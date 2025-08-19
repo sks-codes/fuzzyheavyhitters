@@ -1,7 +1,8 @@
 use counttree::channel::CommTrackingChannel;
+use counttree::configs::property_test_config::PropertyTestConfig;
 use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
 use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
-use scuttlebutt::{AesRng, Channel};
+use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, BufWriter};
 use std::thread;
@@ -9,13 +10,12 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use clap::{Arg, App};
 
-fn setup_garbler_channel(port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    let addr = format!("127.0.0.1:{}", port);
-    println!("Garbler connecting to evaluator at {}", addr);
-    
+fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
     // Give evaluator time to start listening
-    thread::sleep(Duration::from_millis(500));
+    thread::sleep(Duration::from_millis(100));
     
+    let addr = format!("{}:{}", ip, port);
+    println!("Connecting to {}", addr);
     let stream = TcpStream::connect(&addr)?;
     stream.set_nodelay(true)?;
     let reader = BufReader::new(stream.try_clone()?);
@@ -23,9 +23,9 @@ fn setup_garbler_channel(port: u16) -> Result<CommTrackingChannel, Box<dyn std::
     Ok(CommTrackingChannel::new(reader, writer))
 }
 
-fn setup_evaluator_channel(port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    let addr = format!("127.0.0.1:{}", port);
-    println!("Evaluator listening on {}", addr);
+fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+    let addr = format!("{}:{}", ip, port);
+    println!("Listening on {}", addr);
     
     let listener = TcpListener::bind(&addr)?;
     let (stream, _) = listener.accept()?;
@@ -34,6 +34,7 @@ fn setup_evaluator_channel(port: u16) -> Result<CommTrackingChannel, Box<dyn std
     let writer = BufWriter::new(stream);
     Ok(CommTrackingChannel::new(reader, writer))
 }
+
 
 fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
     let mut rng = rand::thread_rng();
@@ -46,88 +47,29 @@ fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<b
         .collect()
 }
 
-fn run_garbler_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Running as GARBLER");
-    
-    println!("Parameters:");
-    println!("  Input bit length (h2): {}", h2);
-    println!("  Output bit length (h3): {}", h3);
-    println!("  Dimensions (d): {}", d);
-    println!("  Number of tests: {}", num_tests);
-    
-    // Create CheckConfig for garbler
-    let config = CheckConfig {
-        h2,
-        h3,
-        d,
-        is_garbler_side: true,
-        property: CheckProperty::Equality,
-        method: CheckMethod::GC,
-    };
-    
-    // Create SharePhase (dummy configuration since we're not using it for generation)
-    let share_config = ShareConfig {
-        method: ShareMethod::OKVS,
-        metric: DistanceMetric::LInfinity,
-        dictionary_type: DictionaryType::Known,
-        h1: 11,
-        h2: 20,
-        d: 2,
-    };
-    
-    let share_phase = SharePhase::new(share_config);
-    let check_phase = CheckPhase::new(config, share_phase);
-    
-    // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2*d);
-    
-    // Setup communication channel
-    let mut channel = setup_garbler_channel(port)?;
-    
-    println!("Starting garbler benchmark...");
-    let mut rng = AesRng::new();
-    let start_time = Instant::now();
-    
-    let _results = check_phase.batch_equality_testing_gc(
-        &inputs,
-        &mut channel,
-        &mut rng,
-    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
-    
-    let elapsed = start_time.elapsed();
-    
-    // Print results
-    println!("\n=== Garbler Benchmark Results ===");
-    println!("Number of equality tests: {}", num_tests);
-    println!("Input bit length: {}", h2);
-    println!("Garbler time: {:?}", elapsed);
-    println!("Average time per test: {:?}", elapsed / num_tests as u32);
-    let (sent, received) = channel.get_communication_stats();
-    println!("Communication sent: {} bytes", sent);
-    println!("Communication received: {} bytes", received);
-    
-    println!("\nGarbler benchmark completed successfully!");
-    Ok(())
-}
+fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let config = PropertyTestConfig::from_file(config_path)?;
+    if server {
+        println!("Running as server 1");
+    } else {
+        println!("Running as server 0");
+    }
 
-fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests: usize) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Running as EVALUATOR");
-    
-    println!("Parameters:");
-    println!("  Input bit length (h2): {}", h2);
-    println!("  Output bit length (h3): {}", h3);
-    println!("  Dimensions (d): {}", d);
-    println!("  Number of tests: {}", num_tests);
-    
-    // Create CheckConfig for evaluator
-    let config = CheckConfig {
-        h2,
-        h3,
-        d,
-        is_garbler_side: false,
+    // Create channels
+    let mut other_server_channel = if server {
+        connect_to(config.server0_addr.clone(), config.server0_to_server1_port.parse()?)?
+    } else {
+        listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse()?)?
+    };
+
+    // Create CheckConfig for garbler
+    let check_config = CheckConfig {
+        h2: config.h2,
+        h3: config.h3,
+        d: config.d,
+        is_garbler_side: server,
         property: CheckProperty::Equality,
-        method: CheckMethod::GC,
+        method: CheckMethod::FSS,
     };
     
     // Create SharePhase (dummy configuration since we're not using it for generation)
@@ -135,44 +77,45 @@ fn run_evaluator_benchmark(port: u16, h2: usize, h3: usize, d: usize, num_tests:
         method: ShareMethod::OKVS,
         metric: DistanceMetric::LInfinity,
         dictionary_type: DictionaryType::Known,
-        h1: 11,
-        h2: 20,
-        d: 2,
+        h1: config.h1,
+        h2: config.h2,
+        d: config.d,
     };
     
     let share_phase = SharePhase::new(share_config);
-    let check_phase = CheckPhase::new(config, share_phase);
-    
+    let check_phase = CheckPhase::new(check_config, share_phase);
+
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with {} bits each...", num_tests, h2);
-    let inputs = generate_test_inputs(num_tests, h2*d);
-    
-    // Setup communication channel
-    let mut channel = setup_evaluator_channel(port)?;
-    
-    println!("Starting evaluator benchmark...");
-    let mut rng = AesRng::new();
+    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2 * config.d);
+    let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
+
+    println!("Starting server benchmark...");
+
+    if server {
+        other_server_channel.write_bytes(&[1u8]).unwrap();
+        other_server_channel.flush().unwrap();
+    } else {
+        let mut ack = [0u8; 1];
+        other_server_channel.flush().unwrap();
+        other_server_channel.read_bytes(&mut ack).unwrap();
+    }
+
     let start_time = Instant::now();
-    
+    let mut rng = AesRng::new();
     let _results = check_phase.batch_equality_testing_gc(
         &inputs,
-        &mut channel,
+        &mut other_server_channel,
         &mut rng,
     ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
     
     let elapsed = start_time.elapsed();
     
     // Print results
-    println!("\n=== Evaluator Benchmark Results ===");
-    println!("Number of equality tests: {}", num_tests);
-    println!("Input bit length: {}", h2);
-    println!("Evaluator time: {:?}", elapsed);
-    println!("Average time per test: {:?}", elapsed / num_tests as u32);
-    let (sent, received) = channel.get_communication_stats();
+    println!("\n=== Server Benchmark Results ===");
+    println!("Server time: {:?}", elapsed);
+    let (sent, received) = other_server_channel.get_communication_stats();
     println!("Communication sent: {} bytes", sent);
     println!("Communication received: {} bytes", received);
-    
-    println!("\nEvaluator benchmark completed successfully!");
     Ok(())
 }
 
@@ -188,32 +131,23 @@ fn main() {
             .help("Role to play: 'garbler' or 'evaluator'")
             .required(true)
             .takes_value(true))
-        .arg(Arg::with_name("port")
-            .short("p")
-            .long("port")
-            .value_name("PORT")
-            .help("Port number for communication")
-            .default_value("8080")
+        .arg(Arg::with_name("config")
+            .short("c")
+            .long("config")
+            .value_name("CONFIG_PATH")
+            .help("Path to the configuration file")
+            .required(true)
             .takes_value(true))
         .get_matches();
 
     let role = matches.value_of("role").unwrap();
-    let port: u16 = matches.value_of("port").unwrap()
-        .parse()
-        .expect("Port must be a valid number");
-
-    // Configuration parameters
-    let h2 = 16; // Input bit length
-    let h3 = 20;  // Output bit length
-    let d = 3;   // Number of dimensions
-    let num_tests = 21000; // Number of equality tests to perform
-    
+    let config_path = matches.value_of("config").unwrap();
 
     let result = match role.to_lowercase().as_str() {
-        "garbler" => run_garbler_benchmark(port, h2, h3, d, num_tests),
-        "evaluator" => run_evaluator_benchmark(port, h2, h3, d, num_tests),
+        "server0" => run_server_benchmark(config_path, false),
+        "server1" => run_server_benchmark(config_path, true),
         _ => {
-            eprintln!("Invalid role '{}'. Must be 'garbler' or 'evaluator'", role);
+            eprintln!("Invalid role '{}'. Must be 'server0' or 'server1'", role);
             std::process::exit(1);
         }
     };
