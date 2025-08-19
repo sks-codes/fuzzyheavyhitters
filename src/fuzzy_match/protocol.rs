@@ -145,6 +145,8 @@ impl FuzzyHeavyHittersProtocol {
         while !current_heavy_hitters.is_empty() {
             let mut candidate_prefix_sets = Vec::new();
 
+            use std::time::Instant;
+            let start = Instant::now();
             // Collect all potential next heavy hitters
             for prefix_set in &current_heavy_hitters {
                 // Try extending each dimension that hasn't reached max length
@@ -160,6 +162,7 @@ impl FuzzyHeavyHittersProtocol {
                     }
                 }
             }
+            println!("Extended prefixes in {:?}, count: {}", start.elapsed(), candidate_prefix_sets.len());
 
             if candidate_prefix_sets.is_empty() {
                 // No more prefixes to extend, we are done
@@ -167,6 +170,7 @@ impl FuzzyHeavyHittersProtocol {
             }
 
             // Use parallel batch processing if channels are available
+            let start = Instant::now();
             let exceeds_threshold_results = {
                 println!("Processing {} candidates with {} dealer channels and {} server channels", 
                          candidate_prefix_sets.len(), dealer_channels.len(), other_server_channels.len());
@@ -177,6 +181,7 @@ impl FuzzyHeavyHittersProtocol {
                     other_server_channels,
                 )?
             };
+            println!("Batch processing completed in {:?}", start.elapsed());
 
             println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
 
