@@ -85,34 +85,36 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     let share_phase = SharePhase::new(share_config);
     let check_phase = CheckPhase::new(check_config, share_phase);
 
-    // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2 * config.d);
-    let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
+    for i in 0..30 {
+        // Generate test inputs - 1000 Vec<bool> with h2 bits each
+        println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2 * config.d);
+        let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
 
-    println!("Starting server benchmark...");
+        println!("Starting server benchmark...");
 
-    if server {
-        other_server_channel.write_bytes(&[1u8]).unwrap();
-        other_server_channel.flush().unwrap();
-    } else {
-        let mut ack = [0u8; 1];
-        other_server_channel.flush().unwrap();
-        other_server_channel.read_bytes(&mut ack).unwrap();
-    }
+        if server {
+            other_server_channel.write_bytes(&[1u8]).unwrap();
+            other_server_channel.flush().unwrap();
+        } else {
+            let mut ack = [0u8; 1];
+            other_server_channel.flush().unwrap();
+            other_server_channel.read_bytes(&mut ack).unwrap();
+        }
 
-    let start_time = Instant::now();
-    let mut rng = AesRng::new();
-    let _results = check_phase.batch_equality_testing_gc(
-        &inputs,
-        &mut other_server_channel,
-        &mut rng,
-    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
+        let start_time = Instant::now();
+        let mut rng = AesRng::new();
+        let _results = check_phase.batch_equality_testing_gc(
+            &inputs,
+            &mut other_server_channel,
+            &mut rng,
+        ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
     
-    let elapsed = start_time.elapsed();
+        let elapsed = start_time.elapsed();
+        println!("Server time: {:?}", elapsed);
+    }
     
     // Print results
     println!("\n=== Server Benchmark Results ===");
-    println!("Server time: {:?}", elapsed);
     let (sent, received) = other_server_channel.get_communication_stats();
     println!("Communication sent: {} bytes", sent);
     println!("Communication received: {} bytes", received);
