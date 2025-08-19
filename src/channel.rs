@@ -69,7 +69,7 @@ impl AbstractChannel for CommTrackingChannel {
     }
 }
 
-fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+pub fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
     // Give evaluator time to start listening
     thread::sleep(Duration::from_millis(100));
     
@@ -82,7 +82,7 @@ fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std:
     Ok(CommTrackingChannel::new(reader, writer))
 }
 
-fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+pub fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
     println!("Listening on {}", addr);
     
