@@ -324,6 +324,8 @@ impl FuzzyHeavyHittersProtocol {
 
                     // Run batched check phase for all client shares with this prefix set
                     // This uses garbled circuits that communicate with the other server via the parallel channel
+
+                    let start = std::time::Instant::now();
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
                         client_shares,
                         prefix_set,
@@ -332,7 +334,12 @@ impl FuzzyHeavyHittersProtocol {
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
+                    println!("Batch check phase took: {:?}", start.elapsed());
+
                     let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
+
+                    println!("Aggregated result for chunk took: {:?}", aggregated_result);
+
                     aggregated_counts.push(aggregated_result);
 
                 }
@@ -362,6 +369,7 @@ impl FuzzyHeavyHittersProtocol {
 
                 // Run threshold phase to check if results exceed threshold
                 // This also uses garbled circuits that communicate with the other server
+                let start = std::time::Instant::now();
                 let results_bool = self.threshold_phase.compare_with_threshold(
                     &aggregated_counts,
                     &threshold_data_list,
@@ -370,6 +378,8 @@ impl FuzzyHeavyHittersProtocol {
                 ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
                 result_chunk.copy_from_slice(&results_bool);
+
+                println!("Threshold phase took: {:?}", start.elapsed());
 
                 Ok::<(), String>(())
             })

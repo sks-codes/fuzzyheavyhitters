@@ -141,7 +141,10 @@ impl CheckPhase {
                                 }
                             }
                         }
-                        self.batch_equality_testing_gc(&inputs, channel, rng)
+                        let start = std::time::Instant::now();
+                        let u = self.batch_equality_testing_gc(&inputs, channel, rng);
+                        println!("Batch equality testing GC took: {:?}", start.elapsed());
+                        u
                     }
                     CheckMethod::FSS => {
                         let mut fss_keys = Vec::new();
