@@ -140,8 +140,8 @@ impl CliConfig {
 
         // Convert threshold method and data
         let threshold_method = match self.protocol.threshold_method.as_str() {
-            "GarbledCircuits" => ThresholdMethod::GarbledCircuits,
-            "IntervalFSS" => ThresholdMethod::IntervalFSS,
+            "GC" => ThresholdMethod::GC,
+            "FSS" => ThresholdMethod::FSS,
             other => return Err(format!("Unsupported threshold method: {}", other)),
         };
 

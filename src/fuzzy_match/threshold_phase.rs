@@ -15,16 +15,18 @@ use scuttlebutt::{AesRng, AbstractChannel};
 #[derive(Debug, Clone)]
 pub enum ThresholdMethod {
     /// Use garbled circuits for threshold comparison
-    GarbledCircuits,
+    GC,
     /// Use IntervalFSS for threshold comparison
-    IntervalFSS,
+    FSS,
 }
 
 /// Data for threshold phase configuration
 #[derive(Debug, Clone)]
 pub enum ThresholdData {
     /// No additional data needed for garbled circuits
-    GarbledCircuits,
+    GarbledCircuits {
+        t: u128,
+    },
     /// FSS key and random value for IntervalFSS privacy
     IntervalFSS {
         /// FSS key for this server
@@ -69,6 +71,18 @@ impl ThresholdPhase {
         Self { config }
     }
 
+    pub fn aggregate_match_results(
+        &self,
+        match_results: &[ModInt],
+    ) -> Result<ModInt, ThresholdPhaseError> {
+        let modulus = 1u128 << self.config.h3;
+        let mut aggregated_share = ModInt::new(0, modulus);
+        for result in match_results {
+            aggregated_share = aggregated_share + *result;
+        }
+        Ok(aggregated_share)
+    }
+
     /// Aggregate match results and compare with threshold using garbled circuits
     /// 
     /// This method:
@@ -82,24 +96,14 @@ impl ThresholdPhase {
         threshold: ModInt,
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-    ) -> Result<bool, ThresholdPhaseError> {
-        let modulus = 1u128 << self.config.h3;
-        // Step 1: Aggregate all ring shares
-        // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
-        let mut aggregated_share = ModInt::new(0, modulus);
-        for result in match_results {
-            aggregated_share = aggregated_share + *result;
-        }
-
+    ) -> Result<Vec<bool>, ThresholdPhaseError> {
         // Step 2: Compare aggregated share with threshold using garbled circuits
         // Both aggregated_share and threshold are already ModInt, so we can use them directly
         let comparison_result = if self.config.is_garbler_side {
-            let results = multiple_gb_greater_than_ss(rng, channel, &[aggregated_share], &[threshold]);
-            results[0]
+            multiple_gb_greater_than_ss(rng, channel, match_results, &threshold)
         } else {
             // Evaluator side - gets the actual comparison result
-            let results = multiple_ev_greater_than_ss(rng, channel, &[aggregated_share]);
-            results[0]
+            multiple_ev_greater_than_ss(rng, channel, match_results)
         };
 
         Ok(comparison_result)
@@ -116,69 +120,54 @@ impl ThresholdPhase {
     pub fn compare_with_threshold_intervalfss(
         &self,
         match_results: &[ModInt],
-        threshold: u128,
-        random_value: u128,
-        fss_key: &(LdcfKey<1>, RdcfKey<1>),
+        random_values: &[ModInt],
+        fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
         channel: &mut CommTrackingChannel,
-    ) -> Result<bool, ThresholdPhaseError> {
+    ) -> Result<Vec<bool>, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.h3;
-        
-        // Step 1: Aggregate all ring shares locally
-        // sum = b^1 + b^2 + ... + b^n (number of clients that "match")
-        let mut aggregated_share = ModInt::new(0, modulus);
-        for result in match_results {
-            aggregated_share = aggregated_share + *result;
-        }
+        let masked_values = match_results.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
+            input + random_value
+        }).collect::<Vec<ModInt>>();
 
-        // Step 2: Add random value to aggregated share and exchange with other server
-        let masked_share = aggregated_share + ModInt::new(random_value, modulus);
-        
-        let reconstructed_masked_count = if self.config.is_garbler_side {
-            // Server 1 (garbler) sends first, then receives
-            let share_bytes = masked_share.val().to_le_bytes();
-            channel.write_bytes(&share_bytes)
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
-            channel.flush()
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
-            
-            let mut received_bytes = [0u8; 16];
-            channel.read_bytes(&mut received_bytes)
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
-            let other_masked_share = u128::from_le_bytes(received_bytes);
-            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
+        let combined_masked_values = if self.config.is_garbler_side {
+            masked_values.iter().for_each(|masked_eval| {
+                let eval_bytes = masked_eval.val().to_le_bytes();
+                channel.write_bytes(&eval_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
+            });
+            channel.flush().map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
 
-            masked_share + other_masked_share_modint
+            masked_values.iter().map(|&masked_value| {
+                let mut received_bytes = [0u8; 16];
+                channel.read_bytes(&mut received_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
+                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                masked_value + other_masked_value
+            }).collect::<Vec<ModInt>>()
         } else {
-            // Server 0 (evaluator) receives first, then sends
-            let mut received_bytes = [0u8; 16];
-            channel.read_bytes(&mut received_bytes)
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to receive masked share: {}", e)))?;
-            let other_masked_share = u128::from_le_bytes(received_bytes);
-            let other_masked_share_modint = ModInt::new(other_masked_share, modulus);
-            
-            let share_bytes = masked_share.val().to_le_bytes();
-            channel.write_bytes(&share_bytes)
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked share: {}", e)))?;
-            channel.flush()
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
-            
-            masked_share + other_masked_share_modint
+            let combined_masked_values = masked_values.iter().map(|&masked_value| {
+                let mut received_bytes = [0u8; 16];
+                channel.read_bytes(&mut received_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
+                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                masked_value + other_masked_value
+            }).collect::<Vec<ModInt>>();
+
+            masked_values.iter().for_each(|masked_eval| {
+                let eval_bytes = masked_eval.val().to_le_bytes();
+                channel.write_bytes(&eval_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
+            });
+            channel.flush().map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
+            combined_masked_values
         };
 
-        // Step 3: Evaluate the reconstructed masked count using FSS key for interval [threshold + r0 + r1, MAX]
-        // The reconstructed_masked_count = actual_count + r0 + r1
-        // Convert count to bit representation
-        let count_bits = u128_to_bits_msb(reconstructed_masked_count.val(), self.config.h3);
-        
-        // Evaluate FSS: returns payload for interval [threshold + r0 + r1, MAX]
-        // Since we want to check if actual_count >= threshold, and we have actual_count + r0 + r1,
-        // we need to check if actual_count + r0 + r1 >= threshold + r0 + r1
-        let fss_result = fss_key.0.eval_ldcf(&count_bits, 2) + fss_key.1.eval_rdcf(&count_bits, 2);
-
-        // The FSS is set up for interval [threshold + r0 + r1, MAX], so:
-        // - If actual_count + r0 + r1 is in [threshold + r0 + r1, MAX], FSS output is 1 (threshold exceeded)
-        // - If actual_count + r0 + r1 is outside [threshold + r0 + r1, MAX], FSS output is 0
-        let threshold_exceeded = fss_result[0] == 1;
+        let out_modulus = 1u128 << self.config.h3;
+        let threshold_exceeded = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
+            let mut masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
+            let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
+            fss_result[0] == 1
+        }).collect::<Vec<bool>>();
 
         Ok(threshold_exceeded)
     }
@@ -188,35 +177,49 @@ impl ThresholdPhase {
     /// This function dispatches to either garbled circuits or IntervalFSS based on the config
     pub fn compare_with_threshold(
         &self,
-        match_results: &[ModInt],
-        threshold: u128,
-        threshold_data: &ThresholdData,
+        aggregated_results: &[ModInt],
+        threshold_data_list: &[ThresholdData],
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-    ) -> Result<bool, ThresholdPhaseError> {
+    ) -> Result<Vec<bool>, ThresholdPhaseError> {
         match self.config.method {
-            ThresholdMethod::GarbledCircuits => {
-                // Verify we have the right data
-                match threshold_data {
-                    ThresholdData::GarbledCircuits => {},
-                    _ => return Err(ThresholdPhaseError::InvalidConfig(
-                        "GarbledCircuits method requires GarbledCircuits data".to_string()
-                    )),
+            ThresholdMethod::GC => {
+                let mut current_t = ModInt::zero(1u128<<self.config.h3);
+                for (i, threshold_data) in threshold_data_list.iter().enumerate() {
+                    match threshold_data {
+                        ThresholdData::GarbledCircuits { t } => {
+                            if i != 0 {
+                                if *t != current_t.val() {
+                                    return Err(ThresholdPhaseError::InvalidConfig(
+                                        "All GarbledCircuits thresholds must be the same".to_string(),
+                                    ));
+                                }
+                            } else {
+                                current_t = ModInt::new(*t, 1u128 << self.config.h3);
+                            }
+                        },
+                        _ => return Err(ThresholdPhaseError::InvalidConfig(
+                            "Garbled circuits method requires GarbledCircuits data".to_string()
+                        )),
+                    }
                 }
-                
-                let modulus = 1u128 << self.config.h3;
-                let threshold_modint = ModInt::new(threshold, modulus);
-                self.compare_with_threshold_gc(match_results, threshold_modint, channel, rng)
+                self.compare_with_threshold_gc(aggregated_results, current_t, channel, rng)
             }
-            ThresholdMethod::IntervalFSS => {
-                let (fss_key, random_value) = match threshold_data {
-                    ThresholdData::IntervalFSS { fss_key, random_value } => (fss_key, *random_value),
-                    _ => return Err(ThresholdPhaseError::InvalidConfig(
-                        "IntervalFSS method requires IntervalFSS data with FSS key and random value".to_string()
-                    )),
-                };
-                
-                self.compare_with_threshold_intervalfss(match_results, threshold, random_value, fss_key, channel)
+            ThresholdMethod::FSS => {
+                let mut fss_keys = Vec::new();
+                let mut random_values = Vec::new();
+                for threshold_data in threshold_data_list {
+                    match threshold_data {
+                        ThresholdData::IntervalFSS { fss_key, random_value } => {
+                            fss_keys.push(fss_key.clone());
+                            random_values.push(ModInt::new(*random_value, 1u128 << self.config.h3));
+                        },
+                        _ => return Err(ThresholdPhaseError::InvalidConfig(
+                            "FSS method requires FSS data with FSS key and random value".to_string()
+                        )),
+                    }
+                }
+                self.compare_with_threshold_intervalfss(aggregated_results, &random_values, &fss_keys, channel)
             }
         }
     }

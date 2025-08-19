@@ -253,6 +253,7 @@ impl FuzzyHeavyHittersProtocol {
                 let mut dealer_channel_locked = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel: {}", e))?;
                 let mut other_server_channel_locked = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
                 let mut local_rng = AesRng::new();
+                let mut aggregated_counts = Vec::new();
 
                 // Process each prefix set in this chunk using the parallel channels
                 for (local_idx, prefix_set) in prefix_chunk.iter().enumerate() {
@@ -331,40 +332,49 @@ impl FuzzyHeavyHittersProtocol {
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
-                    // Handle threshold data - get from dealer if using IntervalFSS, otherwise use garbled circuits
-                    let threshold_data_to_use = if matches!(self.config.threshold_config.method, ThresholdMethod::IntervalFSS) {
-                        // Request threshold FSS keys from dealer using the parallel dealer channel
-                        let batch = request_dealer_threshold(&mut dealer_channel_locked, 2u128)?;
-                        
-                        if batch.keys.is_empty() {
-                            return Err("Dealer provided no threshold keys".to_string());
-                        }
-                        
-                        // Use the first key for threshold comparison (typically only need one per query)
-                        ThresholdData::IntervalFSS {
-                            fss_key: batch.keys[0].clone(),
-                            random_value: batch.random_values[0],
-                        }
-                    } else {
-                        ThresholdData::GarbledCircuits
-                    };
+                    let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
+                    aggregated_counts.push(aggregated_result);
 
-                    // Run threshold phase to check if results exceed threshold
-                    // This also uses garbled circuits that communicate with the other server
-                    let server_bit = self.threshold_phase.compare_with_threshold(
-                        &match_results,
-                        self.config.threshold,
-                        &threshold_data_to_use,
-                        &mut other_server_channel_locked,
-                        &mut local_rng,
-                    ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
-
-                    result_chunk[local_idx] = server_bit;
                 }
+
+                let threshold_data_list = match self.config.threshold_config.method {
+                    ThresholdMethod::GC => {
+                        // Use garbled circuits for threshold comparison
+                        vec![ThresholdData::GarbledCircuits { t: self.config.threshold }; aggregated_counts.len()]
+                    }
+                    ThresholdMethod::FSS => {
+                        // Request threshold FSS keys from dealer using the parallel dealer channel
+                        let batch = request_dealer_threshold(&mut dealer_channel_locked, 1u128 << self.config.threshold_config.h3)?;
+                        if batch.keys.len() < aggregated_counts.len() {
+                            return Err(format!("Dealer provided {} keys but {} are needed", 
+                                               batch.keys.len(), aggregated_counts.len()));
+                        }
+                        let mut threshold_data_vec = Vec::new();
+                        for i in 0..aggregated_counts.len() {
+                            threshold_data_vec.push(ThresholdData::IntervalFSS {
+                                fss_key: batch.keys[i].clone(),
+                                random_value: batch.random_values[i],
+                            });
+                        }
+                        threshold_data_vec
+                    }
+                };
+
+                // Run threshold phase to check if results exceed threshold
+                // This also uses garbled circuits that communicate with the other server
+                let results_bool = self.threshold_phase.compare_with_threshold(
+                    &aggregated_counts,
+                    &threshold_data_list,
+                    &mut other_server_channel_locked,
+                    &mut local_rng,
+                ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
+
+                result_chunk.copy_from_slice(&results_bool);
 
                 Ok::<(), String>(())
             })
             .map_err(|e| format!("Parallel processing failed: {}", e))?;
+
 
         // After parallel processing, exchange the final results in parallel chunks
         let chunk_size = (server_bits.len() + num_threads - 1) / num_threads;

@@ -104,18 +104,11 @@ where
     let garbler_wires = 
         BinaryBundle::new(gb.encode_many(&garbler_circuit_inputs, &vec![2; garbler_circuit_inputs.len()]).unwrap());
 
-    println!("Finished encode_many");
-    println!("Garbler sent {} input bits.", garbler_circuit_inputs.len());
-
     let item_length = z1_values[0].len();
     let item_count = z1_values.len();
 
-    println!("Waiting for {} input bits from evaluator.", item_count * item_length);
-
     let evaluator_wires = 
         BinaryBundle::new(gb.receive_many(&vec![2; item_count * item_length]).unwrap());
-
-    println!("Finished receive_many");
 
     LessThanSSInputs {
         garbler_wires,
@@ -167,19 +160,13 @@ where
     let item_length = z3_values[0].len();
     let item_count = z3_values.len();
 
-    println!("Waiting for {} input bits from garbler.", 2 * item_count * item_length + 2 * item_count);
-
     let garbler_wires =
         BinaryBundle::new(ev.receive_many(&vec![2; 2 * item_count * item_length + 2 * item_count]).unwrap());
-
-    println!("Received garbler wires.");
 
     let mut evaluator_circuit_inputs = Vec::new();
     z3_values.iter().for_each(|z3| {
         evaluator_circuit_inputs.extend(z3.iter().map(|&b| b as u16));
     });
-
-    println!("Sending {} inputs bits to garbler.", evaluator_circuit_inputs.len());
 
     let evaluator_wires =
         BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
@@ -233,58 +220,4 @@ where
     }
 
     Ok(BinaryBundle::new(final_results))
-}
-
-/// Convert a Block to Vec<bool> bits
-/// Note: This always produces exactly 128 bits, but you can truncate to desired bit_width
-pub fn block_to_bool_bits(block: Block, lsb_first: bool) -> Vec<bool> {
-    let bytes = block.as_ref();
-    let mut bits = Vec::with_capacity(128);
-
-    if lsb_first {
-        for byte in bytes.iter() {
-            for i in 0..8 {
-                bits.push(((*byte >> i) & 1) == 1);
-            }
-        }
-    } else {
-        for byte in bytes.iter().rev() {
-            for i in (0..8).rev() {
-                bits.push(((*byte >> i) & 1) == 1);
-            }
-        }
-    }
-
-    bits
-}
-
-/// Convert a Vec<bool> (LSB first) into a single u128 value
-/// Note: Bit width is constrained to be less than 128 for simplicity
-pub fn bool_vec_to_value(bits: &[bool], bit_width: usize) -> u128 {
-    assert!(bit_width > 0, "Bit width must be greater than 0");
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-    assert!(bits.len() == bit_width, "Input length {} doesn't match expected bit width {}", bits.len(), bit_width);
-    
-    let mut value = 0u128;
-    for (i, &b) in bits.iter().enumerate() {
-        if b {
-            value |= 1u128 << i;
-        }
-    }
-    
-    value
-}
-
-/// Convert a u128 to Vec<bool> bits (LSB first)
-/// Note: Bit width is constrained to be less than 128
-pub fn u128_to_bool_bits(x: u128, n: usize) -> Vec<bool> {
-    assert!(n < 128, "Bit width must be less than 128 for this simplified implementation");
-    (0..n).map(|i| ((x >> i) & 1) == 1).collect()
-}
-
-/// Create a value with specified bit width from a single u128
-/// Note: Bit width is constrained to be less than 128
-fn make_value_from_u128(value: u128, bit_width: usize) -> Vec<bool> {
-    assert!(bit_width < 128, "Bit width must be less than 128 for this simplified implementation");
-    u128_to_bool_bits(value, bit_width)
 }
