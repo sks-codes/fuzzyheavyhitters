@@ -89,7 +89,7 @@ pub fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn s
     let listener = TcpListener::bind(&addr)?;
     let (stream, _) = listener.accept()?;
     stream.set_nodelay(true)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let writer = BufWriter::new(stream);
+    let reader = BufReader::with_capacity(64 * 4096 * 4096, stream.try_clone()?);
+    let writer = BufWriter::with_capacity(64 * 4096 * 4096, stream);
     Ok(CommTrackingChannel::new(reader, writer))
 }

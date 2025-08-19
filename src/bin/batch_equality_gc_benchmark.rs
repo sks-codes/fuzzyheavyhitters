@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use clap::{Arg, App};
 use rayon::prelude::*;
+use crossbeam;
 
 fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
     let mut rng = rand::thread_rng();
@@ -93,28 +94,44 @@ fn run_server_benchmark(config_path: &str, server: bool, num_threads: usize) -> 
 
         let start_time = Instant::now();
 
-        // Process chunks in parallel across channels
-        channels
-            .par_iter_mut()
-            .zip(input_chunks.par_iter())
-            .enumerate()
-            .try_for_each(|(thread_idx, (ch, in_chunk))| {
-                if in_chunk.is_empty() { return Ok(()); }
+        // Use crossbeam scope for better thread isolation (like tree_crawl)
+        let thread_results = crossbeam::scope(|s| {
+            let mut handles = vec![];
+            
+            for (thread_idx, (ch, in_chunk)) in channels.iter_mut().zip(input_chunks.iter()).enumerate() {
+                if in_chunk.is_empty() { continue; }
                 
-                let chunk_start = Instant::now();
-                let mut rng = AesRng::new();
-                // Clone check_phase to avoid shared borrow issues across threads
+                let chunk = in_chunk.to_vec(); // Copy chunk for thread ownership
                 let local_cp = check_phase.clone();
-                let result = local_cp
-                    .batch_equality_testing_gc(in_chunk, ch, &mut rng)
-                    .map(|_| ())
-                    .map_err(|e| format!("CheckPhase error: {:?}", e));
                 
-                let chunk_elapsed = chunk_start.elapsed();
-                println!("Thread {} (chunk size {}): {:?}", thread_idx, in_chunk.len(), chunk_elapsed);
-                result
-            })
-            .map_err(|e| format!("Parallel error: {}", e))?;
+                handles.push(s.spawn(move |_| {
+                    let chunk_start = Instant::now();
+                    let mut rng = AesRng::new();
+                    let mut channel = ch.clone(); // Each thread gets its own channel clone
+                    
+                    let result = local_cp
+                        .batch_equality_testing_gc(&chunk, &mut channel, &mut rng)
+                        .map_err(|e| format!("CheckPhase error: {:?}", e));
+                    
+                    let chunk_elapsed = chunk_start.elapsed();
+                    println!("Crossbeam Thread {} (chunk size {}): {:?}", thread_idx, chunk.len(), chunk_elapsed);
+                    
+                    (thread_idx, result)
+                }));
+            }
+            
+            // Collect results
+            let mut results = vec![];
+            for handle in handles {
+                results.push(handle.join().unwrap());
+            }
+            results
+        }).unwrap();
+
+        // Check for any errors
+        for (thread_idx, result) in thread_results {
+            result.map_err(|e| format!("Thread {} failed: {}", thread_idx, e))?;
+        }
 
         let elapsed = start_time.elapsed();
         println!("Server time (parallel): {:?}", elapsed);

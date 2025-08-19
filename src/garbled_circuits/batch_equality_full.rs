@@ -85,7 +85,6 @@ where
     C: AbstractChannel + Clone,
 {
     let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-
     let wires = ev_set_batch_fancy_inputs(&mut ev, inputs);
     let eq_results = batch_fancy_equality(&mut ev, wires).unwrap();
     let outputs = ev.outputs(eq_results.wires()).unwrap().unwrap();
@@ -111,15 +110,19 @@ where
     let item_length = inputs[0].len();
     let item_count = inputs.len();
     // Single call to receive all garbler inputs
+    let start = std::time::Instant::now();
     let garbler_wires = 
         BinaryBundle::new(ev.receive_many(&vec![2; item_count * item_length + item_count]).unwrap());
+    println!("Garbler wires set up in {:?}", start.elapsed());
 
     let mut evaluator_circuit_inputs = Vec::new();   
     inputs.iter().for_each(|input| {
         evaluator_circuit_inputs.extend(input.iter().map(|&x| x as u16));
     });
+    println!("Evaluator circuit inputs in: {:?}", start.elapsed());
     let evaluator_wires = 
         BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
+    println!("Evaluator wires set up in {:?}", start.elapsed());
 
     BatchEQInputs {
         garbler_wires,

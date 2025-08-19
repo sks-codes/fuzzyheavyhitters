@@ -230,12 +230,15 @@ impl CheckPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
+        let start = std::time::Instant::now();
         let all_equality_results = if self.config.is_garbler_side {
             batch_gb_equality_test(rng, channel, &inputs)
         } else {
             batch_ev_equality_test(rng, channel, &inputs)
         };
+        println!("Batch equality testing GC took: {:?}", start.elapsed());
 
+        let start = std::time::Instant::now();
         let ring_shares = self.batch_boolean_to_ring_share_modint(
             &all_equality_results,
             1 << self.config.h3,
@@ -243,7 +246,8 @@ impl CheckPhase {
             rng,
             self.config.is_garbler_side,
         )?;
-        
+        println!("Time to OT convert: {:?}", start.elapsed());
+
         Ok(ring_shares)
     }
 
