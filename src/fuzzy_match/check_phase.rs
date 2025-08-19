@@ -112,12 +112,14 @@ impl CheckPhase {
             ));
         }
 
+        let start = std::time::Instant::now();
         let evals = shared_ranges.iter().map(|range| {
             (0..self.config.d).map(|i| {
                 self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i)
                     .map_err(CheckPhaseError::from)
             }).collect::<Result<Vec<u128>, _>>()
         }).collect::<Result<Vec<Vec<u128>>, _>>()?;
+        println!("Share phase evaluation took: {:?}", start.elapsed());
 
         match &self.config.property {
             CheckProperty::Equality => {
