@@ -231,7 +231,6 @@ impl CheckPhase {
             batch_ev_equality_test(rng, channel, &inputs)
         };
 
-        println!("Start converting stuff");
         let ring_shares = self.batch_boolean_to_ring_share_modint(
             &all_equality_results,
             1 << self.config.h3,
@@ -448,16 +447,10 @@ impl CheckPhase {
                 ring_shares.push(ring_share);
             }
 
-            println!("Generated {} OT pairs", ot_pairs.len());
-            
             let mut ot = OtSender::init(channel, rng)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e)))?;
-            println!("Initialized OT sender");
-
             ot.send(channel, &ot_pairs, rng)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("OT send failed: {:?}", e)))?;
-
-            println!("Sent OT pairs");
 
             Ok(ring_shares)
         } else {
