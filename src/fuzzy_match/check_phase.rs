@@ -451,6 +451,8 @@ impl CheckPhase {
                 .map_err(|e| CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e)))?;
             ot.send(channel, &ot_pairs, rng)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("OT send failed: {:?}", e)))?;
+            channel.flush()
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
             Ok(ring_shares)
         } else {
