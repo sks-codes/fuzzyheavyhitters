@@ -1,6 +1,9 @@
 use std::io::{BufReader, BufWriter};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use std::net::TcpListener;
 use scuttlebutt::{AbstractChannel, SyncChannel};
 
 /// A wrapper around scuttlebutt's SyncChannel that tracks communication costs
@@ -66,87 +69,27 @@ impl AbstractChannel for CommTrackingChannel {
     }
 }
 
-/// Utility functions for result exchange in secret sharing protocols
-pub mod result_exchange {
-    use super::CommTrackingChannel;
-    use scuttlebutt::AbstractChannel;
+fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+    // Give evaluator time to start listening
+    thread::sleep(Duration::from_millis(100));
+    
+    let addr = format!("{}:{}", ip, port);
+    println!("Connecting to {}", addr);
+    let stream = TcpStream::connect(&addr)?;
+    stream.set_nodelay(true)?;
+    let reader = BufReader::new(stream.try_clone()?);
+    let writer = BufWriter::new(stream);
+    Ok(CommTrackingChannel::new(reader, writer))
+}
 
-    /// Send boolean results over the channel
-    pub fn send_results(channel: &mut CommTrackingChannel, results: &[bool]) -> std::io::Result<()> {
-        // Send number of results first
-        let num_results = results.len() as u32;
-        channel.write_bytes(&num_results.to_le_bytes())?;
-        
-        // Pack results into bytes (8 bools per byte)
-        let mut bytes = Vec::new();
-        for chunk in results.chunks(8) {
-            let mut byte = 0u8;
-            for (i, &bit) in chunk.iter().enumerate() {
-                if bit {
-                    byte |= 1 << i;
-                }
-            }
-            bytes.push(byte);
-        }
-        
-        // Send packed bytes
-        channel.write_bytes(&bytes)?;
-        channel.flush()?;
-        Ok(())
-    }
-
-    /// Receive boolean results from the channel
-    pub fn receive_results(channel: &mut CommTrackingChannel) -> std::io::Result<Vec<bool>> {
-        // Receive number of results
-        let mut num_bytes = [0u8; 4];
-        channel.read_bytes(&mut num_bytes)?;
-        let num_results = u32::from_le_bytes(num_bytes) as usize;
-        
-        // Calculate number of bytes needed
-        let bytes_needed = (num_results + 7) / 8; // Ceiling division
-        
-        // Receive packed bytes
-        let mut bytes = vec![0u8; bytes_needed];
-        channel.read_bytes(&mut bytes)?;
-        
-        // Unpack bytes to bools
-        let mut results = Vec::new();
-        for (_byte_idx, &byte) in bytes.iter().enumerate() {
-            for bit_idx in 0..8 {
-                if results.len() >= num_results {
-                    break;
-                }
-                let bit = (byte >> bit_idx) & 1 == 1;
-                results.push(bit);
-            }
-        }
-        
-        results.truncate(num_results);
-        Ok(results)
-    }
-
-    /// Exchange results between two parties and combine them with XOR
-    pub fn exchange_and_combine_results(
-        channel: &mut CommTrackingChannel, 
-        local_results: &[bool],
-        send_first: bool
-    ) -> std::io::Result<Vec<bool>> {
-        let remote_results = if send_first {
-            send_results(channel, local_results)?;
-            receive_results(channel)?
-        } else {
-            let remote = receive_results(channel)?;
-            send_results(channel, local_results)?;
-            remote
-        };
-
-        // Combine results (XOR for secret sharing)
-        let final_results: Vec<bool> = local_results
-            .iter()
-            .zip(remote_results.iter())
-            .map(|(&local, &remote)| local ^ remote)
-            .collect();
-
-        Ok(final_results)
-    }
+fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+    let addr = format!("{}:{}", ip, port);
+    println!("Listening on {}", addr);
+    
+    let listener = TcpListener::bind(&addr)?;
+    let (stream, _) = listener.accept()?;
+    stream.set_nodelay(true)?;
+    let reader = BufReader::new(stream.try_clone()?);
+    let writer = BufWriter::new(stream);
+    Ok(CommTrackingChannel::new(reader, writer))
 }

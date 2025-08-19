@@ -1,4 +1,4 @@
-use counttree::channel::CommTrackingChannel;
+use counttree::channel::{CommTrackingChannel, connect_to, listen_to};
 use counttree::configs::property_test_config::PropertyTestConfig;
 use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
 use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
@@ -9,32 +9,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use rand::Rng;
 use clap::{Arg, App};
-
-fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    // Give evaluator time to start listening
-    thread::sleep(Duration::from_millis(100));
-    
-    let addr = format!("{}:{}", ip, port);
-    println!("Connecting to {}", addr);
-    let stream = TcpStream::connect(&addr)?;
-    stream.set_nodelay(true)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let writer = BufWriter::new(stream);
-    Ok(CommTrackingChannel::new(reader, writer))
-}
-
-fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    let addr = format!("{}:{}", ip, port);
-    println!("Listening on {}", addr);
-    
-    let listener = TcpListener::bind(&addr)?;
-    let (stream, _) = listener.accept()?;
-    stream.set_nodelay(true)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let writer = BufWriter::new(stream);
-    Ok(CommTrackingChannel::new(reader, writer))
-}
-
 
 fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
     let mut rng = rand::thread_rng();

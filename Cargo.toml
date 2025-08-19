@@ -1,3 +1,5 @@
+[dev-dependencies]
+rayon = "1.3.1"
 [package]
 name = "counttree"
 version = "0.1.0"
