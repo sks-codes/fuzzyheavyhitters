@@ -168,12 +168,16 @@ impl FuzzyHeavyHittersProtocol {
             let exceeds_threshold_results = {
                 println!("Processing {} candidates with {} dealer channels and {} server channels", 
                          candidate_prefix_sets.len(), dealer_channels.len(), other_server_channels.len());
-                self.batch_test_prefix_sets_threshold_parallel(
+                
+                let start = std::time::Instant::now();
+                let u = self.batch_test_prefix_sets_threshold_parallel(
                     &candidate_prefix_sets,
                     client_shares_list,
                     dealer_channels,
                     other_server_channels,
-                )?
+                )?;
+                println!("Batch processing took: {:?}", start.elapsed());
+                u
             };
             println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
 

@@ -3,9 +3,9 @@ use rand::Rng;
 
 use crate::okvs_f2k::RbOkvsF2k;
 use crate::fss::{
-    ldcf::LdcfKey,
-    rdcf::RdcfKey,
-    distance::DistanceFSSKey,
+    ldcf::{LdcfKey, LdcfEval},
+    rdcf::{RdcfKey, RdcfEval},
+    distance::{DistanceFSSKey, DistanceFSSEval},
 };
 use crate::data_structures::payload::RingVec;
 use crate::util::u128_to_bits_msb;
@@ -64,6 +64,29 @@ pub struct ShareConfig {
     pub h2: usize,
     /// Dimension of the input space
     pub d: usize,
+}
+
+pub enum ShareData {
+    OKVS {
+        prefix: Vec<Vec<bool>>,
+        data: Vec<u128>,
+    },
+    IntervalFSS {
+        prefix: Vec<Vec<bool>>,
+        data: Vec<(LdcfEval<1>, RdcfEval<1>)>,
+    },
+    DistanceFSSL1 {
+        prefix: Vec<Vec<bool>>,
+        data: Vec<DistanceFSSEval<2>>,
+    },
+    DistanceFSSL2 {
+        prefix: Vec<Vec<bool>>,
+        data: Vec<DistanceFSSEval<3>>,
+    },
+    DistanceFSSL3 {
+        prefix: Vec<Vec<bool>>,
+        data: Vec<DistanceFSSEval<4>>,
+    },
 }
 
 /// Represents the shared data for a range around input x

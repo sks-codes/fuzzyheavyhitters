@@ -309,7 +309,6 @@ impl<const N: usize> DpfKey<N>
 
     pub fn eval_bit(&self, state: &DpfEval<N>, modulus: u128, dir: bool) -> DpfEval<N> {
         let data = gen_layer_data(state.seed, modulus);
-
         let cw = self.cor_words[state.level];
 
         let seed = if !dir {
@@ -342,6 +341,47 @@ impl<const N: usize> DpfKey<N>
             y: new_y,
             y_bit: new_y_bit,
         }
+    }
+
+    pub fn expand_prefix(&self, state: &DpfEval<N>, modulus: u128) -> (DpfEval<N>, DpfEval<N>) {
+        let data = gen_layer_data(state.seed, modulus);
+        let cw = self.cor_words[state.level];
+        
+        let seeds = (
+            xor::<16>(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
+            xor::<16>(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit))
+        );
+        let new_bits = (
+            data.bits.0 ^ (cw.seed_bit.0 & state.bit),
+            data.bits.1 ^ (cw.seed_bit.1 & state.bit)
+        );
+        let mut new_ys = (
+            data.ys.0 + (cw.ys.0 * state.y_bit.val),
+            data.ys.1 + (cw.ys.1 * state.y_bit.val)
+        );
+        new_ys.0 = new_ys.0 + state.y;
+        new_ys.1 = new_ys.1 + state.y;
+        let new_y_bit = (
+            data.y_bits.0 + (cw.y_bits.0 * state.y_bit),
+            data.y_bits.1 + (cw.y_bits.1 * state.y_bit)
+        );
+
+        (
+            DpfEval {
+                level: state.level + 1,
+                seed: seeds.0,
+                bit: new_bits.0,
+                y: new_ys.0,
+                y_bit: new_y_bit.0,
+            },
+            DpfEval {
+                level: state.level + 1,
+                seed: seeds.1,
+                bit: new_bits.1,
+                y: new_ys.1,
+                y_bit: new_y_bit.1,
+            },
+        )
     }
 
     pub fn eval_init(&self, modulus: u128) -> DpfEval<N> {
