@@ -113,16 +113,12 @@ where
     let start = std::time::Instant::now();
     let garbler_wires = 
         BinaryBundle::new(ev.receive_many(&vec![2; item_count * item_length + item_count]).unwrap());
-    println!("Garbler wires set up in {:?}", start.elapsed());
-
     let mut evaluator_circuit_inputs = Vec::new();   
     inputs.iter().for_each(|input| {
         evaluator_circuit_inputs.extend(input.iter().map(|&x| x as u16));
     });
-    println!("Evaluator circuit inputs in: {:?}", start.elapsed());
     let evaluator_wires = 
         BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
-    println!("Evaluator wires set up in {:?}", start.elapsed());
 
     BatchEQInputs {
         garbler_wires,

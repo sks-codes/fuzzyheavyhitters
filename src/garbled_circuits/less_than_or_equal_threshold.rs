@@ -103,10 +103,6 @@ where
     garbler_circuit_inputs.extend(b_values.iter().map(|&b| b as u16));
     garbler_circuit_inputs.extend(results.iter().map(|&r| r as u16));
 
-    println!("Garbler circuit inputs: {:?}", &garbler_circuit_inputs[..item_count * item_length]);
-    println!("Garbler circuit inputs: {:?}", &garbler_circuit_inputs[item_count * item_length..2 * item_count * item_length]);
-    println!("Garbler circuit inputs: {:?}", &garbler_circuit_inputs[2 * item_count * item_length..]);
-
     let garbler_wires = 
         BinaryBundle::new(gb.encode_many(&garbler_circuit_inputs, &vec![2; garbler_circuit_inputs.len()]).unwrap());
 
@@ -170,8 +166,6 @@ where
     z3_values.iter().for_each(|z3| {
         evaluator_circuit_inputs.extend(z3.iter().map(|&b| b as u16));
     });
-    println!("Evaluator_circuit_inputs: {:?}", evaluator_circuit_inputs);
-
     let evaluator_wires =
         BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
 
