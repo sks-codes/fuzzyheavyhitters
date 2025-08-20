@@ -1,5 +1,5 @@
 use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
-use crate::util::u128_to_bits_msb;
+use crate::util::u128_to_bits;
 
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
@@ -32,11 +32,11 @@ fn garbler_preprocess_greater_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<boo
         // z1 = modulus - 1 - (t - y) mod modulus
         let z1_modint = *t - *y;
         let z1 = z1_modint.val();
-        let z1_bool = u128_to_bits_msb(z1, item_length);
+        let z1_bool = u128_to_bits(z1, item_length);
         
         // z2 = y  
         let z2 = y.val();
-        let z2_bool = u128_to_bits_msb(z2, item_length);
+        let z2_bool = u128_to_bits(z2, item_length);
         
         // b = y <= t
         let b = y.val() > t.val();
@@ -123,7 +123,7 @@ where
 fn evaluator_preprocess_greater_than_ss(inputs_x: &[ModInt]) -> Vec<Vec<bool>> {
     let item_length = get_bit_width_from_modint(&inputs_x[0]);
     inputs_x.iter().map(|x| {
-        let z3 = u128_to_bits_msb(x.val(), item_length);
+        let z3 = u128_to_bits(x.val(), item_length);
 
         z3
     }).collect()
@@ -195,7 +195,7 @@ where
 
     for i in 0..item_count {
         let (_, carry1) = f.bin_addition(
-            &BinaryBundle::new(garbler_wires.wires()[i*item_length..(i+1)*item_length].to_vec()),
+            &BinaryBundle::new(garbler_wires.wires()[(item_count+i)*item_length..(item_count+i+1)*item_length].to_vec()),
             &BinaryBundle::new(evaluator_wires.wires()[i * item_length..(i + 1) * item_length].to_vec())
         )?;
         let x_plus_y_overflow = carry1;
@@ -208,16 +208,18 @@ where
             .map(BinaryBundle::new)?;
 
         let (_, carry2) = f.bin_addition(
-            &BinaryBundle::new(garbler_wires.wires()[(item_count + i) * item_length..(item_count + i + 1) * item_length].to_vec()),
+            &BinaryBundle::new(garbler_wires.wires()[i * item_length..(i + 1) * item_length].to_vec()),
             &z3_flipped
         )?;
         let overflow2 = carry2;
         let x_gt_t_minus_y = f.negate(&overflow2)?; 
 
-        let b_and_overflow2 = f.and(&garbler_wires[2 * item_count * item_length + i], &x_gt_t_minus_y)?;
+        // final_results.push(x_gt_t_minus_y);
+
+        let b_and_overflow2 = f.or(&garbler_wires[2 * item_count * item_length + i], &x_gt_t_minus_y)?;
         let first_part = f.and(&x_plus_y_not_overflow, &b_and_overflow2)?;
 
-        let overflow2_or_b = f.or(&x_gt_t_minus_y, &garbler_wires[2 * item_count * item_length + i])?;
+        let overflow2_or_b = f.and(&x_gt_t_minus_y, &garbler_wires[2 * item_count * item_length + i])?;
         let second_part = f.and(&x_plus_y_overflow, &overflow2_or_b)?;
 
         let final_result = f.or(&first_part, &second_part)?;

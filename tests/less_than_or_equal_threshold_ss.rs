@@ -11,37 +11,24 @@ fn test_less_than_or_equal_threshold_ss() {
     // Brute force test with small modulus to verify the circuit computes (x + y) mod modulus >= t
     let modulus = 8u128; // Small modulus for exhaustive testing
     
-    let mut test_cases = Vec::new();
-    let mut expected_results = Vec::new();
     
-    // Test a representative sample of all combinations
-    for x in 0..modulus {
-        for y in 0..modulus {
-            for t in 0..modulus {
-                // Calculate expected result: (x + y) mod modulus >= t
+    for t in 0..modulus {
+        let mut xs = Vec::new();
+        let mut ys = Vec::new();
+        let mut xy = Vec::new();
+        let mut expected_results = Vec::new();
+        for x in 0..modulus {
+            for y in 0..modulus {
                 let sum_mod = (x + y) % modulus;
                 let expected = sum_mod <= t;
-                
-                test_cases.push((x, y, t));
+                xy.push((x, y));
+                xs.push(ModInt::new(x, modulus));
+                ys.push(ModInt::new(y, modulus));
                 expected_results.push(expected);
-                
-                println!("x={}, y={}, t={}: ({}+{}) mod {} = {} >= {} = {}", 
-                         x, y, t, x, y, modulus, sum_mod, t, expected);
             }
         }
-    }
-    
-    // Run tests in batches to avoid too many garbled circuits at once
-    const BATCH_SIZE: usize = 16;
-    for batch_start in (0..test_cases.len()).step_by(BATCH_SIZE) {
-        let batch_end = std::cmp::min(batch_start + BATCH_SIZE, test_cases.len());
-        let batch_cases = &test_cases[batch_start..batch_end];
-        let batch_expected = &expected_results[batch_start..batch_end];
-        
-        let y_values: Vec<ModInt> = batch_cases.iter().map(|(_, y, _)| ModInt::new(*y, modulus)).collect();
-        let t_values: Vec<ModInt> = batch_cases.iter().map(|(_, _, t)| ModInt::new(*t, modulus)).collect();
-        let x_values: Vec<ModInt> = batch_cases.iter().map(|(x, _, _)| ModInt::new(*x, modulus)).collect();
-        
+        let t_mod = ModInt::new(t, modulus);
+
         let (sender, receiver) = UnixStream::pair().unwrap();
 
         let (result_sender, result_receiver) = std::sync::mpsc::channel();
@@ -51,7 +38,7 @@ fn test_less_than_or_equal_threshold_ss() {
             let reader = BufReader::new(sender.try_clone().unwrap());
             let writer = BufWriter::new(sender);
             let mut channel = Channel::new(reader, writer);
-            let garbler_results = multiple_gb_less_than_ss(&mut rng_gb.clone(), &mut channel, &y_values, &t_values);
+            let garbler_results = multiple_gb_less_than_ss(&mut rng_gb.clone(), &mut channel, &ys, &t_mod);
             result_sender.send(garbler_results).unwrap();
         });
 
@@ -60,7 +47,7 @@ fn test_less_than_or_equal_threshold_ss() {
         let writer = BufWriter::new(receiver);
         let mut channel = Channel::new(reader, writer);
 
-        let evaluator_results = multiple_ev_less_than_ss(&mut rng_ev.clone(), &mut channel, &x_values);
+        let evaluator_results = multiple_ev_less_than_ss(&mut rng_ev.clone(), &mut channel, &xs);
         let garbler_results = result_receiver.recv().unwrap();
 
         // XOR the garbler and evaluator results to get the actual result
@@ -69,18 +56,18 @@ fn test_less_than_or_equal_threshold_ss() {
             .zip(evaluator_results.iter())
             .map(|(&garbler, &evaluator)| garbler ^ evaluator)
             .collect();
-        
-        // Check results for this batch
-        for (i, (&expected, &actual)) in batch_expected.iter().zip(results.iter()).enumerate() {
-            let global_idx = batch_start + i;
-            let (x, y, t) = test_cases[global_idx];
-            assert_eq!(expected, actual, 
-                      "Failed for x={}, y={}, t={}: expected {}, got {}", 
-                      x, y, t, expected, actual);
+
+        println!("Garbler results: {:?}", garbler_results);
+        println!("Evaluator results: {:?}", evaluator_results);
+        println!("Results: {:?}", results);
+
+        assert_eq!(results.len(), expected_results.len(), "Results and expected lengths do not match");
+
+        // Compare results with expected
+        for (i, &result) in results.iter().enumerate() {
+            let (x, y) = xy[i];
+            let expected = expected_results[i];
+            assert_eq!(result, expected, "Failed for x={}, y={}, t={}: expected {}, got {}", x, y, t, expected, result);
         }
-        
-        println!("Batch {}-{} passed!", batch_start, batch_end - 1);
     }
-    
-    println!("All {} test cases passed!", test_cases.len());
 }
