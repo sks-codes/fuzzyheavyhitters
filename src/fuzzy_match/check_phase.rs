@@ -112,15 +112,12 @@ impl CheckPhase {
             ));
         }
 
-        let start = std::time::Instant::now();
         let evals = shared_ranges.iter().map(|range| {
             (0..self.config.d).map(|i| {
                 self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i)
                     .map_err(CheckPhaseError::from)
             }).collect::<Result<Vec<u128>, _>>()
         }).collect::<Result<Vec<Vec<u128>>, _>>()?;
-        println!("Share phase evaluation took: {:?}", start.elapsed());
-
         match &self.config.property {
             CheckProperty::Equality => {
                 let inputs = evals.iter().map(|eval| {
@@ -143,10 +140,7 @@ impl CheckPhase {
                                 }
                             }
                         }
-                        let start = std::time::Instant::now();
-                        let u = self.batch_equality_testing_gc(&inputs, channel, rng);
-                        println!("Batch equality testing GC took: {:?}", start.elapsed());
-                        u
+                        self.batch_equality_testing_gc(&inputs, channel, rng)
                     }
                     CheckMethod::FSS => {
                         let mut fss_keys = Vec::new();
@@ -230,15 +224,11 @@ impl CheckPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        let start = std::time::Instant::now();
         let all_equality_results = if self.config.is_garbler_side {
             batch_gb_equality_test(rng, channel, &inputs)
         } else {
             batch_ev_equality_test(rng, channel, &inputs)
         };
-        println!("Batch equality testing GC took: {:?}", start.elapsed());
-
-        let start = std::time::Instant::now();
         let ring_shares = self.batch_boolean_to_ring_share_modint(
             &all_equality_results,
             1 << self.config.h3,
@@ -246,8 +236,6 @@ impl CheckPhase {
             rng,
             self.config.is_garbler_side,
         )?;
-        println!("Time to OT convert: {:?}", start.elapsed());
-
         Ok(ring_shares)
     }
 
