@@ -95,29 +95,11 @@ impl CheckPhase {
 
     pub fn run_batch_fuzzy_match_check(
         &self,
-        shared_ranges: &[SharedRange],
-        query_point: &[Vec<bool>],
+        evals: &[Vec<u128>],
         check_data_list: &[CheckData],
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<ModInt>, CheckPhaseError> {
-        if query_point.len() != self.config.d {
-            return Err(CheckPhaseError::InputLengthMismatch(
-                format!("Query point has {} dimensions but config expects {}", query_point.len(), self.config.d)
-            ));
-        }
-        if shared_ranges.is_empty() {
-            return Err(CheckPhaseError::InvalidConfig(
-                "Shared ranges cannot be empty".to_string()
-            ));
-        }
-
-        let evals = shared_ranges.iter().map(|range| {
-            (0..self.config.d).map(|i| {
-                self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i)
-                    .map_err(CheckPhaseError::from)
-            }).collect::<Result<Vec<u128>, _>>()
-        }).collect::<Result<Vec<Vec<u128>>, _>>()?;
         match &self.config.property {
             CheckProperty::Equality => {
                 let inputs = evals.iter().map(|eval| {

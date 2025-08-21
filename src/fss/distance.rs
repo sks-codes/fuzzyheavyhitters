@@ -18,10 +18,11 @@ pub struct DistanceFSSKey<const N: usize> {
     right_fss: (RdcfKey<N>, RdcfKey<N>),
 }
 
+#[derive(Clone, Debug)]
 pub struct DistanceFSSEval<const N: usize> {
     left_eval: (LdcfEval<N>, LdcfEval<N>),
     right_eval: (RdcfEval<N>, RdcfEval<N>),
-    result: u128,
+    pub result: u128,
 }
 
 impl<const N: usize> DistanceFSSKey<N> {
@@ -242,5 +243,13 @@ impl<const N: usize> DistanceFSSKey<N> {
             pow_right_x = (pow_right_x * right_x) & modulus_mask;
         }
         result
+    }
+
+    pub fn init_eval(&self, modulus: u128) -> DistanceFSSEval<N> {
+        DistanceFSSEval {
+            left_eval: (self.left_fss.0.eval_init(modulus), self.left_fss.1.eval_init(modulus)),
+            right_eval: (self.right_fss.0.eval_init(modulus), self.right_fss.1.eval_init(modulus)),
+            result: 0u128,
+        }
     }
 }

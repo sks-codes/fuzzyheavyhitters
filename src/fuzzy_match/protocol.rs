@@ -3,16 +3,17 @@
 //! This module provides a high-level interface for running the complete fuzzy heavy hitters protocol
 //! including share phase, check phase, and threshold phase.
 
-use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange, DistanceMetric};
+use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange, ShareData, DistanceMetric};
 use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty};
 use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
 use crate::fuzzy_match::dealer::{FssKeyBatch, DpfKeyBatch, DealerSignal};
 use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distance_threshold};
 use crate::channel::CommTrackingChannel;
 use scuttlebutt::{AbstractChannel, AesRng};
+use tarpc::client;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
-use rayon::prelude::*;
+use rayon::{prelude::*, vec};
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone)]
@@ -106,12 +107,20 @@ impl FuzzyHeavyHittersProtocol {
             })
             .collect();
 
+        let evals = query_point_sets.iter()
+            .map(|query_point| {
+                client_shares.iter().map(|range| {
+                    (0..self.config.share_config.d).map(|i| {
+                        self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i).unwrap()
+                    }).collect::<Vec<u128>>()
+                }).collect::<Vec<Vec<u128>>>()
+            }).collect::<Vec<Vec<Vec<u128>>>>();
+
         // Use parallel batch processing with both dealer and server channels
         println!("Using full parallel processing with {} dealer channels and {} server channels", 
                  dealer_channels.len(), other_server_channels.len());
-        let final_results = self.batch_test_prefix_sets_threshold_parallel(
-            &query_point_sets,
-            client_shares,
+        let final_results = self.batch_check(
+            &evals,
             dealer_channels,
             other_server_channels,
         )?;
@@ -136,68 +145,82 @@ impl FuzzyHeavyHittersProtocol {
         let max_bit_length = self.config.share_config.h1;
         let dimension = self.config.share_config.d;
 
-        // Initialize with empty prefix for each dimension
-        let mut current_heavy_hitters = vec![vec![vec![]; dimension]];
+        // Evaluate the empty prefix for each dimension
+        let empty_string_data = client_shares_list.iter()
+            .map(|shared_range| {
+                self.share_phase.share_data_init(shared_range).unwrap()
+            })
+            .collect::<Vec<ShareData>>();
+        let mut current_data = vec![empty_string_data];
+
         let mut check_data_count = 0;
         let mut threshold_data_count = 0;
 
-        // Iteratively extend prefixes until we reach maximum length
-        while !current_heavy_hitters.is_empty() {
-            let mut candidate_prefix_sets = Vec::new();
-            // Collect all potential next heavy hitters
-            for prefix_set in &current_heavy_hitters {
-                // Try extending each dimension that hasn't reached max length
-                for dim in 0..dimension {
-                    if prefix_set[dim].len() < max_bit_length {
-                        // Try both 0 and 1 for this dimension
-                        for bit_value in [false, true] {
-                            let mut extended_prefix_set = prefix_set.clone();
-                            extended_prefix_set[dim].push(bit_value);
-                            candidate_prefix_sets.push(extended_prefix_set);
-                        }
-                        break;
+        for dim in 0..dimension {
+            for prefix_length in 1..=max_bit_length {
+                let mut new_data = Vec::new();
+                for eval in current_data.iter() {
+                    let mut data0 = Vec::new();
+                    let mut data1 = Vec::new();
+                    for (idx, shared_range) in client_shares_list.iter().enumerate() {
+                        let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &eval[idx], dim).unwrap();
+                        data0.push(eval0);
+                        data1.push(eval1);
                     }
+                    new_data.push(data0);
+                    new_data.push(data1);
                 }
-            }
-            if candidate_prefix_sets.is_empty() {
-                // No more prefixes to extend, we are done
-                break;
-            }
 
-            // Use parallel batch processing if channels are available
-            let exceeds_threshold_results = {
-                println!("Processing {} candidates with {} dealer channels and {} server channels", 
-                         candidate_prefix_sets.len(), dealer_channels.len(), other_server_channels.len());
-                
-                let start = std::time::Instant::now();
-                let u = self.batch_test_prefix_sets_threshold_parallel(
-                    &candidate_prefix_sets,
-                    client_shares_list,
+                let new_evals = new_data.iter().map(|data_vec| {
+                    data_vec.iter().map(|data| {
+                        match data {
+                            ShareData::OKVS { prefix: _, eval } => {
+                                eval.clone()
+                            }
+                            ShareData::IntervalFSS { prefix: _, data: _, eval } => {
+                                eval.clone()
+                            }
+                            ShareData::DistanceFSSL1 { prefix: _, data: _, eval } => {
+                                eval.clone()
+                            }
+                            ShareData::DistanceFSSL2 { prefix: _, data: _, eval } => {
+                                eval.clone()
+                            }
+                            ShareData::DistanceFSSL3 { prefix: _, data: _, eval } => {
+                                eval.clone()
+                            }
+                        }
+                    }).collect::<Vec<Vec<u128>>>()
+                }).collect::<Vec<Vec<Vec<u128>>>>();
+
+                let exceeds_threshold_results = self.batch_check(
+                    &new_evals,
                     dealer_channels,
                     other_server_channels,
                 )?;
-                println!("Batch processing took: {:?}", start.elapsed());
-                u
-            };
-            println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
+                println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
 
-            // Collect the next heavy hitters based on results
-            let mut next_heavy_hitters = Vec::new();
-            for (candidate, exceeds_threshold) in candidate_prefix_sets.iter().zip(exceeds_threshold_results.iter()) {
-                if *exceeds_threshold {
-                    next_heavy_hitters.push(candidate.clone());
+                current_data.clear();
+                for (data, &exceed) in new_data.iter().zip(exceeds_threshold_results.iter()) {
+                    if exceed {
+                        // If this data exceeds the threshold, we keep it for the next iteration
+                        current_data.push(data.to_vec());
+                    }
                 }
+                new_data.clear();
             }
-
-            current_heavy_hitters = next_heavy_hitters;
-            check_data_count += candidate_prefix_sets.len() * client_shares_list.len();
-            threshold_data_count += candidate_prefix_sets.len();
         }
-
-        let final_heavy_hitters = current_heavy_hitters.into_iter()
-            .map(|prefix_set| {
-                // Convert each prefix set back to u128 representation
-                prefix_set.iter()
+        let final_heavy_hitters = current_data.into_iter()
+            .map(|data| {
+                // Convert each data vector back to u128 representation
+                let prefix = match &data[0] {
+                    ShareData::OKVS { prefix, eval: _ } => prefix,
+                    ShareData::IntervalFSS { prefix, data: _, eval: _ } => prefix,
+                    ShareData::DistanceFSSL1 { prefix, data: _, eval: _ } => prefix,
+                    ShareData::DistanceFSSL2 { prefix, data: _, eval: _ } => prefix,
+                    ShareData::DistanceFSSL3 { prefix, data: _, eval: _ } => prefix,
+                };
+                prefix.iter()
                     .map(|bits| {
                         bits.iter().fold(0u128, |acc, &bit| (acc << 1) | if bit { 1 } else { 0 })
                     })
@@ -214,19 +237,14 @@ impl FuzzyHeavyHittersProtocol {
         Ok(final_heavy_hitters)
     }
 
-    fn batch_test_prefix_sets_threshold_parallel(
+    fn batch_check(
         &self,
-        prefix_sets: &[Vec<Vec<bool>>],
-        client_shares: &[SharedRange],
+        current_evals: &[Vec<Vec<u128>>],
         dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<bool>, String> {
-        if prefix_sets.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let num_threads = other_server_channels.len();
-        println!("Parallel processing {} prefix sets across {} threads", prefix_sets.len(), num_threads);
+        println!("Using {} threads for parallel processing {} evals", num_threads, current_evals.len());
 
         // Calculate distance threshold once
         let distance_threshold = if self.config.share_config.metric == DistanceMetric::LInfinity {
@@ -239,25 +257,25 @@ impl FuzzyHeavyHittersProtocol {
         };
 
         // Process prefix sets in parallel chunks
-        let chunk_size = (prefix_sets.len() + num_threads - 1) / num_threads;
-        let mut server_bits = vec![false; prefix_sets.len()];
+        let chunk_size = (current_evals.len() + num_threads - 1) / num_threads;
+        let mut server_bits = vec![false; current_evals.len()];
 
         // Use rayon to process chunks in parallel
         server_bits
             .par_chunks_mut(chunk_size)
-            .zip(prefix_sets.par_chunks(chunk_size))
+            .zip(current_evals.par_chunks(chunk_size))
             .zip(dealer_channels.par_iter())
             .zip(other_server_channels.par_iter())
             .enumerate()
-            .try_for_each(|(chunk_idx, (((result_chunk, prefix_chunk), dealer_channel), other_server_channel))| {
+            .try_for_each(|(chunk_idx, (((result_chunk, evals_chunk), dealer_channel), other_server_channel))| {
                 // Use the corresponding dealer channel for this thread
                 let mut dealer_channel_locked = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel: {}", e))?;
                 let mut other_server_channel_locked = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
                 let mut local_rng = AesRng::new();
                 let mut aggregated_counts = Vec::new();
 
-                // Process each prefix set in this chunk using the parallel channels
-                for (local_idx, prefix_set) in prefix_chunk.iter().enumerate() {
+                // Process each evals set in this chunk using the parallel channels
+                for (local_idx, eval) in evals_chunk.iter().enumerate() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
                     let check_data_list = match self.config.check_config.property {
                         CheckProperty::Equality => {
@@ -266,14 +284,14 @@ impl FuzzyHeavyHittersProtocol {
                                     let batch = 
                                         request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
-                                    if batch.keys.len() < client_shares.len() {
-                                        return Err(format!("Dealer provided {} keys but {} are needed", 
-                                                        batch.keys.len(), client_shares.len()));
+                                    if batch.keys.len() < self.config.num_clients {
+                                        return Err(format!("Dealer provided {} keys but {} are needed",
+                                                        batch.keys.len(), self.config.num_clients));
                                     }
 
                                     // Create CheckData for each client share using corresponding FSS key
                                     let mut check_data_vec = Vec::new();
-                                    for i in 0..client_shares.len() {
+                                    for i in 0..self.config.num_clients {
                                         check_data_vec.push(CheckData::LinfDpf {
                                             fss_key: batch.keys[i].clone(),
                                             random_value: batch.random_values[i].clone(),
@@ -282,7 +300,7 @@ impl FuzzyHeavyHittersProtocol {
                                     check_data_vec
                                 }
                                 CheckMethod::GC => {
-                                    vec![CheckData::LinfGarbledCircuits; client_shares.len()]
+                                    vec![CheckData::LinfGarbledCircuits; self.config.num_clients]
                                 }
                                 _ => {
                                     return Err("Unsupported check method for equality check. Currently only support GC and FSS".to_string());
@@ -295,14 +313,19 @@ impl FuzzyHeavyHittersProtocol {
                                     // Request check FSS keys from dealer using the parallel dealer channel
                                     let batch = request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
 
-                                    if batch.keys.len() < client_shares.len() {
-                                        return Err(format!("Dealer provided {} keys but {} are needed", 
-                                                         batch.keys.len(), client_shares.len()));
+                                    if batch.keys.len() < self.config.num_clients {
+                                        return Err(format!("Dealer provided {} keys but {} are needed",
+                                                         batch.keys.len(), self.config.num_clients));
                                     }
-                                    
+
+                                    if batch.random_values.len() < self.config.num_clients {
+                                        return Err(format!("Dealer provided {} random values but {} are needed",
+                                                         batch.random_values.len(), self.config.num_clients));
+                                    }
+
                                     // Create CheckData for each client share using corresponding FSS key
                                     let mut check_data_vec = Vec::new();
-                                    for i in 0..client_shares.len() {
+                                    for i in 0..self.config.num_clients {
                                         check_data_vec.push(CheckData::LpIntervalFSS {
                                             fss_key: batch.keys[i].clone(),
                                             random_value: batch.random_values[i],
@@ -311,7 +334,7 @@ impl FuzzyHeavyHittersProtocol {
                                     check_data_vec
                                 }
                                 CheckMethod::GC => {
-                                    vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; client_shares.len()]
+                                    vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; self.config.num_clients]
                                 }
                                 _ => {
                                     return Err("Unsupported check method for mu-bounded check. Currently only support GC and FSS".to_string());
@@ -327,8 +350,7 @@ impl FuzzyHeavyHittersProtocol {
                     // This uses garbled circuits that communicate with the other server via the parallel channel
 
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
-                        client_shares,
-                        prefix_set,
+                        eval,
                         &check_data_list,
                         &mut other_server_channel_locked,
                         &mut local_rng,
