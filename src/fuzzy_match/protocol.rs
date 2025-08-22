@@ -177,9 +177,13 @@ impl FuzzyHeavyHittersProtocol {
                         }
                     });
 
+                println!("Time to expand prefixes: {:?}", start.elapsed());
+
                 let mut new_data = new_data_chunks.into_iter()
                     .flat_map(|chunk| chunk)
                     .collect::<Vec<Vec<ShareData>>>();
+
+                println!("Time to expand prefixes and collect new data: {:?}", start.elapsed());
 
                 // println!("New data: {:?}", new_data);
 
@@ -205,19 +209,30 @@ impl FuzzyHeavyHittersProtocol {
                     }).collect::<Vec<Vec<u128>>>()
                 }).collect::<Vec<Vec<Vec<u128>>>>();
 
+                println!("Time to translate evals: {:?}", start.elapsed());
+
                 let exceeds_threshold_results = self.batch_check(
                     &new_evals,
                     dealer_channels,
                     other_server_channels,
                 )?;
 
+                println!("Time for batch check: {:?}", start.elapsed());
+
+                let start_copy = std::time::Instant::now();
+                // Move (not clone) the qualifying entries from new_data into current_data.
+                // This avoids allocating & copying each inner Vec<ShareData>.
                 current_data.clear();
-                for (data, &exceed) in new_data.iter().zip(exceeds_threshold_results.iter()) {
+                current_data.reserve(new_data.len()); // upper bound, may over-reserve slightly
+                for (data, &exceed) in new_data.iter_mut().zip(exceeds_threshold_results.iter()) {
                     if exceed {
-                        current_data.push(data.to_vec());
+                        // Move the inner vector out, leaving an empty one in its place.
+                        current_data.push(std::mem::take(data));
                     }
                 }
+                // new_data now contains empty Vecs (for those moved) which we drop here.
                 new_data.clear();
+                println!("Time to filter data based on threshold (move-based): {:?}", start_copy.elapsed());
 
                 println!("Processed dimension {} with prefix length {} in {:?}", 
                          dim, prefix_length, start.elapsed());
@@ -288,6 +303,7 @@ impl FuzzyHeavyHittersProtocol {
                 let mut local_rng = AesRng::new();
                 let mut aggregated_counts = Vec::new();
 
+                let start = std::time::Instant::now();
                 // Process each evals set in this chunk using the parallel channels
                 for (local_idx, eval) in evals_chunk.iter().enumerate() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
@@ -376,6 +392,9 @@ impl FuzzyHeavyHittersProtocol {
 
                 }
 
+                println!("Time to process all prefixes and aggregate results: {:?}", start.elapsed());
+
+                let start = std::time::Instant::now();
                 let threshold_data_list = match self.config.threshold_config.method {
                     ThresholdMethod::GC => {
                         // Use garbled circuits for threshold comparison
@@ -398,9 +417,11 @@ impl FuzzyHeavyHittersProtocol {
                         threshold_data_vec
                     }
                 };
+                println!("Time to prepare threshold data: {:?}", start.elapsed());
 
                 // Run threshold phase to check if results exceed threshold
                 // This also uses garbled circuits that communicate with the other server
+                let start = std::time::Instant::now();
                 let results_bool = self.threshold_phase.compare_with_threshold(
                     &aggregated_counts,
                     &threshold_data_list,
@@ -409,6 +430,7 @@ impl FuzzyHeavyHittersProtocol {
                 ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
                 result_chunk.copy_from_slice(&results_bool);
+                println!("Time for threshold comparison: {:?}", start.elapsed());
 
                 Ok::<(), String>(())
             })
@@ -420,6 +442,7 @@ impl FuzzyHeavyHittersProtocol {
         let mut final_results = vec![false; server_bits.len()];
 
         // Exchange bits in parallel chunks using the other server channels
+        let start = std::time::Instant::now();
         final_results
             .par_chunks_mut(chunk_size)
             .zip(server_bits.par_chunks(chunk_size))
@@ -470,7 +493,7 @@ impl FuzzyHeavyHittersProtocol {
                 Ok::<(), String>(())
             })
             .map_err(|e| format!("Parallel bit exchange failed: {}", e))?;
-
+        println!("Time for parallel bit exchange: {:?}", start.elapsed());
         println!("Parallel processing completed successfully");
         Ok(final_results)
     }

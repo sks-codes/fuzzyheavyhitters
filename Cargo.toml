@@ -75,3 +75,11 @@ path = "src/bin/batch_equality_gc_benchmark.rs"
 [[bin]]
 name = "batch_mu_bounded_gc_benchmark"
 path = "src/bin/batch_mu_bounded_gc_benchmark.rs"
+
+[[bin]]
+name = "bit_conversion_bench"
+path = "src/bin/bit_conversion_bench.rs"
+
+[[bin]]
+name = "ringvec_bench"
+path = "src/bin/ringvec_bench.rs"
