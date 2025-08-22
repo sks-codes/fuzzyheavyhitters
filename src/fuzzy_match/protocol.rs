@@ -181,6 +181,8 @@ impl FuzzyHeavyHittersProtocol {
                     .flat_map(|chunk| chunk)
                     .collect::<Vec<Vec<ShareData>>>();
 
+                println!("New data: {:?}", new_data);
+
                 let new_evals = new_data.iter().map(|data_vec| {
                     data_vec.iter().map(|data| {
                         match data {
@@ -202,6 +204,7 @@ impl FuzzyHeavyHittersProtocol {
                         }
                     }).collect::<Vec<Vec<u128>>>()
                 }).collect::<Vec<Vec<Vec<u128>>>>();
+                println!("New eval: {:?}", new_evals);
 
                 let exceeds_threshold_results = self.batch_check(
                     &new_evals,
@@ -220,6 +223,7 @@ impl FuzzyHeavyHittersProtocol {
 
                 println!("Processed dimension {} with prefix length {} in {:?}", 
                          dim, prefix_length, start.elapsed());
+                println!("Exceed threshold results: {:?}", exceeds_threshold_results);
             }
         }
         let final_heavy_hitters = current_data.into_iter()
