@@ -29,7 +29,7 @@ pub struct FssKeyBatch {
 }
 
 impl FssKeyBatch {
-    pub fn to_bytes(&self, modulus: u128) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.keys.len() as u32).to_le_bytes());
         for (k0, k1) in &self.keys {
@@ -43,7 +43,7 @@ impl FssKeyBatch {
         out
     }
 
-    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
         if bytes.len() < 4 { return Err("Too short for FssKeyBatch keys len".to_string()); }
         let mut offset = 0;
         let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
@@ -75,7 +75,7 @@ pub struct DpfKeyBatch {
 }
 
 impl DpfKeyBatch {
-    pub fn to_bytes(&self, modulus: u128) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.keys.len() as u32).to_le_bytes());
         for k in &self.keys {
@@ -89,7 +89,7 @@ impl DpfKeyBatch {
         out
     }
 
-    pub fn from_bytes(mut bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
         if bytes.len() < 4 { return Err("Too short for DpfKeyBatch keys len".to_string()); }
         let mut offset = 0;
         let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
@@ -347,7 +347,7 @@ impl FssDealer {
 
     pub fn write_equality_key_batch(&self, channel: &mut CommTrackingChannel, batch: &DpfKeyBatch) -> Result<(), String> {
         let modulus = 1u128 << self.check_output_bit_length;
-        let data = batch.to_bytes(modulus);
+        let data = batch.to_bytes();
         let len_bytes = (data.len() as u64).to_le_bytes();
         println!("Writing DPF key batch of size {} bytes to channel", data.len());
         channel.write_bytes(&len_bytes)
@@ -361,8 +361,7 @@ impl FssDealer {
 
     /// Write an FSS key batch to the channel
     pub fn write_check_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
-        let modulus = 1u128 << self.check_output_bit_length;
-        let data = batch.to_bytes(modulus);
+        let data = batch.to_bytes();
         let len_bytes = (data.len() as u64).to_le_bytes();
         println!("Writing FSS key batch of size {} bytes to channel", data.len());
         channel.write_bytes(&len_bytes)
@@ -375,8 +374,7 @@ impl FssDealer {
     }
 
     pub fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
-        let modulus = 2u128;
-        let data = batch.to_bytes(modulus);
+        let data = batch.to_bytes();
         let len_bytes = (data.len() as u64).to_le_bytes();
         println!("Writing Threshold key batch of size {} bytes to channel", data.len());
         channel.write_bytes(&len_bytes)
@@ -389,7 +387,6 @@ impl FssDealer {
     }
 
     pub fn generate_fss_keys_for_equality(&self) -> Result<(Vec<DpfKey<1>>, Vec<DpfKey<1>>, Vec<(Vec<bool>, Vec<bool>)>), String> {
-        let in_modulus = 1u128 << self.check_input_bit_length;
         let out_modulus = 1u128 << self.check_output_bit_length;
 
         let mut random_pairs = Vec::new();

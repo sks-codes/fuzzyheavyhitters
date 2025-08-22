@@ -151,7 +151,7 @@ impl<const N: usize> DistanceFSSKey<N> {
                 x = x << 1;
             }
         }
-        let mut x0 = x << 1;
+        let x0 = x << 1;
         let mut left_x0 = x0.clone();
         for _ in prefix.len()+1..input_len {
             left_x0 = (left_x0 << 1) ^ 1;
@@ -174,7 +174,7 @@ impl<const N: usize> DistanceFSSKey<N> {
             pow_right_x0 = (pow_right_x0 * right_x0) & modulus_mask;
         }
 
-        let mut x1 = (x << 1) | 1;
+        let x1 = (x << 1) | 1;
         let mut left_x1 = x1.clone();
         for _ in prefix.len()+1..input_len {
             left_x1 = (left_x1 << 1) ^ 1;

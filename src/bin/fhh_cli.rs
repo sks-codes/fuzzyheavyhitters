@@ -418,7 +418,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         let protocol_start = Instant::now();
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
-            is_server1,
             &dealer_channels,
             &other_server_channels,
         )?;

@@ -110,7 +110,6 @@ where
     let item_length = inputs[0].len();
     let item_count = inputs.len();
     // Single call to receive all garbler inputs
-    let start = std::time::Instant::now();
     let garbler_wires = 
         BinaryBundle::new(ev.receive_many(&vec![2; item_count * item_length + item_count]).unwrap());
     let mut evaluator_circuit_inputs = Vec::new();   

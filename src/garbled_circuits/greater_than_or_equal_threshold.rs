@@ -7,7 +7,7 @@ use fancy_garbling::{
     twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use scuttlebutt::{AbstractChannel, AesRng, Block};
+use scuttlebutt::{AbstractChannel, AesRng};
 use std::fmt::Debug;
 use rand::Rng;
 
@@ -24,7 +24,6 @@ fn garbler_preprocess_greater_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<boo
     let mut z2_values = Vec::new(); 
     let mut b_values = Vec::new();
     let item_length = get_bit_width_from_modint(&ys[0]);
-    let item_count = ys.len();
 
     for y in ys.iter() {
         assert_eq!(y.modulus(), t.modulus(), "y and t must have same modulus");

@@ -7,8 +7,8 @@ use fancy_garbling::{
     twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use scuttlebutt::{AbstractChannel, AesRng, Block};
-use std::fmt::{Binary, Debug};
+use scuttlebutt::{AbstractChannel, AesRng};
+use std::fmt::Debug;
 use rand::Rng;
 
 /// Input structure for less than secret sharing comparison
@@ -24,7 +24,6 @@ fn garbler_preprocess_less_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<bool>>
     let mut z2_values = Vec::new(); 
     let mut b_values = Vec::new();
     let item_length = get_bit_width_from_modint(t);
-    let item_count = ys.len();
     
     for y in ys.iter() {
         assert_eq!(y.modulus(), t.modulus(), "y and t must have same modulus");

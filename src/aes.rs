@@ -52,6 +52,7 @@ impl FixedKeyPrgStream {
         for i in 0..self.count {
             self.buf_blocks[i].copy_from_slice(&self.ctr_generic_array[i]);
         }
+        self.aes = Aes128::new(GenericArray::from_slice(key));
         self.buf_ptr = 0;
         self.have = 0;
         self.count = 0;

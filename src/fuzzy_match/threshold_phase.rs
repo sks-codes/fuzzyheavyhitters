@@ -124,7 +124,6 @@ impl ThresholdPhase {
         fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
-        let modulus = 1u128 << self.config.h3;
         let masked_values = match_results.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
             input + random_value
         }).collect::<Vec<ModInt>>();
@@ -164,7 +163,7 @@ impl ThresholdPhase {
 
         let out_modulus = 1u128 << self.config.h3;
         let threshold_exceeded = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
-            let mut masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
+            let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
             let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
             fss_result[0] == 1
         }).collect::<Vec<bool>>();

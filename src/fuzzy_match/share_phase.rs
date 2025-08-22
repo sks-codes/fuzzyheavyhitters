@@ -1,9 +1,6 @@
 use blake3;
-use crossbeam::epoch::Shared;
 use rand::Rng;
-use tokio::time::Interval;
 
-use crate::fss::rdcf;
 use crate::okvs_f2k::RbOkvsF2k;
 use crate::fss::{
     ldcf::{LdcfKey, LdcfEval},
@@ -12,7 +9,6 @@ use crate::fss::{
 };
 use crate::data_structures::payload::RingVec;
 use crate::util::u128_to_bits_msb;
-use crate::Share;
 use std::cmp::max;
 use std::convert::TryInto;
 
@@ -73,26 +69,21 @@ pub struct ShareConfig {
 #[derive(Clone, Debug)]
 pub enum ShareData {
     OKVS {
-        prefix: Vec<Vec<bool>>,
         eval: Vec<u128>,
     },
     IntervalFSS {
-        prefix: Vec<Vec<bool>>,
         data: Vec<(LdcfEval<1>, RdcfEval<1>)>,
         eval: Vec<u128>,
     },
     DistanceFSSL1 {
-        prefix: Vec<Vec<bool>>,
         data: Vec<DistanceFSSEval<2>>,
         eval: Vec<u128>,
     },
     DistanceFSSL2 {
-        prefix: Vec<Vec<bool>>,
         data: Vec<DistanceFSSEval<3>>,
         eval: Vec<u128>,
     },
     DistanceFSSL3 {
-        prefix: Vec<Vec<bool>>,
         data: Vec<DistanceFSSEval<4>>,
         eval: Vec<u128>,
     },
@@ -406,7 +397,7 @@ impl SharePhase {
                 let result = self.evaluate_okvs_generic(&okvs_shares[dimension], point_bits, *role, &r1, &r2)?;
                 Ok(result)
             }
-            SharedRange::IntervalFSS { keys, role } => {
+            SharedRange::IntervalFSS { keys, role: _ } => {
                 let result = self.evaluate_interval_fss_at_single_dimension(&keys[dimension], point_bits)?;
                 Ok(result)
             }
@@ -782,11 +773,11 @@ impl SharePhase {
         }
     }
 
-    pub fn expand_prefix(&self, shared_range: &SharedRange, share_data: &ShareData, dimension: usize) -> Result<(ShareData, ShareData), SharePhaseError> {
+    pub fn expand_prefix(&self, shared_range: &SharedRange, share_data: &ShareData, prefix: &[bool], dimension: usize) -> Result<(ShareData, ShareData), SharePhaseError> {
         match shared_range {
             SharedRange::OKVS { okvs_shares, okvs_seeds, role, p: _ } => {
                 match share_data {
-                    ShareData::OKVS { prefix, eval } => {
+                    ShareData::OKVS { eval } => {
                         self.expand_prefix_okvs(okvs_shares, okvs_seeds, *role, prefix, eval, dimension)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
@@ -794,40 +785,40 @@ impl SharePhase {
                     )),
                 }
             },
-            SharedRange::IntervalFSS { keys, role } => {
+            SharedRange::IntervalFSS { keys, role: _ } => {
                 match share_data {
-                    ShareData::IntervalFSS { prefix, data, eval } => {
-                        self.expand_prefix_interval_fss(keys, *role, prefix, data, eval, dimension)
+                    ShareData::IntervalFSS { data, eval } => {
+                        self.expand_prefix_interval_fss(keys, data, eval, dimension)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected IntervalFSS share data for IntervalFSS shared range".to_string()
                     )),
                 }
             },
-            SharedRange::DistanceFSSL1 { keys, role } => {
+            SharedRange::DistanceFSSL1 { keys, role: _ } => {
                 match share_data {
-                    ShareData::DistanceFSSL1 { prefix, data, eval } => {
-                        self.expand_prefix_distance_fss::<2>(keys, *role, prefix, data, eval, dimension)
+                    ShareData::DistanceFSSL1 { data, eval } => {
+                        self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL1 shared range".to_string()
                     )),
                 }
             },
-            SharedRange::DistanceFSSL2 { keys, role } => {
+            SharedRange::DistanceFSSL2 { keys, role: _ } => {
                 match share_data {
-                    ShareData::DistanceFSSL2 { prefix, data, eval } => {
-                        self.expand_prefix_distance_fss::<3>(keys, *role, prefix, data, eval, dimension)
+                    ShareData::DistanceFSSL2 { data, eval } => {
+                        self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL2 shared range".to_string()
                     )),
                 }
             },
-            SharedRange::DistanceFSSL3 { keys, role } => {
+            SharedRange::DistanceFSSL3 { keys, role: _ } => {
                 match share_data {
-                    ShareData::DistanceFSSL3 { prefix, data, eval } => {
-                        self.expand_prefix_distance_fss::<4>(keys, *role, prefix, data, eval, dimension)
+                    ShareData::DistanceFSSL3 { data, eval } => {
+                        self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL3 shared range".to_string()
@@ -842,26 +833,24 @@ impl SharePhase {
         okvs_shares: &Vec<Vec<u128>>,
         okvs_seeds: &Vec<([u8; 16], [u8; 16])>,
         role: bool,
-        prefix: &[Vec<bool>],
+        prefix: &[bool],
         eval: &[u128],
         dimension: usize,
     ) -> Result<(ShareData, ShareData), SharePhaseError> {
-        let mut prefix0 = prefix.to_vec();
-        prefix0[dimension].push(false);
+        let mut new_prefix = prefix.to_vec();
+        new_prefix.push(false);
         let mut eval0 = eval.to_vec();
-        eval0[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &prefix0[dimension], role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
-        let mut prefix1 = prefix.to_vec();
-        prefix1[dimension].push(true);
+        eval0[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &new_prefix, role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
+        new_prefix.pop();
+        new_prefix.push(true);
         let mut eval1 = eval.to_vec();
-        eval1[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &prefix1[dimension], role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
+        eval1[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &new_prefix, role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
 
         Ok((
             ShareData::OKVS {
-                prefix: prefix0,
                 eval: eval0,
             },
             ShareData::OKVS {
-                prefix: prefix1,
                 eval: eval1,
             },
         ))
@@ -870,8 +859,6 @@ impl SharePhase {
     pub fn expand_prefix_interval_fss(
         &self,
         keys: &Vec<(LdcfKey<1>, RdcfKey<1>)>,
-        role: bool,
-        prefix: &[Vec<bool>],
         data: &[(LdcfEval<1>, RdcfEval<1>)],
         eval: &[u128],
         dimension: usize,
@@ -887,28 +874,18 @@ impl SharePhase {
         (data0[dimension].0, data1[dimension].0) = ldcf_key.expand_prefix(&ldcf_data, modulus);
         (data0[dimension].1, data1[dimension].1) = rdcf_key.expand_prefix(&rdcf_data, modulus);
 
-        let mut prefix0 = prefix.to_vec();
-        // println!("Old prefix: {:?}", prefix0);
-        prefix0[dimension].push(false);
-        // println!("New prefix: {:?}", prefix0);
         let mut eval0 = eval.to_vec();
         eval0[dimension] = (data0[dimension].0.y + data0[dimension].1.y)[0];
 
-        let mut prefix1 = prefix.to_vec();
-        // println!("Old prefix: {:?}", prefix1);
-        prefix1[dimension].push(true);
-        // println!("New prefix: {:?}", prefix1);
         let mut eval1 = eval.to_vec();
         eval1[dimension] = (data1[dimension].0.y + data1[dimension].1.y)[0];
 
         Ok((
             ShareData::IntervalFSS {
-                prefix: prefix0,
                 data: data0,
                 eval: eval0,
             },
             ShareData::IntervalFSS {
-                prefix: prefix1,
                 data: data1,
                 eval: eval1,
             },
@@ -918,8 +895,7 @@ impl SharePhase {
     pub fn expand_prefix_distance_fss<const N: usize>(
         &self,
         keys: &Vec<DistanceFSSKey<N>>,
-        role: bool,
-        prefix: &[Vec<bool>],
+        prefix: &[bool],
         data: &[DistanceFSSEval<N>],
         eval: &[u128],
         dimension: usize,
@@ -930,12 +906,7 @@ impl SharePhase {
 
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
-        (data0[dimension], data1[dimension]) = key.expand_prefix(&prefix[dimension], &data[dimension], input_len, modulus);
-
-        let mut prefix0 = prefix.to_vec();
-        prefix0[dimension].push(false);
-        let mut prefix1 = prefix.to_vec();
-        prefix1[dimension].push(true);
+        (data0[dimension], data1[dimension]) = key.expand_prefix(prefix, &data[dimension], input_len, modulus);
 
         let mut eval0 = eval.to_vec();
         eval0[dimension] = data0[dimension].result;
@@ -947,12 +918,10 @@ impl SharePhase {
             2 => {
                 Ok((
                     ShareData::DistanceFSSL1 {
-                        prefix: prefix0,
                         data: unsafe { std::mem::transmute(data0) },
                         eval: eval0,
                     },
                     ShareData::DistanceFSSL1 {
-                        prefix: prefix1,
                         data: unsafe { std::mem::transmute(data1) },
                         eval: eval1,
                     },
@@ -961,12 +930,10 @@ impl SharePhase {
             3 => {
                 Ok((
                     ShareData::DistanceFSSL2 {
-                        prefix: prefix0,
                         data: unsafe { std::mem::transmute(data0) },
                         eval: eval0,
                     },
                     ShareData::DistanceFSSL2 {
-                        prefix: prefix1,
                         data: unsafe { std::mem::transmute(data1) },
                         eval: eval1,
                     },
@@ -975,12 +942,10 @@ impl SharePhase {
             4 => {
                 Ok((
                     ShareData::DistanceFSSL3 {
-                        prefix: prefix0,
                         data: unsafe { std::mem::transmute(data0) },
                         eval: eval0,
                     },
                     ShareData::DistanceFSSL3 {
-                        prefix: prefix1,
                         data: unsafe { std::mem::transmute(data1) },
                         eval: eval1,
                     },
@@ -1002,13 +967,11 @@ impl SharePhase {
         match shared_range {
             SharedRange::OKVS { okvs_shares: _, okvs_seeds: _, role: _, p: _ } => {
                 Ok(ShareData::OKVS {
-                    prefix: empty_prefix,
                     eval: evals,
                 })
             },
             SharedRange::IntervalFSS { keys, role: _ } => {
                 Ok(ShareData::IntervalFSS {
-                    prefix: empty_prefix,
                     data: keys.iter().map(|(ldcf_key, rdcf_key)| {
                         (ldcf_key.eval_init(modulus), rdcf_key.eval_init(modulus))
                     }).collect::<Vec<(LdcfEval<1>, RdcfEval<1>)>>(),
@@ -1017,7 +980,6 @@ impl SharePhase {
             },
             SharedRange::DistanceFSSL1 { keys, role: _ } => {
                 Ok(ShareData::DistanceFSSL1 {
-                    prefix: empty_prefix,
                     data: keys.iter().map(|key| {
                         key.init_eval(modulus)
                     }).collect::<Vec<DistanceFSSEval<2>>>(),
@@ -1026,7 +988,6 @@ impl SharePhase {
             },
             SharedRange::DistanceFSSL2 { keys, role: _ } => {
                 Ok(ShareData::DistanceFSSL2 {
-                    prefix: empty_prefix,
                     data: keys.iter().map(|key| {
                         key.init_eval(modulus)
                     }).collect::<Vec<DistanceFSSEval<3>>>(),
@@ -1035,7 +996,6 @@ impl SharePhase {
             },
             SharedRange::DistanceFSSL3 { keys, role: _ } => {
                 Ok(ShareData::DistanceFSSL3 {
-                    prefix: empty_prefix,
                     data: keys.iter().map(|key| {
                         key.init_eval(modulus)
                     }).collect::<Vec<DistanceFSSEval<4>>>(),

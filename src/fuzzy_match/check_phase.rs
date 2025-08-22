@@ -1,5 +1,5 @@
 use crate::channel::CommTrackingChannel;
-use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError, SharedRange};
+use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError};
 use crate::garbled_circuits::{
     batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
     less_than_or_equal_threshold::{multiple_gb_less_than_ss, multiple_ev_less_than_ss},
@@ -14,7 +14,6 @@ use crate::util::{u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
 use scuttlebutt::{AesRng, Block, AbstractChannel};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use ocelot::ot::{Receiver, Sender};
-use serde::de::value;
 use std::convert::TryInto;
 
 /// Method for check phase comparison
@@ -374,7 +373,7 @@ impl CheckPhase {
 
         let out_modulus = 1u128 << self.config.h3;
         let results = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
-            let mut masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
+            let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
             let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
 
             if self.config.is_garbler_side {
