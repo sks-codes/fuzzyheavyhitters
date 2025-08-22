@@ -181,7 +181,7 @@ impl FuzzyHeavyHittersProtocol {
                     .flat_map(|chunk| chunk)
                     .collect::<Vec<Vec<ShareData>>>();
 
-                println!("New data: {:?}", new_data);
+                // println!("New data: {:?}", new_data);
 
                 let new_evals = new_data.iter().map(|data_vec| {
                     data_vec.iter().map(|data| {
@@ -204,7 +204,6 @@ impl FuzzyHeavyHittersProtocol {
                         }
                     }).collect::<Vec<Vec<u128>>>()
                 }).collect::<Vec<Vec<Vec<u128>>>>();
-                println!("New eval: {:?}", new_evals);
 
                 let exceeds_threshold_results = self.batch_check(
                     &new_evals,
@@ -215,7 +214,6 @@ impl FuzzyHeavyHittersProtocol {
                 current_data.clear();
                 for (data, &exceed) in new_data.iter().zip(exceeds_threshold_results.iter()) {
                     if exceed {
-                        // If this data exceeds the threshold, we keep it for the next iteration
                         current_data.push(data.to_vec());
                     }
                 }
