@@ -155,21 +155,33 @@ impl FuzzyHeavyHittersProtocol {
 
         let mut check_data_count = 0;
         let mut threshold_data_count = 0;
+        let num_threads = other_server_channels.len();
 
         for dim in 0..dimension {
             for prefix_length in 1..=max_bit_length {
-                let mut new_data = Vec::new();
-                for eval in current_data.iter() {
-                    let mut data0 = Vec::new();
-                    let mut data1 = Vec::new();
-                    for (idx, shared_range) in client_shares_list.iter().enumerate() {
-                        let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &eval[idx], dim).unwrap();
-                        data0.push(eval0);
-                        data1.push(eval1);
-                    }
-                    new_data.push(data0);
-                    new_data.push(data1);
-                }
+                let mut new_data_chunks = vec![vec![]; num_threads];
+                let chunk_size = (current_data.len() + num_threads - 1) / num_threads;
+                current_data.par_chunks(chunk_size).zip(new_data_chunks.par_iter_mut())
+                    .for_each(|(data_chunk, new_data_vec)| {
+                        for eval in data_chunk {
+                            let mut data0 = Vec::with_capacity(client_shares_list.len());
+                            let mut data1 = Vec::with_capacity(client_shares_list.len());
+
+                            let start = std::time::Instant::now();
+                            for (idx, shared_range) in client_shares_list.iter().enumerate() {
+                                let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &eval[idx], dim).unwrap();
+                                data0.push(eval0);
+                                data1.push(eval1);
+                            }
+                            println!("Time to expand prefix: {:?}", start.elapsed());
+                            new_data_vec.push(data0);
+                            new_data_vec.push(data1);
+                        }
+                    });
+
+                let mut new_data = new_data_chunks.into_iter()
+                    .flat_map(|chunk| chunk)
+                    .collect::<Vec<Vec<ShareData>>>();
 
                 let new_evals = new_data.iter().map(|data_vec| {
                     data_vec.iter().map(|data| {
