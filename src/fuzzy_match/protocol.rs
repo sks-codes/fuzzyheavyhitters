@@ -159,6 +159,7 @@ impl FuzzyHeavyHittersProtocol {
 
         for dim in 0..dimension {
             for prefix_length in 1..=max_bit_length {
+                let start = std::time::Instant::now();
                 let mut new_data_chunks = vec![vec![]; num_threads];
                 let chunk_size = (current_data.len() + num_threads - 1) / num_threads;
                 current_data.par_chunks(chunk_size).zip(new_data_chunks.par_iter_mut())
@@ -166,14 +167,11 @@ impl FuzzyHeavyHittersProtocol {
                         for eval in data_chunk {
                             let mut data0 = Vec::with_capacity(client_shares_list.len());
                             let mut data1 = Vec::with_capacity(client_shares_list.len());
-
-                            let start = std::time::Instant::now();
                             for (idx, shared_range) in client_shares_list.iter().enumerate() {
                                 let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &eval[idx], dim).unwrap();
                                 data0.push(eval0);
                                 data1.push(eval1);
                             }
-                            println!("Time to expand prefix: {:?}", start.elapsed());
                             new_data_vec.push(data0);
                             new_data_vec.push(data1);
                         }
@@ -210,7 +208,6 @@ impl FuzzyHeavyHittersProtocol {
                     dealer_channels,
                     other_server_channels,
                 )?;
-                println!("Exceeds threshold results: {:?}", exceeds_threshold_results);
 
                 current_data.clear();
                 for (data, &exceed) in new_data.iter().zip(exceeds_threshold_results.iter()) {
@@ -220,6 +217,9 @@ impl FuzzyHeavyHittersProtocol {
                     }
                 }
                 new_data.clear();
+
+                println!("Processed dimension {} with prefix length {} in {:?}", 
+                         dim, prefix_length, start.elapsed());
             }
         }
         let final_heavy_hitters = current_data.into_iter()
