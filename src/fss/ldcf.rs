@@ -345,24 +345,26 @@ impl<const N: usize> LdcfKey<N>
     }
 
     pub fn expand_prefix(&self, state: &LdcfEval<N>, modulus: u128) -> (LdcfEval<N>, LdcfEval<N>) {
-        let start = std::time::Instant::now();
         let data = gen_layer_data(state.seed, modulus);
         let cw = self.cor_words[state.level];
-        
+
         let seeds = (
             xor_u8_16(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
             xor_u8_16(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit))
         );
+
         let new_bits = (
             data.bits.0 ^ (cw.seed_bit.0 & state.bit),
             data.bits.1 ^ (cw.seed_bit.1 & state.bit)
         );
+
         let mut new_ys = (
             data.ys.0 + (cw.ys.0 * state.y_bit.val),
             data.ys.1 + (cw.ys.1 * state.y_bit.val)
         );
         new_ys.0 = new_ys.0 + state.y;
         new_ys.1 = new_ys.1 + state.y;
+
         let new_y_bit = (
             data.y_bits.0 + (cw.y_bits.0 * state.y_bit),
             data.y_bits.1 + (cw.y_bits.1 * state.y_bit)

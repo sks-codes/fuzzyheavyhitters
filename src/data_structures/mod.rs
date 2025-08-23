@@ -10,3 +10,4 @@ pub mod pair;
 pub mod payload;
 pub mod prg;
 pub mod logexperiments;
+pub mod ringvec_new;

@@ -4,7 +4,6 @@ use rand::Rng;
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct RingVec<const N: usize> {
     val: [u128; N],
-    modulus: u128,
     modulus_mask: u128, // Stores modulus - 1 for efficient bitwise modulo
 }
 
@@ -20,7 +19,6 @@ impl<const N: usize> RingVec<N> {
         }
         RingVec {
             val: new_val,
-            modulus,
             modulus_mask,
         }
     }
@@ -31,7 +29,6 @@ impl<const N: usize> RingVec<N> {
         }
         RingVec {
             val: [0; N],
-            modulus,
             modulus_mask: modulus - 1,
         }
     }
@@ -47,27 +44,21 @@ impl<const N: usize> RingVec<N> {
         }
         RingVec {
             val,
-            modulus,
             modulus_mask,
         }
     }
 
     /// Calculate the minimum number of bits needed to represent all values
     pub fn calculate_bit_width(&self) -> usize {
-        let max_val = self.val.iter().max().unwrap_or(&0);
-        if *max_val == 0 {
-            1 // Need at least 1 bit even for zero
-        } else {
-            (128 - max_val.leading_zeros()) as usize
-        }
+        self.modulus_bit_width()
     }
 
     /// Calculate bit width from modulus
     pub fn modulus_bit_width(&self) -> usize {
-        if self.modulus <= 1 {
+        if self.modulus_mask == 0 {
             1
         } else {
-            (128 - (self.modulus - 1).leading_zeros()) as usize
+            (128 - self.modulus_mask.leading_zeros()) as usize
         }
     }
 
@@ -75,7 +66,7 @@ impl<const N: usize> RingVec<N> {
     where
         F: Fn(u128, u128) -> u128,
     {
-        debug_assert_eq!(self.modulus, other.modulus, "RingVec operations require matching moduli.");
+        debug_assert_eq!(self.modulus_mask, other.modulus_mask, "RingVec operations require matching moduli.");
 
         for i in 0..N {
             self.val[i] = op(self.val[i], other.val[i]) & self.modulus_mask;
@@ -95,7 +86,7 @@ impl<const N: usize> RingVec<N> {
 
     /// Returns the modulus of this RingVec.
     pub fn modulus(&self) -> u128 {
-        self.modulus
+        self.modulus_mask + 1
     }
 
     /// Returns the value array of this RingVec.
@@ -153,7 +144,6 @@ impl<const N: usize> RingVec<N> {
         
         let ring_vec = RingVec {
             val,
-            modulus,
             modulus_mask: modulus - 1,
         };
         
@@ -202,8 +192,7 @@ impl<const N: usize> Add for RingVec<N> {
 impl<const N: usize> Sub for RingVec<N> {
     type Output = Self;
     fn sub(self, other: Self) -> Self::Output {
-        let modulus = self.modulus;
-        self.element_wise_ringvec_op(&other, |a, b| a + modulus - b)
+        self.element_wise_ringvec_op(&other, |a, b| a + self.modulus_mask + 1 - b)
     }
 }
 
@@ -243,8 +232,7 @@ impl<const N: usize> Add<u128> for RingVec<N> {
 impl<const N: usize> Sub<u128> for RingVec<N> {
     type Output = Self;
     fn sub(self, rhs: u128) -> Self::Output {
-        let modulus = self.modulus;
-        self.element_wise_scalar_op(rhs, |a, b| a + modulus - b)
+        self.element_wise_scalar_op(rhs, |a, b| a + self.modulus_mask + 1 - b)
     }
 }
 
