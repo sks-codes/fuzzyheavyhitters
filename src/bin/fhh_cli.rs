@@ -288,7 +288,6 @@ fn run_client(config_path: &str) -> Result<(), String> {
 
 /// Run server for both known and unknown dictionary cases
 fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result<(), String> {
-    let start_time = Instant::now();
     let cli_config = CliConfig::from_file(config_path)?;
     let server_id = if is_server1 { 1 } else { 0 };
     let is_known_dictionary = cli_config.protocol.dictionary_type == "Known";
@@ -387,6 +386,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         println!("Server {}: Successfully established {} inter-server channels", server_id, channels.len());
         channels
     };
+    let start_time = Instant::now();
 
     let protocol_time = if is_known_dictionary {
         // Load query points for known dictionary
@@ -394,8 +394,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         let query_points = load_query_points(&cli_config.query_file)?;
         
         // Run the protocol for known dictionary
-        let protocol_start = Instant::now();
-        
         println!("Server {}: Using {} dealer channels and {} server channels for parallel processing", 
                  server_id, dealer_channels.len(), other_server_channels.len());
         
@@ -405,28 +403,23 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             &dealer_channels,
             &other_server_channels,
         )?;
-        let protocol_time = protocol_start.elapsed();
-        
         println!("Server {}: Protocol execution completed", server_id);
         println!("Results: {:?}", results);
 
-        start_time.elapsed();
+        start_time.elapsed()
     } else {
         println!("Server {}: Running unknown dictionary protocol...", server_id);
         
         // Run the protocol for unknown dictionary
-        let protocol_start = Instant::now();
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
             &dealer_channels,
             &other_server_channels,
         )?;
-        let protocol_time = protocol_start.elapsed();
-        
         println!("Server {}: Protocol execution completed", server_id);
         println!("Found {} heavy hitters: {:?}", heavy_hitters.len(), heavy_hitters);
         
-        start_time.elapsed();
+        start_time.elapsed()
     };
         
     // Calculate communication metrics from all channels
@@ -451,7 +444,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         
     println!("\n=== Server {} Performance Summary ===", server_id);
     println!("📊 Protocol execution time: {:.2?}", protocol_time);
-    println!("📊 Total server time: {:.2?}", start_time.elapsed());
     println!("📡 Communication with other server ({} channels):", other_server_channels.len());
     println!("   Bytes sent: {} bytes ({:.2} KB)", total_other_server_bytes_sent, total_other_server_bytes_sent as f64 / 1024.0);
     println!("   Bytes received: {} bytes ({:.2} KB)", total_other_server_bytes_received, total_other_server_bytes_received as f64 / 1024.0);
