@@ -1,5 +1,6 @@
 use crate::data_structures::modint::ModInt;
-use crate::{xor, and_bit, bytes_to_u128};
+use crate::util::{xor, and_bit};
+use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 

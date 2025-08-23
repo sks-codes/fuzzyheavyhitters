@@ -1,5 +1,6 @@
 use crate::data_structures::modint::ModInt;
-use crate::{xor, and_bit, bytes_to_u128};
+use crate::util::{xor, and_bit, xor_u8_16};
+use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 
@@ -344,12 +345,13 @@ impl<const N: usize> LdcfKey<N>
     }
 
     pub fn expand_prefix(&self, state: &LdcfEval<N>, modulus: u128) -> (LdcfEval<N>, LdcfEval<N>) {
+        let start = std::time::Instant::now();
         let data = gen_layer_data(state.seed, modulus);
         let cw = self.cor_words[state.level];
         
         let seeds = (
-            xor::<16>(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
-            xor::<16>(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit))
+            xor_u8_16(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
+            xor_u8_16(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit))
         );
         let new_bits = (
             data.bits.0 ^ (cw.seed_bit.0 & state.bit),

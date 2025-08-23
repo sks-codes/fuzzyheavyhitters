@@ -216,22 +216,6 @@ fn full_adder(a: bool, b: bool, carry_in: bool) -> (bool, bool) {
     (sum, carry_out)
 }
 
-fn xor<const N: usize>(a: &[u8; N], b: &[u8; N]) -> [u8; N] {
-    let mut result = [0u8; N];
-    for i in 0..N {
-        result[i] = a[i] ^ b[i];
-    }
-    result
-}
-
-fn and_bit<const N: usize>(a: [u8; N], b: bool) -> [u8; N] {
-    if b {
-        a
-    } else {
-        [0u8; N]
-    }
-}
-
 fn bytes_to_u128(bytes: &[u8]) -> u128 {
     let mut buffer = [0u8; 16]; // Create a 16-byte buffer, initialized to zeros
 

@@ -2,7 +2,8 @@
 // If a prefix is LESS THAN the prefix of beta, it will take the mid payload.
 
 use crate::data_structures::modint::ModInt;
-use crate::{xor, and_bit, bytes_to_u128};
+use crate::util::{xor, and_bit};
+use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
 use crate::data_structures::payload::RingVec;
 use crate::data_structures::pair::Pair;
