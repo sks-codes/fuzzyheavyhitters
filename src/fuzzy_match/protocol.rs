@@ -163,16 +163,15 @@ impl FuzzyHeavyHittersProtocol {
         let mut current_prefixes: Vec<Vec<Vec<bool>>> = vec![vec![vec![]; dimension]];
 
         let num_threads = other_server_channels.len();
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
 
         for dim in 0..dimension {
             for prefix_length in 1..=max_bit_length {
                 let start = std::time::Instant::now();
-                let mut new_data_chunks = vec![vec![]; num_threads];
-                let chunk_size = (current_data.len() + num_threads - 1) / num_threads;
-                current_data.par_chunks(chunk_size).zip(current_prefixes.par_chunks(chunk_size)).zip(new_data_chunks.par_iter_mut())
-                    .for_each(|((data_chunk, prefix_chunk), new_data_vec)| {
-                        let start = std::time::Instant::now();
-                        for (data, prefix) in data_chunk.iter().zip(prefix_chunk) {
+                let mut new_data= thread_pool.install(|| {
+                    current_data.par_iter()
+                        .zip(current_prefixes.par_iter())
+                        .flat_map(|(data, prefix)| {
                             let mut data0 = Vec::with_capacity(client_shares_list.len());
                             let mut data1 = Vec::with_capacity(client_shares_list.len());
                             for (idx, shared_range) in client_shares_list.iter().enumerate() {
@@ -180,11 +179,29 @@ impl FuzzyHeavyHittersProtocol {
                                 data0.push(eval0);
                                 data1.push(eval1);
                             }
-                            new_data_vec.push(data0);
-                            new_data_vec.push(data1);
-                        }
-                        println!("Time to expand prefixes for chunk: {:?}", start.elapsed());
-                    });
+                            vec![data0, data1]
+                        })
+                        .collect::<Vec<Vec<ShareData>>>()
+                });
+                // let mut new_data_chunks = vec![vec![]; num_threads];
+                // let chunk_size = (current_data.len() + num_threads - 1) / num_threads;
+
+                // current_data.par_chunks(chunk_size).zip(current_prefixes.par_chunks(chunk_size)).zip(new_data_chunks.par_iter_mut())
+                //     .for_each(|((data_chunk, prefix_chunk), new_data_vec)| {
+                //         let start = std::time::Instant::now();
+                //         for (data, prefix) in data_chunk.iter().zip(prefix_chunk) {
+                //             let mut data0 = Vec::with_capacity(client_shares_list.len());
+                //             let mut data1 = Vec::with_capacity(client_shares_list.len());
+                //             for (idx, shared_range) in client_shares_list.iter().enumerate() {
+                //                 let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &data[idx], &prefix[dim], dim).unwrap();
+                //                 data0.push(eval0);
+                //                 data1.push(eval1);
+                //             }
+                //             new_data_vec.push(data0);
+                //             new_data_vec.push(data1);
+                //         }
+                //         println!("Time to expand prefixes for chunk: {:?}", start.elapsed());
+                //     });
 
                 println!("Time to expand prefixes for all clients: {:?}", start.elapsed());
 
@@ -200,11 +217,11 @@ impl FuzzyHeavyHittersProtocol {
 
                 println!("Time to expand prefixes: {:?}", start.elapsed());
 
-                let mut new_data = new_data_chunks.into_iter()
-                    .flat_map(|chunk| chunk)
-                    .collect::<Vec<Vec<ShareData>>>();
+                // let mut new_data = new_data_chunks.into_iter()
+                //     .flat_map(|chunk| chunk)
+                //     .collect::<Vec<Vec<ShareData>>>();
                 
-                println!("Time to expand prefixes and collect new data: {:?}", start.elapsed());
+                // println!("Time to expand prefixes and collect new data: {:?}", start.elapsed());
 
 
                 let exceeds_threshold_results = self.batch_check(
