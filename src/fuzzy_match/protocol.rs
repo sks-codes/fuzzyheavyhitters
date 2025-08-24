@@ -165,8 +165,8 @@ impl FuzzyHeavyHittersProtocol {
         let num_threads = other_server_channels.len();
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
 
-        for dim in 0..dimension {
-            for prefix_length in 1..=max_bit_length {
+        for prefix_length in 1..=max_bit_length {
+            for dim in 0..dimension {
                 let start = std::time::Instant::now();
                 let mut new_data= thread_pool.install(|| {
                     current_data.par_iter()
