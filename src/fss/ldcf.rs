@@ -191,8 +191,8 @@ fn gen_cor_word<const N: usize>(
         );
     let delta_seed = (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0), xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1));
     let delta_bits = (data.0.bits.0 ^ data.1.bits.0, data.0.bits.1 ^ data.1.bits.1);
-    let delta_ys = (data.0.ys.0 - data.1.ys.0, data.0.ys.1 - data.1.ys.1);
-    let delta_y_bits = (data.0.y_bits.0 - data.1.y_bits.0, data.0.y_bits.1 - data.1.y_bits.1);
+    let delta_ys = (data.1.ys.0 - data.0.ys.0, data.1.ys.1 - data.0.ys.1);
+    let delta_y_bits = (data.1.y_bits.0 - data.0.y_bits.0, data.1.y_bits.1 - data.0.y_bits.1);
 
     let mut cw = LdcfCW {
         seed: [0u8; 16],

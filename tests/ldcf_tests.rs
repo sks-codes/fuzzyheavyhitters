@@ -5,13 +5,13 @@ use counttree::{u32_to_bits, bits_to_u32};
 #[test]
 fn test_ldcf_basic_functionality() {
     const N: usize = 1;
-    let nbits = 5;
     let modulus = 256u128; // Power of 2
 
-    // Test interval [5, 10]
+    let nbits = 5;
     let alpha = 18u32;
     let mut alpha_bits = u32_to_bits(nbits, alpha);
     alpha_bits.reverse(); // Reverse bits for correct order
+    println!("Alpha bits (reversed): {:?}", alpha_bits);
 
     // Create payloads for left, middle, and right regions
     let payload_left = RingVec::<N>::new([1], modulus);   // x < alpha
