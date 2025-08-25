@@ -308,7 +308,6 @@ impl FuzzyHeavyHittersProtocol {
                 // Process each evaluation chunk in this chunk using the parallel channels
                 for eval in eval_chunk.iter() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
-                    let start = std::time::Instant::now();
                     let check_data_list = match self.config.check_config.property {
                         CheckProperty::Equality => {
                             match self.config.check_config.method {
@@ -369,19 +368,15 @@ impl FuzzyHeavyHittersProtocol {
                         }
                     };
 
-                    println!("Time to receive data from dealer: {:?}", start.elapsed());
-
                     // Run batched check phase for all client shares with this prefix set
                     // This uses garbled circuits that communicate with the other server via the parallel channel
 
-                    let start = std::time::Instant::now();
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
                         &eval,
                         &check_data_list,
                         &mut other_server_channel,
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
-                    println!("Time to do batch check after receiving from dealer: {:?}", start.elapsed());
 
                     let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
 
@@ -414,7 +409,6 @@ impl FuzzyHeavyHittersProtocol {
                         threshold_data_vec
                     }
                 };
-                println!("Time to prepare threshold data: {:?}", start.elapsed());
 
                 // Run threshold phase to check if results exceed threshold
                 // This also uses garbled circuits that communicate with the other server
@@ -551,8 +545,6 @@ pub fn request_dealer_equality(signal_dealer_channel: &mut CommTrackingChannel, 
     signal_dealer_channel.flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
-    println!("Time to request: {:?}", start.elapsed());
-
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
     check_dealer_channel.read_bytes(&mut len_bytes)
@@ -563,11 +555,8 @@ pub fn request_dealer_equality(signal_dealer_channel: &mut CommTrackingChannel, 
     check_dealer_channel.read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
     
-    println!("Time for dealer to get back: {:?}", start.elapsed());
-
     // Use output modulus from threshold config for deserialization
     let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
-    println!("Time to deserialize: {:?}", start.elapsed());
     Ok(fss_key_batch)
 }
 
