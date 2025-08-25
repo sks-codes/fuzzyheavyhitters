@@ -8,7 +8,7 @@ use crate::fss::{
     distance::{DistanceFSSKey, DistanceFSSEval},
 };
 use crate::data_structures::payload::RingVec;
-use crate::util::u128_to_bits_msb;
+use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
 use std::cmp::max;
 use std::convert::TryInto;
 
@@ -154,7 +154,7 @@ impl ShareData {
         out
     }
 
-    pub fn from_bytes(bytes: &[u8], eval_len: usize, modulus: usize) -> (Self, usize) {
+    pub fn from_bytes(bytes: &[u8], eval_len: usize, modulus: u128) -> (Self, usize) {
         let eval_len_bytes = (eval_len + 7) / 8; // Calculate the number of bytes needed to represent eval_len bits
         let mut offset = 0;
         if bytes.is_empty() {

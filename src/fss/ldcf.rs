@@ -161,7 +161,7 @@ impl<const N: usize> LdcfEval<N> {
         offset += 1;
         let (y, used_y) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
         offset += used_y;
-        let (y_bit, used_y_bit) = ModInt::from_bytes(&bytes[offset..], modulus).expect("Failed to create ModInt from y_bit");
+        let (y_bit, used_y_bit) = ModInt::from_bytes(&bytes[offset..], modulus);
         offset += used_y_bit;
 
         (

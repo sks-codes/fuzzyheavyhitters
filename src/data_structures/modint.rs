@@ -50,6 +50,35 @@ impl ModInt {
             modulus_mask: modulus - 1,
         }
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let num_bits = 128 - self.modulus.leading_zeros();
+        let num_bytes = ((num_bits + 7) / 8) as usize;
+        self.val.to_le_bytes()[..num_bytes].to_vec()
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        if !modulus.is_power_of_two() || modulus == 0 {
+            panic!("Modulus must be a power of two and non-zero.");
+        }
+        let modulus_mask = modulus - 1;
+        let num_bits = 128 - modulus.leading_zeros();
+        let num_bytes = ((num_bits + 7) / 8) as usize;
+        if bytes.len() < num_bytes {
+            panic!("Insufficient bytes for ModInt");
+        }
+        let mut val_bytes = [0u8; 16];
+        val_bytes[..num_bytes].copy_from_slice(&bytes[..num_bytes]);
+        let val = u128::from_le_bytes(val_bytes) & modulus_mask;
+        (
+            ModInt {
+                val,
+                modulus,
+                modulus_mask,
+            },
+            num_bytes
+        )
+    }
 }
 
 impl Add for ModInt {

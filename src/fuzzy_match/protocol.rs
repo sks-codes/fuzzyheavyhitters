@@ -117,21 +117,11 @@ impl FuzzyHeavyHittersProtocol {
                 }).collect::<Vec<Vec<u128>>>()
             }).collect::<Vec<Vec<Vec<u128>>>>();
 
-        let data = evals.iter()
-            .map(|server_evals| {
-                server_evals.iter()
-                    .map(|dimension_evals| {
-                        ShareData::OKVS { eval: dimension_evals.clone() }
-                    })
-                    .collect::<Vec<ShareData>>()
-            })
-            .collect::<Vec<Vec<ShareData>>>();
-
         // Use parallel batch processing with both dealer and server channels
         println!("Using full parallel processing with {} check dealer channels and {} server channels",
                  check_dealer_channels.len(), other_server_channels.len());
         let final_results = self.batch_check(
-            &data,
+            &evals,
             &signal_dealer_channels,
             &check_dealer_channels,
             &threshold_dealer_channels,
@@ -158,13 +148,16 @@ impl FuzzyHeavyHittersProtocol {
     ) -> Result<Vec<Vec<u128>>, String> {
         let max_bit_length = self.config.share_config.h1;
         let dimension = self.config.share_config.d;
+        let eval_len = self.config.share_config.h2;
+        let eval_modulus = 1u128 << eval_len;
 
         // Evaluate the empty prefix for each dimension
         let empty_string_data = client_shares_list.iter()
             .map(|shared_range| {
-                self.share_phase.share_data_init(shared_range).unwrap()
+                let data = self.share_phase.share_data_init(shared_range).unwrap();
+                data.to_bytes(eval_len)
             })
-            .collect::<Vec<ShareData>>();
+            .collect::<Vec<Vec<u8>>>();
         let mut current_data = vec![empty_string_data];
         let mut current_prefixes: Vec<Vec<Vec<bool>>> = vec![vec![vec![]; dimension]];
 
@@ -181,13 +174,30 @@ impl FuzzyHeavyHittersProtocol {
                             let mut data0 = Vec::with_capacity(client_shares_list.len());
                             let mut data1 = Vec::with_capacity(client_shares_list.len());
                             for (idx, shared_range) in client_shares_list.iter().enumerate() {
-                                let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &data[idx], &prefix[dim], dim).unwrap();
-                                data0.push(eval0);
-                                data1.push(eval1);
+                                let (data_dim, _) = ShareData::from_bytes(&data[idx], eval_len, eval_modulus);
+                                let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &data_dim, &prefix[dim], dim).unwrap();
+                                data0.push(eval0.to_bytes(eval_len));
+                                data1.push(eval1.to_bytes(eval_len));
                             }
                             vec![data0, data1]
                         })
-                        .collect::<Vec<Vec<ShareData>>>()
+                        .collect::<Vec<Vec<Vec<u8>>>>()
+                });
+                let new_eval = thread_pool.install(|| {
+                    new_data.par_iter().map(|data_bytes| {
+                        data_bytes.iter()
+                        .map(|bytes| {
+                            let (share_data, _) = ShareData::from_bytes(bytes, eval_len, eval_modulus);
+                            match share_data {
+                                ShareData::OKVS { eval } => eval.clone(),
+                                ShareData::IntervalFSS { eval, .. } => eval.clone(),
+                                ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
+                                ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),
+                                ShareData::DistanceFSSL3 { eval, .. } => eval.clone(),
+                            }
+                        })
+                        .collect::<Vec<Vec<u128>>>()
+                    }).collect::<Vec<Vec<Vec<u128>>>>()
                 });
 
                 println!("Time to expand prefixes for all clients: {:?}", start.elapsed());
@@ -205,7 +215,7 @@ impl FuzzyHeavyHittersProtocol {
                 println!("Time to expand prefixes: {:?}", start.elapsed());
 
                 let exceeds_threshold_results = self.batch_check(
-                    &new_data,
+                    &new_eval,
                     &signal_dealer_channels,
                     &check_dealer_channels,
                     &threshold_dealer_channels,
@@ -234,7 +244,7 @@ impl FuzzyHeavyHittersProtocol {
         }
         let final_heavy_hitters = current_prefixes.into_iter()
             .map(|prefix| {
-                // Convert each prefix vector back to u128 representation
+                // Convert each prefix vector (Vec<bool>) back to a byte vector (Vec<u8>)
                 prefix.iter()
                     .map(|bits| {
                         bits.iter().fold(0u128, |acc, &bit| (acc << 1) | if bit { 1 } else { 0 })
@@ -254,14 +264,14 @@ impl FuzzyHeavyHittersProtocol {
 
     fn batch_check(
         &self,
-        current_data: &[Vec<ShareData>],
+        current_eval: &[Vec<Vec<u128>>],
         signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<bool>, String> {
         let num_threads = other_server_channels.len();
-        println!("Using {} threads for parallel processing {} data chunks", num_threads, current_data.len());
+        println!("Using {} threads for parallel processing {} data chunks", num_threads, current_eval.len());
 
         // Calculate distance threshold once
         let distance_threshold = if self.config.share_config.metric == DistanceMetric::LInfinity {
@@ -274,18 +284,18 @@ impl FuzzyHeavyHittersProtocol {
         };
 
         // Process prefix sets in parallel chunks
-        let chunk_size = (current_data.len() + num_threads - 1) / num_threads;
-        let mut server_bits = vec![false; current_data.len()];
+        let chunk_size = (current_eval.len() + num_threads - 1) / num_threads;
+        let mut server_bits = vec![false; current_eval.len()];
 
         // Use rayon to process chunks in parallel
         server_bits
             .par_chunks_mut(chunk_size)
-            .zip(current_data.par_chunks(chunk_size))
+            .zip(current_eval.par_chunks(chunk_size))
             .zip(signal_dealer_channels.par_iter())
             .zip(check_dealer_channels.par_iter())
             .zip(threshold_dealer_channels.par_iter())
             .zip(other_server_channels.par_iter())
-            .try_for_each(|(((((result_chunk, data_chunk), signal_dealer_channel_unlocked), check_dealer_channel_unlocked), threshold_dealer_channel_unlocked), other_server_channel_unlocked)| {
+            .try_for_each(|(((((result_chunk, eval_chunk), signal_dealer_channel_unlocked), check_dealer_channel_unlocked), threshold_dealer_channel_unlocked), other_server_channel_unlocked)| {
                 // Use the corresponding dealer channels for this thread
                 let mut signal_dealer_channel = signal_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock signal dealer channel: {}", e))?;
                 let mut check_dealer_channel = check_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock check dealer channel: {}", e))?;
@@ -295,8 +305,8 @@ impl FuzzyHeavyHittersProtocol {
                 let mut aggregated_counts = Vec::new();
 
                 let start = std::time::Instant::now();
-                // Process each data chunk in this chunk using the parallel channels
-                for data in data_chunk.iter() {
+                // Process each evaluation chunk in this chunk using the parallel channels
+                for eval in eval_chunk.iter() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
                     let start = std::time::Instant::now();
                     let check_data_list = match self.config.check_config.property {
@@ -364,17 +374,6 @@ impl FuzzyHeavyHittersProtocol {
                     // Run batched check phase for all client shares with this prefix set
                     // This uses garbled circuits that communicate with the other server via the parallel channel
 
-                    let eval = data.iter()
-                        .map(|share_data| {
-                            match share_data {
-                                ShareData::OKVS { eval } => eval.clone(),
-                                ShareData::IntervalFSS { data: _, eval } => eval.clone(),
-                                ShareData::DistanceFSSL1 { data: _, eval } => eval.clone(),
-                                ShareData::DistanceFSSL2 { data: _, eval } => eval.clone(),
-                                ShareData::DistanceFSSL3 { data: _, eval } => eval.clone(),
-                            }
-                        }).collect::<Vec<Vec<u128>>>();
-                    
                     let start = std::time::Instant::now();
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
                         &eval,

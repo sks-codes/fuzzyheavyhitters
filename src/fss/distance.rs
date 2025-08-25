@@ -32,7 +32,7 @@ impl<const N: usize> DistanceFSSEval<N> {
         out.extend_from_slice(&self.left_eval.1.to_bytes());
         out.extend_from_slice(&self.right_eval.0.to_bytes());
         out.extend_from_slice(&self.right_eval.1.to_bytes());
-        let modulus = self.left_eval.0.modulus();
+        let modulus = self.left_eval.0.y.modulus();
         let num_bits = 128 - modulus.leading_zeros();
         out.extend_from_slice(&self.result.to_le_bytes()[..((num_bits + 7) / 8) as usize]);
         out
