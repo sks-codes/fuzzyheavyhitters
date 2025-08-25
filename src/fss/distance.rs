@@ -25,6 +25,49 @@ pub struct DistanceFSSEval<const N: usize> {
     pub result: u128,
 }
 
+impl<const N: usize> DistanceFSSEval<N> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.left_eval.0.to_bytes());
+        out.extend_from_slice(&self.left_eval.1.to_bytes());
+        out.extend_from_slice(&self.right_eval.0.to_bytes());
+        out.extend_from_slice(&self.right_eval.1.to_bytes());
+        let modulus = self.left_eval.0.modulus();
+        let num_bits = 128 - modulus.leading_zeros();
+        out.extend_from_slice(&self.result.to_le_bytes()[..((num_bits + 7) / 8) as usize]);
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        let mut offset = 0;
+        let (left_eval0, used_left0) = LdcfEval::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_left0;
+        let (left_eval1, used_left1) = LdcfEval::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_left1;
+        let (right_eval0, used_right0) = RdcfEval::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_right0;
+        let (right_eval1, used_right1) = RdcfEval::<N>::from_bytes(&bytes[offset..], modulus);
+        offset += used_right1;
+        let num_bits = 128 - modulus.leading_zeros();
+        let result_bytes = (num_bits + 7) / 8;
+        if bytes.len() < offset + result_bytes as usize {
+            panic!("Insufficient bytes for DistanceFSSEval result");
+        }
+        let mut result_array = [0u8; 16];
+        result_array[..result_bytes as usize].copy_from_slice(&bytes[offset..offset + result_bytes as usize]);
+        let result = u128::from_le_bytes(result_array);
+        offset += result_bytes as usize;
+        (
+            Self {
+                left_eval: (left_eval0, left_eval1),
+                right_eval: (right_eval0, right_eval1),
+                result,
+            },
+            offset
+        )
+    }
+}
+
 impl<const N: usize> DistanceFSSKey<N> {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();

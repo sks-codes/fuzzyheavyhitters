@@ -139,6 +139,44 @@ pub struct RdcfEval<const N: usize> {
     pub y_bit: ModInt,
 }
 
+impl<const N: usize> RdcfEval<N> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.level.to_le_bytes());
+        out.extend_from_slice(&self.seed);
+        out.push(self.bit as u8);
+        out.extend_from_slice(&self.y.to_bytes());
+        out.extend_from_slice(&self.y_bit.to_bytes());
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
+        let mut offset = 0;
+        let level = usize::from_le_bytes(bytes[offset..offset + std::mem::size_of::<usize>()].try_into().expect("Failed to read level"));
+        offset += std::mem::size_of::<usize>();
+        let mut seed = [0u8; AES_BLOCK_SIZE];
+        seed.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
+        offset += AES_BLOCK_SIZE;
+        let bit = bytes[offset] != 0;
+        offset += 1;
+        let (y, used_y) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
+        offset += used_y;
+        let (y_bit, used_y_bit) = ModInt::from_bytes(&bytes[offset..], modulus).expect("Failed to create ModInt from y_bit");
+        offset += used_y_bit;
+
+        (
+            RdcfEval {
+                level,
+                seed,
+                bit,
+                y,
+                y_bit,
+            },
+            offset
+        )
+    }
+}
+
 fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> RdcfData<N> {
     let num_payload_bits = modulus.ilog2();
     let num_payload_bytes = ((num_payload_bits + 7) / 8) as usize;
