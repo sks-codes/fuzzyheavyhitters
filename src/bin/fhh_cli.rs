@@ -9,7 +9,7 @@ use counttree::fuzzy_match::{
     protocol::FuzzyHeavyHittersProtocol,
     share_phase::SharedRange,
     check_phase::{CheckData, CheckMethod, CheckProperty},
-    threshold_phase::ThresholdData,
+    threshold_phase::{ThresholdData, ThresholdMethod},
     client::Client,
     dealer::FssDealer,
 };
@@ -145,6 +145,16 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
         "MuBounded" => CheckProperty::MuBounded,
         _ => return Err(format!("Unsupported check property: {}", cli_config.protocol.check_property)),
     };
+    let check_method = match cli_config.protocol.check_method.as_str() {
+        "FSS" => CheckMethod::FSS,
+        "GC" => CheckMethod::GC,
+        _ => return Err(format!("Unsupported check method: {}", cli_config.protocol.check_method)),
+    };
+    let threshold_method = match cli_config.protocol.threshold_method.as_str() {
+        "GC" => ThresholdMethod::GC,
+        "FSS" => ThresholdMethod::FSS,
+        _ => return Err(format!("Unsupported threshold method: {}", cli_config.protocol.threshold_method)),
+    };
 
     let dealer = FssDealer::new(
         distance_threshold,
@@ -154,6 +164,8 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
         cli_config.protocol.num_clients,
         cli_config.protocol.d,
         check_property,
+        check_method,
+        threshold_method,
     );
 
     // Determine number of parallel channels (use specified num_threads or system parallelism)

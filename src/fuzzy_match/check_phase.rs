@@ -17,13 +17,13 @@ use ocelot::ot::{Receiver, Sender};
 use std::convert::TryInto;
 
 /// Method for check phase comparison
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckMethod {
     GC,
     FSS,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckProperty {
     Equality,
     MuBounded,

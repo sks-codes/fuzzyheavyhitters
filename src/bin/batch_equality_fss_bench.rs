@@ -1,10 +1,13 @@
 use counttree::channel::CommTrackingChannel;
 use counttree::data_structures::modint::ModInt;
 use counttree::fss::dpf::DpfKey;
-use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
-use counttree::fuzzy_match::protocol::request_dealer_equality;
-use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
-use counttree::fuzzy_match::dealer::{FssDealer, DpfKeyBatch};
+use counttree::fuzzy_match::{
+    share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase},
+    check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
+    threshold_phase::ThresholdMethod,
+    protocol::request_dealer_equality,
+    dealer::{FssDealer, DpfKeyBatch},
+};
 use counttree::configs::property_test_config::PropertyTestConfig;
 use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use tarpc::server;
@@ -67,6 +70,8 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         config.num_clients,
         config.d,
         CheckProperty::Equality,
+        CheckMethod::FSS,
+        ThresholdMethod::GC,
     );
 
     println!("Starting dealer benchmark...");

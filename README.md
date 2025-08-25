@@ -80,3 +80,5 @@ The parameters are:
 * `server0` and `server1`: The `IP:port` of tuple for the two servers. The servers can run on different IP addresses, but these IPs must be publicly addressable.
 * `*_batch_size`: The number of each type of RPC request to bundle together. The underlying RPC library has an annoying limit on the size of each RPC request, so you cannot set these values too large.
 * `num_sites` and `zipf_exponent`: Each simulated client samples its private string from a Zipf distribution over strings with parameter `zipf_exponent` and support `num_sites`.
+
+Number of client points: 21581, 59040, 115174

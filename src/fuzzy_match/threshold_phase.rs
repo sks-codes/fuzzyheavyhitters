@@ -12,7 +12,7 @@ use crate::channel::CommTrackingChannel;
 use scuttlebutt::{AesRng, AbstractChannel};
 
 /// Method for threshold comparison
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ThresholdMethod {
     /// Use garbled circuits for threshold comparison
     GC,
