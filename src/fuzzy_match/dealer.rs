@@ -18,6 +18,7 @@ use crate::util::{u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
 use crate::channel::CommTrackingChannel;
 use scuttlebutt::AbstractChannel;
 use std::convert::TryInto;
+use std::thread;
 use rand::Rng;
 use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
@@ -243,11 +244,22 @@ impl FssDealer {
                             keys: keys1,
                             random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
                         };
-                        self.write_equality_key_batch(&mut *check_channel_server0, &batch_server0)
-                            .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
 
-                        self.write_equality_key_batch(&mut *check_channel_server1, &batch_server1)
-                            .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+                        // self.write_equality_key_batch(&mut *check_channel_server0, &batch_server0)
+                        //     .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
+
+                        // self.write_equality_key_batch(&mut *check_channel_server1, &batch_server1)
+                        //     .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+
+                        // Use rayon::join to run both sends in parallel and wait for both to complete
+                        let (res0, res1) = rayon::join(
+                            || self.write_equality_key_batch(&mut check_channel_server0.clone(), &batch_server0),
+                            || self.write_equality_key_batch(&mut check_channel_server1.clone(), &batch_server1),
+                        );
+
+                        res0.map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
+                        res1.map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+
                     },
                     CheckProperty::MuBounded => {
                         let (keys0, keys1, random_pairs) = {
