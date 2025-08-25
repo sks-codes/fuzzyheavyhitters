@@ -92,7 +92,9 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
-        dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<bool>, String> {
         // Convert query points from u128 to Vec<Vec<bool>>
@@ -126,17 +128,19 @@ impl FuzzyHeavyHittersProtocol {
             .collect::<Vec<Vec<ShareData>>>();
 
         // Use parallel batch processing with both dealer and server channels
-        println!("Using full parallel processing with {} dealer channels and {} server channels", 
-                 dealer_channels.len(), other_server_channels.len());
+        println!("Using full parallel processing with {} check dealer channels and {} server channels",
+                 check_dealer_channels.len(), other_server_channels.len());
         let final_results = self.batch_check(
             &data,
-            dealer_channels,
-            other_server_channels,
+            &signal_dealer_channels,
+            &check_dealer_channels,
+            &threshold_dealer_channels,
+            &other_server_channels,
         )?;
 
-        // Shutdown dealers using all dealer channels
-        for (i, dealer_channel) in dealer_channels.iter().enumerate() {
-            let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel {}: {}", i, e))?;
+        // Shutdown dealers using all signal dealer channels
+        for (i, dealer_channel) in signal_dealer_channels.iter().enumerate() {
+            let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock signal dealer channel {}: {}", i, e))?;
             shutdown_dealer(&mut *locked_dealer_channel)?;
         }
 
@@ -147,7 +151,9 @@ impl FuzzyHeavyHittersProtocol {
     pub fn run_server_unknown_dictionary_parallel(
         &self,
         client_shares_list: &[SharedRange],
-        dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<Vec<u128>>, String> {
         let max_bit_length = self.config.share_config.h1;
@@ -198,17 +204,12 @@ impl FuzzyHeavyHittersProtocol {
 
                 println!("Time to expand prefixes: {:?}", start.elapsed());
 
-                // let mut new_data = new_data_chunks.into_iter()
-                //     .flat_map(|chunk| chunk)
-                //     .collect::<Vec<Vec<ShareData>>>();
-                
-                // println!("Time to expand prefixes and collect new data: {:?}", start.elapsed());
-
-
                 let exceeds_threshold_results = self.batch_check(
                     &new_data,
-                    dealer_channels,
-                    other_server_channels,
+                    &signal_dealer_channels,
+                    &check_dealer_channels,
+                    &threshold_dealer_channels,
+                    &other_server_channels,
                 )?;
 
                 println!("Time for batch check: {:?}", start.elapsed());
@@ -242,8 +243,8 @@ impl FuzzyHeavyHittersProtocol {
             })
             .collect();
 
-        // Shutdown dealers using all dealer channels
-        for (i, dealer_channel) in dealer_channels.iter().enumerate() {
+        // Shutdown dealers using all signal dealer channels
+        for (i, dealer_channel) in signal_dealer_channels.iter().enumerate() {
             let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel {}: {}", i, e))?;
             shutdown_dealer(&mut *locked_dealer_channel)?;
         }
@@ -254,7 +255,9 @@ impl FuzzyHeavyHittersProtocol {
     fn batch_check(
         &self,
         current_data: &[Vec<ShareData>],
-        dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
         other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<Vec<bool>, String> {
         let num_threads = other_server_channels.len();
@@ -278,12 +281,16 @@ impl FuzzyHeavyHittersProtocol {
         server_bits
             .par_chunks_mut(chunk_size)
             .zip(current_data.par_chunks(chunk_size))
-            .zip(dealer_channels.par_iter())
+            .zip(signal_dealer_channels.par_iter())
+            .zip(check_dealer_channels.par_iter())
+            .zip(threshold_dealer_channels.par_iter())
             .zip(other_server_channels.par_iter())
-            .try_for_each(|(((result_chunk, data_chunk), dealer_channel), other_server_channel)| {
-                // Use the corresponding dealer channel for this thread
-                let mut dealer_channel_locked = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel: {}", e))?;
-                let mut other_server_channel_locked = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
+            .try_for_each(|(((((result_chunk, data_chunk), signal_dealer_channel_unlocked), check_dealer_channel_unlocked), threshold_dealer_channel_unlocked), other_server_channel_unlocked)| {
+                // Use the corresponding dealer channels for this thread
+                let mut signal_dealer_channel = signal_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock signal dealer channel: {}", e))?;
+                let mut check_dealer_channel = check_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock check dealer channel: {}", e))?;
+                let mut threshold_dealer_channel = threshold_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock threshold dealer channel: {}", e))?;
+                let mut other_server_channel = other_server_channel_unlocked.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
                 let mut local_rng = AesRng::new();
                 let mut aggregated_counts = Vec::new();
 
@@ -291,12 +298,13 @@ impl FuzzyHeavyHittersProtocol {
                 // Process each data chunk in this chunk using the parallel channels
                 for data in data_chunk.iter() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
+                    let start = std::time::Instant::now();
                     let check_data_list = match self.config.check_config.property {
                         CheckProperty::Equality => {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
                                     let batch = 
-                                        request_dealer_equality(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
+                                        request_dealer_equality(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < self.config.num_clients {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
@@ -321,8 +329,8 @@ impl FuzzyHeavyHittersProtocol {
                         CheckProperty::MuBounded => {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
-                                    // Request check FSS keys from dealer using the parallel dealer channel
-                                    let batch = request_dealer_check(&mut dealer_channel_locked, 1u128 << self.config.check_config.h3)?;
+                                    // Request check FSS keys from dealer using the parallel check dealer channel
+                                    let batch = request_dealer_check(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < self.config.num_clients {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
@@ -351,6 +359,8 @@ impl FuzzyHeavyHittersProtocol {
                         }
                     };
 
+                    println!("Time to receive data from dealer: {:?}", start.elapsed());
+
                     // Run batched check phase for all client shares with this prefix set
                     // This uses garbled circuits that communicate with the other server via the parallel channel
 
@@ -364,12 +374,15 @@ impl FuzzyHeavyHittersProtocol {
                                 ShareData::DistanceFSSL3 { data: _, eval } => eval.clone(),
                             }
                         }).collect::<Vec<Vec<u128>>>();
+                    
+                    let start = std::time::Instant::now();
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
                         &eval,
                         &check_data_list,
-                        &mut other_server_channel_locked,
+                        &mut other_server_channel,
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
+                    println!("Time to do batch check after receiving from dealer: {:?}", start.elapsed());
 
                     let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
 
@@ -386,8 +399,8 @@ impl FuzzyHeavyHittersProtocol {
                         vec![ThresholdData::GarbledCircuits { t: self.config.threshold }; aggregated_counts.len()]
                     }
                     ThresholdMethod::FSS => {
-                        // Request threshold FSS keys from dealer using the parallel dealer channel
-                        let batch = request_dealer_threshold(&mut dealer_channel_locked, 1u128 << self.config.threshold_config.h3)?;
+                        // Request threshold FSS keys from dealer using the parallel threshold dealer channel
+                        let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 1u128 << self.config.threshold_config.h3)?;
                         if batch.keys.len() < aggregated_counts.len() {
                             return Err(format!("Dealer provided {} keys but {} are needed", 
                                                batch.keys.len(), aggregated_counts.len()));
@@ -410,7 +423,7 @@ impl FuzzyHeavyHittersProtocol {
                 let results_bool = self.threshold_phase.compare_with_threshold(
                     &aggregated_counts,
                     &threshold_data_list,
-                    &mut other_server_channel_locked,
+                    &mut other_server_channel,
                     &mut local_rng,
                 ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
@@ -499,26 +512,26 @@ impl FuzzyHeavyHittersProtocol {
 }
 
 /// Request FSS keys from dealer
-pub fn request_dealer_check(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+pub fn request_dealer_check(signal_dealer_channel: &mut CommTrackingChannel, check_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
     // Send DealerSignal using custom serialization
     let signal = DealerSignal::RequestCheckKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel.write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel.write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    dealer_channel.flush()
+    signal_dealer_channel.flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    dealer_channel.read_bytes(&mut len_bytes)
+    check_dealer_channel.read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    dealer_channel.read_bytes(&mut batch_data)
+    check_dealer_channel.read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
     // Use output modulus from threshold config for deserialization
@@ -526,53 +539,59 @@ pub fn request_dealer_check(dealer_channel: &mut CommTrackingChannel, modulus: u
     Ok(fss_key_batch)
 }
 
-pub fn request_dealer_equality(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
+pub fn request_dealer_equality(signal_dealer_channel: &mut CommTrackingChannel, check_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
     // Send DealerSignal using custom serialization
+    let start = std::time::Instant::now();
     let signal = DealerSignal::RequestEqualityKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel.write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel.write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    dealer_channel.flush()
+    signal_dealer_channel.flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
+
+    println!("Time to request: {:?}", start.elapsed());
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    dealer_channel.read_bytes(&mut len_bytes)
+    check_dealer_channel.read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    dealer_channel.read_bytes(&mut batch_data)
+    check_dealer_channel.read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
+    
+    println!("Time for dealer to get back: {:?}", start.elapsed());
 
     // Use output modulus from threshold config for deserialization
     let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    println!("Time to deserialize: {:?}", start.elapsed());
     Ok(fss_key_batch)
 }
 
-pub fn request_dealer_threshold(dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+pub fn request_dealer_threshold(signal_dealer_channel: &mut CommTrackingChannel, threshold_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
     // Send DealerSignal using custom serialization
     let signal = DealerSignal::RequestThresholdKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel.write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel.write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    dealer_channel.flush()
+    signal_dealer_channel.flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    dealer_channel.read_bytes(&mut len_bytes)
+    threshold_dealer_channel.read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    dealer_channel.read_bytes(&mut batch_data)
+    threshold_dealer_channel.read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
     // Use output modulus from threshold config for deserialization

@@ -8,7 +8,7 @@ use counttree::configs::cli_config::{CliConfig, ProtocolParameters, NetworkConfi
 use counttree::fuzzy_match::{
     protocol::FuzzyHeavyHittersProtocol,
     share_phase::SharedRange,
-    check_phase::{CheckData, CheckMethod},
+    check_phase::{CheckData, CheckMethod, CheckProperty},
     threshold_phase::ThresholdData,
     client::Client,
     dealer::FssDealer,
@@ -140,6 +140,11 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
     let cli_config = CliConfig::from_file(config_path)?;
 
     let distance_threshold = get_distance_threshold(cli_config.protocol.delta, &cli_config.protocol.distance_metric);
+    let check_property = match cli_config.protocol.check_property.as_str() {
+        "Equality" => CheckProperty::Equality,
+        "MuBounded" => CheckProperty::MuBounded,
+        _ => return Err(format!("Unsupported check property: {}", cli_config.protocol.check_property)),
+    };
 
     let dealer = FssDealer::new(
         distance_threshold,
@@ -148,6 +153,7 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
         cli_config.protocol.h3,
         cli_config.protocol.num_clients,
         cli_config.protocol.d,
+        check_property,
     );
 
     // Determine number of parallel channels (use specified num_threads or system parallelism)
@@ -156,26 +162,57 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
     println!("Setting up {} parallel dealer channels to each server...", num_channels);
 
     // Set up parallel channels to server 0
-    let channels_server0 = setup_parallel_channels(
-        true, // is_connector (dealer connects to servers)
+    let signal_channels_server0 = setup_parallel_channels(
+        true,
         num_channels,
         &cli_config.network.server0_addr,
         cli_config.network.dealer_to_server0_port,
     )?;
+    let check_channels_server0 = setup_parallel_channels(
+        true, // is_connector (dealer connects to servers)
+        num_channels,
+        &cli_config.network.server0_addr,
+        cli_config.network.dealer_to_server0_port + num_channels as u16,
+    )?;
+    let threshold_channels_server0 = setup_parallel_channels(
+        true, // is_connector (dealer connects to servers)
+        num_channels,
+        &cli_config.network.server0_addr,
+        cli_config.network.dealer_to_server0_port + 2 * num_channels as u16,
+    )?;
 
     // Set up parallel channels to server 1
-    let channels_server1 = setup_parallel_channels(
-        true, // is_connector (dealer connects to servers) 
+    let signal_channels_server1 = setup_parallel_channels(
+        true,
         num_channels,
         &cli_config.network.server1_addr,
         cli_config.network.dealer_to_server1_port,
+    )?;
+    let check_channels_server1 = setup_parallel_channels(
+        true, // is_connector (dealer connects to servers)
+        num_channels,
+        &cli_config.network.server1_addr,
+        cli_config.network.dealer_to_server1_port + num_channels as u16,
+    )?;
+    let threshold_channels_server1 = setup_parallel_channels(
+        true, // is_connector (dealer connects to servers)
+        num_channels,
+        &cli_config.network.server1_addr,
+        cli_config.network.dealer_to_server1_port + 2 * num_channels as u16,
     )?;
 
     println!("Connected to both servers with {} channels each", num_channels);
 
     let dealer_start = Instant::now();
-    dealer.run_parallel(&channels_server0, &channels_server1)
-        .map_err(|e| format!("Failed to run parallel dealer protocol: {}", e))?;
+    dealer.run_parallel(
+        &signal_channels_server0,
+        &signal_channels_server1,
+        &check_channels_server0,
+        &check_channels_server1,
+        &threshold_channels_server0,
+        &threshold_channels_server1,
+    )
+    .map_err(|e| format!("Failed to run parallel dealer protocol: {}", e))?;
     let dealer_time = dealer_start.elapsed();
     
     let total_time = start_time.elapsed();
@@ -185,15 +222,43 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
     let mut total_bytes_received_0 = 0;
     let mut total_bytes_sent_1 = 0;
     let mut total_bytes_received_1 = 0;
-    
-    for channel in &channels_server0 {
+
+    for channel in &signal_channels_server0 {
         let channel_guard = channel.lock().unwrap();
         let (sent, received) = channel_guard.get_communication_stats();
         total_bytes_sent_0 += sent;
         total_bytes_received_0 += received;
     }
-    
-    for channel in &channels_server1 {
+
+    for channel in &signal_channels_server1 {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_bytes_sent_1 += sent;
+        total_bytes_received_1 += received;
+    }
+
+    for channel in &check_channels_server0 {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_bytes_sent_0 += sent;
+        total_bytes_received_0 += received;
+    }
+
+    for channel in &check_channels_server1 {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_bytes_sent_1 += sent;
+        total_bytes_received_1 += received;
+    }
+
+    for channel in &threshold_channels_server0 {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_bytes_sent_0 += sent;
+        total_bytes_received_0 += received;
+    }
+
+    for channel in &threshold_channels_server1 {
         let channel_guard = channel.lock().unwrap();
         let (sent, received) = channel_guard.get_communication_stats();
         total_bytes_sent_1 += sent;
@@ -348,14 +413,27 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         cli_config.network.dealer_to_server0_port
     };
     
-    let dealer_channels = setup_parallel_channels(
+    let signal_dealer_channels = setup_parallel_channels(
+        false,
+        num_dealer_channels,
+        &server_addr,
+        dealer_to_server_port,
+    )?;
+    let check_dealer_channels = setup_parallel_channels(
         false, // is_connector (server listens for dealer connections)
         num_dealer_channels,
         &server_addr, // listen on all interfaces
-        dealer_to_server_port,
+        dealer_to_server_port + num_dealer_channels as u16,
     )?;
-    
-    println!("Server {}: Successfully established {} dealer channels", server_id, dealer_channels.len());
+    let threshold_dealer_channels = setup_parallel_channels(
+        false, // is_connector (server listens for dealer connections)
+        num_dealer_channels,
+        &server_addr, // listen on all interfaces
+        dealer_to_server_port + 2 * num_dealer_channels as u16, // Next set of ports for threshold
+    )?;
+
+    println!("Server {}: Successfully established {} check dealer channels and {} threshold dealer channels",
+             server_id, check_dealer_channels.len(), threshold_dealer_channels.len());
 
     // Set up parallel server-to-server communication channels
     let server0_addr = &cli_config.network.server0_addr;
@@ -395,12 +473,14 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         
         // Run the protocol for known dictionary
         println!("Server {}: Using {} dealer channels and {} server channels for parallel processing", 
-                 server_id, dealer_channels.len(), other_server_channels.len());
+                 server_id, signal_dealer_channels.len(), other_server_channels.len());
         
         let results = protocol.run_server_known_dictionary_parallel(
             &shares,
             &query_points,
-            &dealer_channels,
+            &signal_dealer_channels,
+            &check_dealer_channels,
+            &threshold_dealer_channels,
             &other_server_channels,
         )?;
         println!("Server {}: Protocol execution completed", server_id);
@@ -413,7 +493,9 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         // Run the protocol for unknown dictionary
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
-            &dealer_channels,
+            &signal_dealer_channels,
+            &check_dealer_channels,
+            &threshold_dealer_channels,
             &other_server_channels,
         )?;
         println!("Server {}: Protocol execution completed", server_id);
@@ -434,20 +516,32 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         total_other_server_bytes_sent += sent;
         total_other_server_bytes_received += received;
     }
-        
-    for channel in &dealer_channels {
+
+    for channel in &signal_dealer_channels {
         let channel_guard = channel.lock().unwrap();
         let (sent, received) = channel_guard.get_communication_stats();
         total_dealer_bytes_sent += sent;
         total_dealer_bytes_received += received;
     }
-        
+    for channel in &check_dealer_channels {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_dealer_bytes_sent += sent;
+        total_dealer_bytes_received += received;
+    }
+    for channel in &threshold_dealer_channels {
+        let channel_guard = channel.lock().unwrap();
+        let (sent, received) = channel_guard.get_communication_stats();
+        total_dealer_bytes_sent += sent;
+        total_dealer_bytes_received += received;
+    }
+
     println!("\n=== Server {} Performance Summary ===", server_id);
     println!("📊 Protocol execution time: {:.2?}", protocol_time);
     println!("📡 Communication with other server ({} channels):", other_server_channels.len());
     println!("   Bytes sent: {} bytes ({:.2} KB)", total_other_server_bytes_sent, total_other_server_bytes_sent as f64 / 1024.0);
     println!("   Bytes received: {} bytes ({:.2} KB)", total_other_server_bytes_received, total_other_server_bytes_received as f64 / 1024.0);
-    println!("📡 Communication with dealer ({} channels):", dealer_channels.len());
+    println!("📡 Communication with dealer ({} channels):", signal_dealer_channels.len());
     println!("   Bytes sent: {} bytes ({:.2} KB)", total_dealer_bytes_sent, total_dealer_bytes_sent as f64 / 1024.0);
     println!("   Bytes received: {} bytes ({:.2} KB)", total_dealer_bytes_received, total_dealer_bytes_received as f64 / 1024.0);
     println!("📡 Total communication: {} bytes ({:.2} KB)", 

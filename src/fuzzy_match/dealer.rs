@@ -12,6 +12,7 @@ use crate::fss::{
     rdcf::RdcfKey,
     dpf::DpfKey,
 };
+use crate::fuzzy_match::check_phase::CheckProperty;
 use crate::data_structures::payload::RingVec;
 use crate::util::{u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
 use crate::channel::CommTrackingChannel;
@@ -154,6 +155,7 @@ pub struct FssDealer {
     check_output_bit_length: usize,
     n_clients: usize,
     dimensions: usize,
+    check_property: CheckProperty,
 }
 
 impl FssDealer {
@@ -165,6 +167,7 @@ impl FssDealer {
         check_output_bit_length: usize,
         n_clients: usize,
         dimensions: usize,
+        check_property: CheckProperty,
     ) -> Self {
         FssDealer {
             distance_threshold,
@@ -173,30 +176,39 @@ impl FssDealer {
             check_output_bit_length,
             n_clients,
             dimensions,
+            check_property,
         }
     }
 
     /// Run the dealer with multiple channels - handle key requests from multiple parallel channels
     pub fn run_parallel(
-        &self,  
-        channels_server0: &[Arc<Mutex<CommTrackingChannel>>],
-        channels_server1: &[Arc<Mutex<CommTrackingChannel>>],
+        &self,
+        signal_channels_server0: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_channels_server1: &[Arc<Mutex<CommTrackingChannel>>],
+        check_channels_server0: &[Arc<Mutex<CommTrackingChannel>>],
+        check_channels_server1: &[Arc<Mutex<CommTrackingChannel>>],
+        threshold_channels_server0: &[Arc<Mutex<CommTrackingChannel>>],
+        threshold_channels_server1: &[Arc<Mutex<CommTrackingChannel>>],
     ) -> Result<(), String> {
-        println!("FSS Dealer starting with {} channels per server...", channels_server0.len());
+        println!("FSS Dealer starting with {} channels per server...", check_channels_server0.len());
 
-        if channels_server0.len() != channels_server1.len() {
+        if check_channels_server0.len() != check_channels_server1.len() {
             return Err(format!("Mismatch in channel count: server0 has {}, server1 has {}", 
-                             channels_server0.len(), channels_server1.len()));
+                             check_channels_server0.len(), check_channels_server1.len()));
+        }
+        if threshold_channels_server0.len() != threshold_channels_server1.len() {
+            return Err(format!("Mismatch in threshold channel count: server0 has {}, server1 has {}", 
+                             threshold_channels_server0.len(), threshold_channels_server1.len()));
         }
 
         println!("Generated initial FSS keys, dealer ready");
 
         // Process each channel pair in parallel - each gets its own persistent thread
-        channels_server0
-            .par_iter()
-            .zip(channels_server1.par_iter())
+        (signal_channels_server0.par_iter().zip(signal_channels_server1.par_iter()))
+            .zip(check_channels_server0.par_iter().zip(check_channels_server1.par_iter()))
+            .zip(threshold_channels_server0.par_iter().zip(threshold_channels_server1.par_iter()))
             .enumerate()
-            .try_for_each(|(channel_idx, (server0_channel, server1_channel))| {
+            .try_for_each(|(channel_idx, (((signal_channel_server0_unlock, signal_channel_server1_unlock), (check_channel_server0_unlock, check_channel_server1_unlock)), (threshold_channel_server0_unlock, threshold_channel_server1_unlock)))| {
                 let mut equality_keys = self.generate_fss_keys_for_equality().expect("Failed to generate equality keys");
                 let mut check_keys = self.generate_fss_keys_for_check().expect("Failed to generate check keys");
                 let mut threshold_keys = self.generate_fss_keys_for_threshold().expect("Failed to generate threshold keys");
@@ -205,11 +217,87 @@ impl FssDealer {
                 let mut local_shutdown = false;
                 
                 // Lock the channels once at the beginning since this thread owns them
-                let mut server0_channel_guard = server0_channel.lock()
-                    .map_err(|e| format!("Failed to lock server0 channel {}: {}", channel_idx, e))?;
-                let mut server1_channel_guard = server1_channel.lock()
-                    .map_err(|e| format!("Failed to lock server1 channel {}: {}", channel_idx, e))?;
-                
+                let mut signal_channel_server0 = signal_channel_server0_unlock.lock()
+                    .map_err(|e| format!("Failed to lock signal channel server0 {}: {}", channel_idx, e))?;
+                let mut signal_channel_server1 = signal_channel_server1_unlock.lock()
+                    .map_err(|e| format!("Failed to lock signal channel server1 {}: {}", channel_idx, e))?;
+                let mut check_channel_server0 = check_channel_server0_unlock.lock()
+                    .map_err(|e| format!("Failed to lock check channel server0 {}: {}", channel_idx, e))?;
+                let mut check_channel_server1 = check_channel_server1_unlock.lock()
+                    .map_err(|e| format!("Failed to lock check channel server1 {}: {}", channel_idx, e))?;
+                let mut threshold_channel_server0 = threshold_channel_server0_unlock.lock()
+                    .map_err(|e| format!("Failed to lock threshold channel server0 {}: {}", channel_idx, e))?;
+                let mut threshold_channel_server1 = threshold_channel_server1_unlock.lock()
+                    .map_err(|e| format!("Failed to lock threshold channel server1 {}: {}", channel_idx, e))?;
+
+                match self.check_property {
+                    CheckProperty::Equality => {
+                        let (keys0, keys1, random_pairs) = equality_keys.clone();
+
+                        let batch_server0 = DpfKeyBatch {
+                            keys: keys0,
+                            random_values: random_pairs.iter().map(|(r0, _)| r0.clone()).collect(),
+                        };
+
+                        let batch_server1 = DpfKeyBatch {
+                            keys: keys1,
+                            random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
+                        };
+                        self.write_equality_key_batch(&mut *check_channel_server0, &batch_server0)
+                            .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
+
+                        self.write_equality_key_batch(&mut *check_channel_server1, &batch_server1)
+                            .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+                    },
+                    CheckProperty::MuBounded => {
+                        let (keys0, keys1, random_pairs) = {
+                            let current_keys = check_keys.clone();
+                            current_keys
+                        };
+
+                        // Send keys to both servers on this channel
+                        let batch_server0 = FssKeyBatch {
+                            keys: keys0,
+                            random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
+                        };
+
+                        let batch_server1 = FssKeyBatch {
+                            keys: keys1,
+                            random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                        };
+                        self.write_check_key_batch(&mut *check_channel_server0, &batch_server0)
+                            .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
+
+                        self.write_check_key_batch(&mut *check_channel_server1, &batch_server1)
+                            .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
+                    }
+                }
+
+                let (keys0, keys1, random_pairs) = {
+                    let current_keys = threshold_keys.clone();
+                    current_keys
+                };
+                                    
+                // Create batches
+                let batch_server0 = FssKeyBatch {
+                    keys: keys0,
+                    random_values: random_pairs.iter().map(|(r0, _)| *r0).collect(),
+                };
+
+                let batch_server1 = FssKeyBatch {
+                    keys: keys1,
+                    random_values: random_pairs.iter().map(|(_, r1)| *r1).collect(),
+                };
+
+                // Send to server 0 on this channel
+                self.write_threshold_key_batch(&mut *threshold_channel_server0, &batch_server0)
+                    .map_err(|e| format!("Failed to send threshold keys to server 0 on channel {}: {}", channel_idx, e))?;
+
+                // Send to server 1 on this channel
+                self.write_threshold_key_batch(&mut *threshold_channel_server1, &batch_server1)
+                    .map_err(|e| format!("Failed to send threshold keys to server 1 on channel {}: {}", channel_idx, e))?;
+
+
                 // Each channel pair runs in its own persistent loop
                 loop {
                     // Check if local shutdown was triggered
@@ -218,8 +306,8 @@ impl FssDealer {
                         break;
                     }
 
-                    let server0_signal = self.read_dealer_signal(&mut *server0_channel_guard);
-                    let server1_signal = self.read_dealer_signal(&mut *server1_channel_guard);
+                    let server0_signal = self.read_dealer_signal(&mut *signal_channel_server0);
+                    let server1_signal = self.read_dealer_signal(&mut *signal_channel_server1);
                     assert_eq!(server0_signal.clone().unwrap(), server1_signal.unwrap(),
                         "Signals from both servers should match");
 
@@ -228,6 +316,7 @@ impl FssDealer {
                         Ok(signal) => {
                             match signal {
                                 DealerSignal::RequestEqualityKeys => {
+                                    equality_keys = self.generate_fss_keys_for_equality().map_err(|e| format!("Failed to generate equality keys: {}", e))?;
                                     let (keys0, keys1, random_pairs) = {
                                         let current_keys = equality_keys.clone();
                                         current_keys
@@ -243,13 +332,11 @@ impl FssDealer {
                                         random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
                                     };
 
-                                    self.write_equality_key_batch(&mut *server0_channel_guard, &batch_server0)
+                                    self.write_equality_key_batch(&mut *check_channel_server0, &batch_server0)
                                         .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
 
-                                    self.write_equality_key_batch(&mut *server1_channel_guard, &batch_server1)
+                                    self.write_equality_key_batch(&mut *check_channel_server1, &batch_server1)
                                         .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
-
-                                    equality_keys = self.generate_fss_keys_for_equality().map_err(|e| format!("Failed to generate equality keys: {}", e))?;
                                 }
                                 DealerSignal::RequestCheckKeys => {
                                     // Get current keys and generate new ones
@@ -270,11 +357,11 @@ impl FssDealer {
                                     };
 
                                     // Send to server 0 on this channel
-                                    self.write_check_key_batch(&mut *server0_channel_guard, &batch_server0)
+                                    self.write_check_key_batch(&mut *check_channel_server0, &batch_server0)
                                         .map_err(|e| format!("Failed to send keys to server 0 on channel {}: {}", channel_idx, e))?;
 
                                     // Send to server 1 on this channel
-                                    self.write_check_key_batch(&mut *server1_channel_guard, &batch_server1)
+                                    self.write_check_key_batch(&mut *check_channel_server1, &batch_server1)
                                         .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
 
                                     check_keys = self.generate_fss_keys_for_check().map_err(|e| format!("Failed to generate check keys: {}", e))?;
@@ -298,11 +385,11 @@ impl FssDealer {
                                     };
 
                                     // Send to server 0 on this channel
-                                    self.write_threshold_key_batch(&mut *server0_channel_guard, &batch_server0)
+                                    self.write_threshold_key_batch(&mut *threshold_channel_server0, &batch_server0)
                                         .map_err(|e| format!("Failed to send threshold keys to server 0 on channel {}: {}", channel_idx, e))?;
 
                                     // Send to server 1 on this channel
-                                    self.write_threshold_key_batch(&mut *server1_channel_guard, &batch_server1)
+                                    self.write_threshold_key_batch(&mut *threshold_channel_server1, &batch_server1)
                                         .map_err(|e| format!("Failed to send threshold keys to server 1 on channel {}: {}", channel_idx, e))?;
 
                                     threshold_keys = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
