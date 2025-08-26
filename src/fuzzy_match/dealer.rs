@@ -381,6 +381,7 @@ impl FssDealer {
                                         .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
                                 }
                                 DealerSignal::RequestCheckKeys => {
+                                    check_keys = self.generate_fss_keys_for_check().map_err(|e| format!("Failed to generate check keys: {}", e))?;
                                     // Get current keys and generate new ones
                                     let (keys0, keys1, random_pairs) = {
                                         let current_keys = check_keys.clone();
@@ -405,10 +406,9 @@ impl FssDealer {
                                     // Send to server 1 on this channel
                                     self.write_check_key_batch(&mut *check_channel_server1, &batch_server1)
                                         .map_err(|e| format!("Failed to send keys to server 1 on channel {}: {}", channel_idx, e))?;
-
-                                    check_keys = self.generate_fss_keys_for_check().map_err(|e| format!("Failed to generate check keys: {}", e))?;
                                 }
                                 DealerSignal::RequestThresholdKeys => {
+                                    threshold_keys = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
                                     // Get current keys
                                     let (keys0, keys1, random_pairs) = {
                                         let current_keys = threshold_keys.clone();
@@ -433,8 +433,6 @@ impl FssDealer {
                                     // Send to server 1 on this channel
                                     self.write_threshold_key_batch(&mut *threshold_channel_server1, &batch_server1)
                                         .map_err(|e| format!("Failed to send threshold keys to server 1 on channel {}: {}", channel_idx, e))?;
-
-                                    threshold_keys = self.generate_fss_keys_for_threshold().map_err(|e| format!("Failed to generate threshold keys: {}", e))?;
                                 }
                                 DealerSignal::Shutdown => {
                                     println!("Dealer: Received shutdown signal on channel {}, terminating this thread", channel_idx);
