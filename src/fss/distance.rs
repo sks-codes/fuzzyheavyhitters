@@ -256,6 +256,7 @@ impl<const N: usize> DistanceFSSKey<N> {
     pub fn eval_distance_fss(&self, x_bits: &[bool], input_len: usize, modulus: u128) -> u128 {
         let left_eval = self.left_fss.0.eval_ldcf(x_bits, modulus) + self.left_fss.1.eval_ldcf(x_bits, modulus);
         let right_eval = self.right_fss.0.eval_rdcf(x_bits, modulus) + self.right_fss.1.eval_rdcf(x_bits, modulus);
+        println!("Left Eval: {:?}, Right Eval: {:?}", left_eval, right_eval);
         let mut x = 0;
         for i in 0..x_bits.len() {
             if x_bits[i] {

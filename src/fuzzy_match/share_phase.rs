@@ -1024,30 +1024,30 @@ impl SharePhase {
                     )),
                 }
             },
-            SharedRange::DistanceFSSL1 { keys, role: _ } => {
+            SharedRange::DistanceFSSL1 { keys, role } => {
                 match share_data {
                     ShareData::DistanceFSSL1 { data, eval } => {
-                        self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension)
+                        self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension, *role)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL1 shared range".to_string()
                     )),
                 }
             },
-            SharedRange::DistanceFSSL2 { keys, role: _ } => {
+            SharedRange::DistanceFSSL2 { keys, role } => {
                 match share_data {
                     ShareData::DistanceFSSL2 { data, eval } => {
-                        self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension)
+                        self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension, *role)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL2 shared range".to_string()
                     )),
                 }
             },
-            SharedRange::DistanceFSSL3 { keys, role: _ } => {
+            SharedRange::DistanceFSSL3 { keys, role } => {
                 match share_data {
                     ShareData::DistanceFSSL3 { data, eval } => {
-                        self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension)
+                        self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension, *role)
                     },
                     _ => Err(SharePhaseError::InvalidShareData(
                         "Expected DistanceFSS share data for DistanceFSSL3 shared range".to_string()
@@ -1128,6 +1128,7 @@ impl SharePhase {
         data: &[DistanceFSSEval<N>],
         eval: &[u128],
         dimension: usize,
+        role: bool,
     ) -> Result<(ShareData, ShareData), SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
         let input_len = self.config.h1;
@@ -1138,10 +1139,18 @@ impl SharePhase {
         (data0[dimension], data1[dimension]) = key.expand_prefix(prefix, &data[dimension], input_len, modulus);
 
         let mut eval0 = eval.to_vec();
-        eval0[dimension] = data0[dimension].result;
+        eval0[dimension] = if !role {
+            data0[dimension].result
+        } else {
+            (modulus - data0[dimension].result) % modulus
+        };
 
         let mut eval1 = eval.to_vec();
-        eval1[dimension] = data1[dimension].result;
+        eval1[dimension] = if !role {
+            data1[dimension].result
+        } else {
+            (modulus - data1[dimension].result) % modulus
+        };
 
         match N {
             2 => {

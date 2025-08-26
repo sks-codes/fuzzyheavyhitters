@@ -176,6 +176,7 @@ impl FuzzyHeavyHittersProtocol {
                             for (idx, shared_range) in client_shares_list.iter().enumerate() {
                                 let (data_dim, _) = ShareData::from_bytes(&data[idx], eval_len, eval_modulus);
                                 let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &data_dim, &prefix[dim], dim).unwrap();
+
                                 data0.push(eval0.to_bytes(eval_len));
                                 data1.push(eval1.to_bytes(eval_len));
                             }
@@ -183,6 +184,7 @@ impl FuzzyHeavyHittersProtocol {
                         })
                         .collect::<Vec<Vec<Vec<u8>>>>()
                 });
+                println!("Time to collect new data: {:?}", start.elapsed());
                 let new_eval = thread_pool.install(|| {
                     new_data.par_iter().map(|data_bytes| {
                         data_bytes.iter()
@@ -199,6 +201,8 @@ impl FuzzyHeavyHittersProtocol {
                         .collect::<Vec<Vec<u128>>>()
                     }).collect::<Vec<Vec<Vec<u128>>>>()
                 });
+
+                println!("New evals: {:?}", new_eval);
 
                 println!("Time to expand prefixes for all clients: {:?}", start.elapsed());
 
@@ -282,6 +286,8 @@ impl FuzzyHeavyHittersProtocol {
                 _ => return Err("Unsupported distance metric for threshold".to_string()),
             }
         };
+
+        println!("Distance Threshold: {:?}", distance_threshold);
 
         // Process prefix sets in parallel chunks
         let chunk_size = (current_eval.len() + num_threads - 1) / num_threads;

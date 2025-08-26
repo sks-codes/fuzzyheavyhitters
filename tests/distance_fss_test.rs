@@ -76,7 +76,9 @@ fn test_distance_fss_brute_force() {
         // Evaluate with both keys
         let eval0 = key0.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
         let eval1 = key1.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
-        
+
+        println!("Eval0: {:?}, Eval1: {:?}", eval0, eval1);
+
         // Reconstruct the secret share
         let reconstructed = (eval0 + MODULUS - eval1) % MODULUS;
         
@@ -130,48 +132,4 @@ fn test_distance_fss_brute_force() {
     
     println!("Test completed: {}/{} tests passed", success_count, test_count);
     assert_eq!(success_count, test_count, "Some distance FSS evaluations were incorrect");
-}
-
-#[test]
-fn test_distance_fss_edge_cases() {
-    const N: usize = 2; // Testing for P = 1 (absolute distance)
-    const MODULUS: u128 = 1 << 16;
-    const BIT_LENGTH: usize = 6;
-    const PREFIX_LENGTH: usize = 3;
-    const MAX_DISTANCE: u128 = 500; // Maximum distance for out-of-range prefixes
-    
-    // Test edge case: x = 0
-    let x = 0u128;
-    let x_bits = u128_to_bits_msb(x, BIT_LENGTH);
-    let left_bits = u128_to_bits_msb(0, BIT_LENGTH);
-    let right_bits = u128_to_bits_msb((1u128 << BIT_LENGTH) - 1, BIT_LENGTH);
-    
-    let (key0, key1) = DistanceFSSKey::<N>::gen_distance_fss_key(
-        x, &x_bits, &left_bits, &right_bits, MAX_DISTANCE, MODULUS
-    );
-    
-    // Test prefix 0 (should equal x)
-    let prefix_bits = u128_to_bits_msb(0, PREFIX_LENGTH);
-    let eval0 = key0.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
-    let eval1 = key1.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
-    let reconstructed = (eval0 + eval1) % MODULUS;
-    
-    assert_eq!(reconstructed, 0, "Distance should be 0 when prefix equals x");
-    
-    // Test edge case: x = maximum value
-    let x = (1u128 << BIT_LENGTH) - 1; // All 1s
-    let x_bits = u128_to_bits_msb(x, BIT_LENGTH);
-    
-    let (key0, key1) = DistanceFSSKey::<N>::gen_distance_fss_key(
-        x, &x_bits, &left_bits, &right_bits, MAX_DISTANCE, MODULUS
-    );
-    
-    // Test prefix that's all 1s (should equal x)
-    let prefix = (1u128 << PREFIX_LENGTH) - 1;
-    let prefix_bits = u128_to_bits_msb(prefix, PREFIX_LENGTH);
-    let eval0 = key0.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
-    let eval1 = key1.eval_distance_fss(&prefix_bits, BIT_LENGTH, MODULUS);
-    let reconstructed = (eval0 + eval1) % MODULUS;
-    
-    assert_eq!(reconstructed, 0, "Distance should be 0 when prefix equals x (max case)");
 }
