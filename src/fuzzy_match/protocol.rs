@@ -237,6 +237,8 @@ impl FuzzyHeavyHittersProtocol {
                         current_prefixes.push(std::mem::take(prefix));
                     }
                 }
+                new_data.clear();
+                new_prefixes.clear();
                 // new_data/new_prefixes now contain empty Vecs for moved entries; they'll be dropped.
                 println!("Time to filter data based on threshold (move-based): {:?}", start_copy.elapsed());
 
