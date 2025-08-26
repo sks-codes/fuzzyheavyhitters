@@ -185,7 +185,7 @@ impl FuzzyHeavyHittersProtocol {
                         .collect::<Vec<Vec<Vec<u8>>>>()
                 });
                 println!("Time to collect new data: {:?}", start.elapsed());
-                let new_eval = thread_pool.install(|| {
+                let mut new_eval = thread_pool.install(|| {
                     new_data.par_iter().map(|data_bytes| {
                         data_bytes.iter()
                         .map(|bytes| {
