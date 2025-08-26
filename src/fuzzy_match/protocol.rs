@@ -342,6 +342,7 @@ impl FuzzyHeavyHittersProtocol {
                                 CheckMethod::FSS => {
                                     // Request check FSS keys from dealer using the parallel check dealer channel
                                     let batch = request_dealer_check(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << self.config.check_config.h3)?;
+                                    println!("Received dealer check keys");
 
                                     if batch.keys.len() < self.config.num_clients {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
