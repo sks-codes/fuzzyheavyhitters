@@ -396,18 +396,17 @@ impl FuzzyHeavyHittersProtocol {
                     }
                     ThresholdMethod::FSS => {
                         // Request threshold FSS keys from dealer using the parallel threshold dealer channel
-                        let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 2)?;
-                        if batch.keys.len() < aggregated_counts.len() {
-                            return Err(format!("Dealer provided {} keys but {} are needed", 
-                                               batch.keys.len(), aggregated_counts.len()));
-                        }
-                        let mut threshold_data_vec = Vec::new();
-                        for i in 0..aggregated_counts.len() {
-                            threshold_data_vec.push(ThresholdData::IntervalFSS {
-                                fss_key: batch.keys[i].clone(),
-                                random_value: batch.random_values[i],
-                            });
-                        }
+                        let threshold_data_vec = (0..aggregated_counts.len()).map(|_| {
+                            let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 2).unwrap();
+                            if batch.keys.len() < 1 {
+                                panic!("Dealer provided {} keys but {} are needed", batch.keys.len(), 1);
+                            }
+
+                            ThresholdData::IntervalFSS {
+                                fss_key: batch.keys[0].clone(),
+                                random_value: batch.random_values[0],
+                            }
+                        }).collect::<Vec<ThresholdData>>();
                         threshold_data_vec
                     }
                 };
