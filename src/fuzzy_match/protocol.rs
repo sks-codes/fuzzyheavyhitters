@@ -230,6 +230,7 @@ impl FuzzyHeavyHittersProtocol {
                 // Use std::mem::take to move qualifying entries out without cloning.
                 current_data.clear();
                 current_prefixes.clear();
+                new_eval.clear();
                 for ((data, prefix), &exceed) in new_data.iter_mut().zip(new_prefixes.iter_mut()).zip(exceeds_threshold_results.iter()) {
                     if exceed {
                         current_data.push(std::mem::take(data));
