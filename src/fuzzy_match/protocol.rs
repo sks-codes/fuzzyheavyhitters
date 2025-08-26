@@ -396,7 +396,7 @@ impl FuzzyHeavyHittersProtocol {
                     }
                     ThresholdMethod::FSS => {
                         // Request threshold FSS keys from dealer using the parallel threshold dealer channel
-                        let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 1u128 << self.config.threshold_config.h3)?;
+                        let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 2)?;
                         if batch.keys.len() < aggregated_counts.len() {
                             return Err(format!("Dealer provided {} keys but {} are needed", 
                                                batch.keys.len(), aggregated_counts.len()));
