@@ -215,7 +215,6 @@ impl FuzzyHeavyHittersProtocol {
                 }
 
                 println!("Time to expand prefixes: {:?}", start.elapsed());
-                println!("New prefixes: {:?}", new_prefixes);
 
                 let exceeds_threshold_results = self.batch_check(
                     &new_eval,
@@ -285,8 +284,6 @@ impl FuzzyHeavyHittersProtocol {
                 _ => return Err("Unsupported distance metric for threshold".to_string()),
             }
         };
-
-        println!("Distance Threshold: {:?}", distance_threshold);
 
         // Process prefix sets in parallel chunks
         let chunk_size = (current_eval.len() + num_threads - 1) / num_threads;
@@ -382,9 +379,6 @@ impl FuzzyHeavyHittersProtocol {
                         &mut other_server_channel,
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
-
-                    println!("Evals: {:?}", &eval[..5]);
-                    println!("Match results: {:?}", &match_results[..5]);
 
                     let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
 
