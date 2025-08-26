@@ -349,6 +349,10 @@ impl FssDealer {
                     assert_eq!(server0_signal.clone().unwrap(), server1_signal.unwrap(),
                         "Signals from both servers should match");
 
+                    if let Ok(signal) = server0_signal {
+                        println!("Received signal: {:?}", signal);
+                    }
+
                     // Check if there's a signal waiting on the server0 channel
                     match server0_signal {
                         Ok(signal) => {
