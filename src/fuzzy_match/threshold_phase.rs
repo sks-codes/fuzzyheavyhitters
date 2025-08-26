@@ -161,7 +161,7 @@ impl ThresholdPhase {
             combined_masked_values
         };
 
-        let out_modulus = 1u128 << self.config.h3;
+        let out_modulus = 2;
         let threshold_exceeded = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
             let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
             let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
