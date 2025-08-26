@@ -202,8 +202,6 @@ impl FuzzyHeavyHittersProtocol {
                     }).collect::<Vec<Vec<Vec<u128>>>>()
                 });
 
-                println!("New evals: {:?}", new_eval);
-
                 println!("Time to expand prefixes for all clients: {:?}", start.elapsed());
 
                 let mut new_prefixes = Vec::new();
@@ -383,6 +381,9 @@ impl FuzzyHeavyHittersProtocol {
                         &mut other_server_channel,
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
+
+                    println!("Evals: {:?}", &eval[..5]);
+                    println!("Match results: {:?}", &match_results[..5]);
 
                     let aggregated_result = self.threshold_phase.aggregate_match_results(&match_results).map_err(|e| format!("Failed to aggregate match results: {:?}", e))?;
 
