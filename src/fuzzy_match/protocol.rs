@@ -215,6 +215,7 @@ impl FuzzyHeavyHittersProtocol {
                 }
 
                 println!("Time to expand prefixes: {:?}", start.elapsed());
+                println!("New prefixes: {:?}", new_prefixes);
 
                 let exceeds_threshold_results = self.batch_check(
                     &new_eval,

@@ -623,12 +623,12 @@ fn find_heavy_hitters_prefix_search(
                 }).collect();
 
                 // Get upper bound estimate for this prefix
-                let upper_bound = client_points.iter().filter(|client_point| {
-                    client_point.iter().enumerate().all(|(dim, &coord)| {
-                        let dist = calculate_optimistic_distance(&point_max, &point_min, client_point, distance_metric);
-                        dist <= distance_threshold
-                    })
-                }).count();
+                let all_dist: Vec<_> = client_points.iter().map(|client_point| {
+                    calculate_optimistic_distance(&point_max, &point_min, client_point, distance_metric)
+                }).collect();
+                println!("Checking prefix: {:?}", prefix_set);
+                println!("All dist: {:?}", &all_dist[..5]);
+                let upper_bound = all_dist.iter().filter(|&dist| dist <= &distance_threshold).count();
                 
                 if upper_bound >= threshold {
                     // This prefix might lead to heavy hitters, so extend it
