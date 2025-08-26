@@ -230,12 +230,12 @@ impl<const N: usize> DistanceFSSKey<N> {
         let modulus_mask = modulus - 1;
         let mut pow_left_x1 = 1u128;
         for i in 0..N {
-            result1 = (result1 + pow_left_x1 * left_eval.0[N-1-i]) & modulus_mask;
+            result1 = (result1 + pow_left_x1 * left_eval.1[N-1-i]) & modulus_mask;
             pow_left_x1 = (pow_left_x1 * left_x1) & modulus_mask;
         }
         let mut pow_right_x1 = 1u128;
         for i in 0..N {
-            result1 = (result1 + pow_right_x1 * right_eval.0[N-1-i]) & modulus_mask;
+            result1 = (result1 + pow_right_x1 * right_eval.1[N-1-i]) & modulus_mask;
             pow_right_x1 = (pow_right_x1 * right_x1) & modulus_mask;
         }
 
