@@ -636,8 +636,8 @@ impl FssDealer {
         let r1 = std_rng.random_range(0..modulus);
         random_pairs.push((r0, r1));
 
-        let zero_payload = RingVec::<1>::new([0], modulus); 
-        let one_payload = RingVec::<1>::new([1], modulus);
+        let zero_payload = RingVec::<1>::new([0], 2); 
+        let one_payload = RingVec::<1>::new([1], 2);
 
         // Check if count_threshold + r0 + r1 would wrap around
         let sum = self.count_threshold + (r0 + r1) % modulus;
