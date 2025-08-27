@@ -69,8 +69,8 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         };
 
         let (server0_result, server1_result) = rayon::join(
-            || dealer.write_check_key_batch(&mut check_server0_channel.clone(), &batch_server0),
-            || dealer.write_check_key_batch(&mut check_server1_channel.clone(), &batch_server1),
+            || dealer.write_threshold_key_batch(&mut check_server0_channel.clone(), &batch_server0),
+            || dealer.write_threshold_key_batch(&mut check_server1_channel.clone(), &batch_server1),
         );
         key_send_time += start_time.elapsed().as_millis();
     }
