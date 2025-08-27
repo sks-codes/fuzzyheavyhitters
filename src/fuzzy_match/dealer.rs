@@ -506,7 +506,7 @@ impl FssDealer {
     pub fn write_threshold_key_batch(&self, channel: &mut CommTrackingChannel, batch: &FssKeyBatch) -> Result<(), String> {
         let data = batch.to_bytes();
         let len_bytes = (data.len() as u64).to_le_bytes();
-        println!("Writing Threshold key batch of size {} bytes to channel", data.len());
+        // println!("Writing Threshold key batch of size {} bytes to channel", data.len());
         channel.write_bytes(&len_bytes)
             .map_err(|e| format!("Failed to write length: {}", e))?;
         channel.write_bytes(&data)
