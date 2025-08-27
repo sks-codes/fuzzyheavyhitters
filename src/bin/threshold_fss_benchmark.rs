@@ -57,7 +57,7 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         // println!("Received signal from server 0: {:?}", signal);
         let start = Instant::now();
         let (server0_keys, server1_keys, random_pairs) = dealer.generate_fss_keys_for_threshold().unwrap();
-        key_gen_time += start.elapsed().as_millis();
+        key_gen_time += start.elapsed().as_micros();
         let start_time = Instant::now();
         let batch_server0 = FssKeyBatch {
             keys: server0_keys,
@@ -72,7 +72,7 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
             || dealer.write_threshold_key_batch(&mut check_server0_channel.clone(), &batch_server0),
             || dealer.write_threshold_key_batch(&mut check_server1_channel.clone(), &batch_server1),
         );
-        key_send_time += start_time.elapsed().as_millis();
+        key_send_time += start_time.elapsed().as_micros();
     }
 
     println!("Total key gen time: {:?}", key_gen_time);
