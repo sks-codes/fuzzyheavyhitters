@@ -56,7 +56,7 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         let signal = dealer.read_dealer_signal(&mut signal_server0_channel)?;
         println!("Received signal from server 0: {:?}", signal);
         let start = Instant::now();
-        let (server0_keys, server1_keys, random_pairs) = dealer.generate_fss_keys_for_check().unwrap();
+        let (server0_keys, server1_keys, random_pairs) = dealer.generate_fss_keys_for_threshold().unwrap();
         key_gen_time += start.elapsed().as_millis();
         let start_time = Instant::now();
         let batch_server0 = FssKeyBatch {

@@ -631,7 +631,7 @@ impl FssDealer {
 
     /// Generate FSS keys for interval FSS threshold comparison
     /// This simulates a trusted dealer generating FSS keys
-    fn generate_fss_keys_for_threshold(&self) -> Result<(Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(u128, u128)>), String> {
+    pub fn generate_fss_keys_for_threshold(&self) -> Result<(Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(LdcfKey<1>, RdcfKey<1>)>, Vec<(u128, u128)>), String> {
         let modulus = 1u128 << self.check_output_bit_length;
         let mut random_pairs = Vec::new();
     
