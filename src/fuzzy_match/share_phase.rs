@@ -9,7 +9,7 @@ use crate::fss::{
 };
 use crate::data_structures::payload::RingVec;
 use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::convert::TryInto;
 
 // Import strategies from the separate module
@@ -683,7 +683,7 @@ impl SharePhase {
             }
 
             let columns = max((keys.len() as f64 * 1.1) as usize, 60);
-            let band_width = 55;
+            let band_width = min(columns, 100);
             let okvs = RbOkvsF2k::<u128>::new(
                 keys.len(),
                 columns,
@@ -732,11 +732,13 @@ impl SharePhase {
     ) -> Result<u128, SharePhaseError> {
         let key_bits = point_bits.to_vec();
         let modulus_mask = (1u128 << self.config.h2) - 1;
+        let columns = okvs_share.len();
+        let band_width = min(columns, 100);
 
         let okvs = RbOkvsF2k::<u128>::new(
             1,
-            okvs_share.len(),
-            55, // Band width
+            columns,
+            band_width,
             r1, 
             r2,
         );

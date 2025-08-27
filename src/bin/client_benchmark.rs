@@ -7,27 +7,28 @@ use rand::Rng;
 
 fn main() {
     let share_config = ShareConfig {
-        method: ShareMethod::OKVS,
-        metric: DistanceMetric::LInfinity,
+        method: ShareMethod::FSS,
+        metric: DistanceMetric::Lp { p: 2},
         dictionary_type: DictionaryType::Unknown,
         h1: 20,
-        h2: 20,
+        h2: 80,
         d: 4,
     };
     
     // let share_phase = SharePhase::new(share_config);
     let client = Client::new(share_config);
 
-    let num_clients = 1usize << 20;
+    let num_clients = 1usize << 10;
+    let modulus = 1u128 << 20;
     let random_points = (0..num_clients).map(|_| {
         let mut rng = rand::thread_rng();
         (0..4).map(|_| {
-            rng.random::<u128>()
+            rng.random::<u128>() % modulus
         }).collect::<Vec<u128>>()
     }).collect::<Vec<Vec<u128>>>();
 
     let start = Instant::now();
-    let delta = 100u128;
+    let delta = 160u128;
     let results = client.generate_client_shares(&random_points, delta).unwrap();
     println!("Time to generate shares for {} clients: {:?}", num_clients, start.elapsed());
 

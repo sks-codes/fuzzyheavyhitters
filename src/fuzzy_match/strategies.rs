@@ -209,7 +209,7 @@ impl KeyValuePairStrategy for UnknownLpStrategy {
         for (prefix, prefix_len) in distinct_prefixes {
             let prefix_bits = u128_to_bits_msb(prefix, prefix_len);
 
-            println!("Prefix bits: {:?}, prefix_len: {}", prefix_bits, prefix_len);
+            // println!("Prefix bits: {:?}, prefix_len: {}", prefix_bits, prefix_len);
             
             // Calculate the distance based on the prefix rules:
             // 1. If prefix is a prefix of x_i, distance = 0
