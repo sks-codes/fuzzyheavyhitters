@@ -8,7 +8,7 @@ use counttree::fuzzy_match::{
     protocol::request_dealer_check,
     dealer::{FssDealer, FssKeyBatch},
 };
-use counttree::configs::property_test_config::PropertyTestConfig;
+use counttree::configs::property_test_config::BenchmarkConfig;
 use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use tarpc::server;
 use std::net::{TcpListener, TcpStream};
@@ -54,8 +54,8 @@ fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
 
 
 fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config = PropertyTestConfig::from_file(config_path)?;
-    
+    let config = BenchmarkConfig::from_file(config_path)?;
+
     // Create channels
     let mut signal_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap())?;
     let mut check_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap() + 1)?;
@@ -108,7 +108,7 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
 }
 
 fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let config = PropertyTestConfig::from_file(config_path)?;
+    let config = BenchmarkConfig::from_file(config_path)?;
     if server {
         println!("Running as server 1");
     } else {

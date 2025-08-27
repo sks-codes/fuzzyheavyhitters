@@ -1,7 +1,7 @@
 use counttree::channel::{CommTrackingChannel, connect_to, listen_to};
 use counttree::configs::property_test_config::BenchmarkConfig;
-use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
-use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
+use counttree::fuzzy_match::threshold_phase::{self, ThresholdPhase, ThresholdConfig, ThresholdMethod};
+use counttree::data_structures::modint::ModInt;
 use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, BufWriter};
@@ -12,13 +12,11 @@ use clap::{Arg, App};
 use rayon::prelude::*;
 use crossbeam;
 
-fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
     let mut rng = rand::thread_rng();
     (0..num_inputs)
         .map(|_| {
-            (0..input_bit_length)
-                .map(|_| rng.gen::<bool>())
-                .collect()
+            ModInt::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
@@ -37,32 +35,18 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     } else {
         listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
     };
-    // Create CheckConfig for garbler
-    let check_config = CheckConfig {
-        h2: config.h2,
+
+    let threshold_config = ThresholdConfig {
         h3: config.h3,
-        d: config.d,
         is_garbler_side: server,
-        property: CheckProperty::Equality,
-        method: CheckMethod::GC,
+        method: ThresholdMethod::GC,
     };
-    
-    // Create SharePhase (dummy configuration since we're not using it for generation)
-    let share_config = ShareConfig {
-        method: ShareMethod::OKVS,
-        metric: DistanceMetric::LInfinity,
-        dictionary_type: DictionaryType::Known,
-        h1: config.h1,
-        h2: config.h2,
-        d: config.d,
-    };
-    
-    let share_phase = SharePhase::new(share_config);
-    let check_phase = CheckPhase::new(check_config, share_phase);
+
+    let threshold_phase = ThresholdPhase::new(threshold_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);
-    let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
+    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h3);
+    let inputs = generate_test_inputs(config.num_clients, 1u128 << config.h3 as u128);
 
     println!("Starting server benchmark...");
     if server {
@@ -76,11 +60,13 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     let start_time = Instant::now();
     let mut rng = AesRng::new();
-    let _results = check_phase.batch_equality_testing_gc(
+    let threshold = ModInt::new(config.threshold, 1u128 << config.h3);
+    let _results = threshold_phase.compare_with_threshold_gc(
         &inputs,
+        threshold,
         &mut other_server_channel,
         &mut rng,
-    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
+    ).map_err(|e| format!("ThresholdPhase error: {:?}", e))?;
     
     let elapsed = start_time.elapsed();
     

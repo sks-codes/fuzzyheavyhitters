@@ -1,8 +1,8 @@
-use counttree::channel::CommTrackingChannel;
+use counttree::channel::{CommTrackingChannel, connect_to, listen_to};
 use counttree::data_structures::modint::ModInt;
 use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
 use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
-use counttree::configs::property_test_config::PropertyTestConfig;
+use counttree::configs::property_test_config::BenchmarkConfig;
 use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, BufWriter};
@@ -10,31 +10,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use rand::Rng;
 use clap::{Arg, App};
-
-fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    // Give evaluator time to start listening
-    thread::sleep(Duration::from_millis(100));
-    
-    let addr = format!("{}:{}", ip, port);
-    println!("Connecting to {}", addr);
-    let stream = TcpStream::connect(&addr)?;
-    stream.set_nodelay(true)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let writer = BufWriter::new(stream);
-    Ok(CommTrackingChannel::new(reader, writer))
-}
-
-fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    let addr = format!("{}:{}", ip, port);
-    println!("Listening on {}", addr);
-    
-    let listener = TcpListener::bind(&addr)?;
-    let (stream, _) = listener.accept()?;
-    stream.set_nodelay(true)?;
-    let reader = BufReader::new(stream.try_clone()?);
-    let writer = BufWriter::new(stream);
-    Ok(CommTrackingChannel::new(reader, writer))
-}
 
 fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
     let mut rng = rand::thread_rng();
@@ -46,7 +21,7 @@ fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
 }
 
 fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let config = PropertyTestConfig::from_file(config_path)?;
+    let config = BenchmarkConfig::from_file(config_path)?;
     if server {
         println!("Running as server 1");
     } else {
