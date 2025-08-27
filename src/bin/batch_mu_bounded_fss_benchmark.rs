@@ -155,7 +155,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     let check_phase = CheckPhase::new(check_config, share_phase);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2 * config.d);
+    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);
     let inputs = generate_test_inputs(config.num_clients, 1u128 << config.h2 as u128);
 
     println!("Starting server benchmark...");
@@ -196,15 +196,15 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 }
 
 fn main() {
-    let matches = App::new("Batch Equality GC Benchmark")
+    let matches = App::new("Batch Mu Bounded FSS Benchmark")
         .version("1.0")
         .author("Your Name")
-        .about("Benchmarks batch equality testing using garbled circuits")
+        .about("Benchmarks batch mu bounded FSS testing")
         .arg(Arg::with_name("role")
             .short("r")
             .long("role")
             .value_name("ROLE")
-            .help("Role to play: 'garbler' or 'evaluator'")
+            .help("Role to play: 'server0', 'server1', or 'dealer'")
             .required(true)
             .takes_value(true))
         .arg(Arg::with_name("config")
