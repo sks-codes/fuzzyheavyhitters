@@ -98,11 +98,13 @@ impl FixedKeyPrgStream {
 
     // From RustCrypto aesni crate
     #[inline(always)]
+    #[allow(unused)]
     fn inc_be(v: __m128i) -> __m128i {
         unsafe { _mm_add_epi64(v, _mm_set_epi64x(1, 0)) }
     }
 
     #[inline(always)]
+    #[allow(unused)]
     fn store(val: __m128i, at: &mut [u8]) {
         debug_assert_eq!(at.len(), AES_BLOCK_SIZE);
 

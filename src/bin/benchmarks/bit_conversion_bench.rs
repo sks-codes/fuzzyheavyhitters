@@ -1,8 +1,7 @@
+use mosaic::util::{u128_to_bits_msb, bits_to_u128_msb};
 use std::time::Instant;
 use std::env;
 use std::hint::black_box;
-
-use counttree::util::{u128_to_bits_msb, bits_to_u128_msb};
 
 fn parse_arg_usize(idx: usize, default: usize) -> usize {
     env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default)
@@ -38,7 +37,7 @@ fn main() {
     let mut value: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321u128;
     let mut parity_acc = 0u64;
     let start_u128_to = Instant::now();
-    for i in 0..iterations {
+    for _ in 0..iterations {
         // Vary the value in a reversible, cheap way.
         value = value.wrapping_add(0x9E37_79B9_7F4A_7C15_6A09_E667_F3BC_C909u128);
         let bits_vec = u128_to_bits_msb(value, bit_length);

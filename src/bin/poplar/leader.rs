@@ -1,15 +1,22 @@
-use counttree::{add_bitstrings, collect, config, data_structures::fastfield, rpc::{
-    AddKeysRequest, FinalSharesRequest, ResetRequest,
-    TreeInitRequest,
-    TreeCrawlRequest,
-}, string_to_bits, FieldElm, MSB_u32_to_bits};
+use mosaic::{
+    collect, config, string_to_bits, FieldElm,
+    data_structures::fastfield, CollectorClient,
+    rpc::{
+        AddKeysRequest, FinalSharesRequest, ResetRequest,
+        TreeInitRequest,
+        TreeCrawlRequest,
+    }, 
+    data_structures::logexperiments::{log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters, ServerSide},
+    fss::ibdcf::IbDCFKey,
+    rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest},
+    sample_driving_data::{csv_to_bitvecs, save_heavy_hitters},
+};
 
 use std::time::Instant;
 
 use futures::try_join;
 use std::io;
 use rand::prelude::*;
-use rand::thread_rng;
 use rand_distr::Zipf;
 use rayon::prelude::*;
 use tarpc::{
@@ -26,10 +33,6 @@ use chrono_tz::America::New_York;
 use rand::distr::Alphanumeric;
 
 use std::time::{Duration, SystemTime};
-use counttree::data_structures::logexperiments::{log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters, ServerSide};
-use counttree::fss::ibdcf::{eval_str, IbDCFKey};
-use counttree::rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest};
-use counttree::sample_driving_data::{csv_to_bitvecs, save_heavy_hitters};
 
 type IntervalKey = (IbDCFKey, IbDCFKey);
 fn long_context() -> context::Context {
@@ -41,14 +44,14 @@ fn long_context() -> context::Context {
 }
 
 fn sample_string(len: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     std::iter::repeat(())
         .map(|()| rng.sample(Alphanumeric) as char)
         .take(len / 8)
         .collect()
 }
 fn generate_random_bit_vectors(len: usize, d: usize) -> Vec<Vec<bool>> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..d)
         .map(|_| {
             let s: String = std::iter::repeat(())
@@ -99,8 +102,8 @@ fn generate_keys(cfg: &config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<Interv
 }
 
 async fn reset_servers(
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
+    client0: &mut CollectorClient,
+    client1: &mut CollectorClient,
 ) -> io::Result<()> {
     let req = ResetRequest {};
     let response0 = client0.reset(long_context(), req.clone());
@@ -111,8 +114,8 @@ async fn reset_servers(
 }
 
 async fn tree_init(
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
+    client0: &mut CollectorClient,
+    client1: &mut CollectorClient,
 ) -> io::Result<()> {
     let req = TreeInitRequest {};
     let response0 = client0.tree_init(long_context(), req.clone());
@@ -124,13 +127,13 @@ async fn tree_init(
 
 async fn add_fuzzy_keys(
     cfg: &config::Config,
-    client0: counttree::CollectorClient,
-    client1: counttree::CollectorClient,
+    client0: CollectorClient,
+    client1: CollectorClient,
     strings: &Vec<Vec<Vec<bool>>>,
     nreqs: usize,
     aug_len: usize,
 ) -> io::Result<()> {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     let zipf = Zipf::new(cfg.num_sites as f64, cfg.zipf_exponent).unwrap(); //TODO: replace with real dist
 
     let mut addkey0 = Vec::with_capacity(nreqs);
@@ -158,8 +161,8 @@ async fn add_fuzzy_keys(
 
 async fn add_keys(
     cfg: &config::Config,
-    client0: counttree::CollectorClient,
-    client1: counttree::CollectorClient,
+    client0: CollectorClient,
+    client1: CollectorClient,
     keys0: Vec<Vec<IntervalKey>>,
     keys1: Vec<Vec<IntervalKey>>,
     nreqs: usize,
@@ -178,8 +181,8 @@ async fn add_keys(
 
 async fn run_level(
     cfg: &config::Config,
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
+    client0: &mut CollectorClient,
+    client1: &mut CollectorClient,
     level: usize,
     nreqs: usize,
     start_time: Instant,
@@ -233,8 +236,8 @@ async fn run_level(
 
 async fn run_level_last(
     cfg: &config::Config,
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
+    client0: &mut CollectorClient,
+    client1: &mut CollectorClient,
     nreqs: usize,
     start_time: Instant,
 ) -> io::Result<(usize, ServerSide, ServerSide)> {
@@ -276,8 +279,8 @@ async fn run_level_last(
 }
 
 async fn final_shares(
-    client0: &mut counttree::CollectorClient,
-    client1: &mut counttree::CollectorClient,
+    client0: &mut CollectorClient,
+    client1: &mut CollectorClient,
 ) -> io::Result<usize> {
     let req = FinalSharesRequest {};
     let response0 = client0.final_shares(long_context(), req.clone());
@@ -303,12 +306,12 @@ async fn main() -> io::Result<()> {
 
     // XXX WARNING: THERE IS NO TLS HERE!!!
     let mut client0 =
-        counttree::CollectorClient::new(client::Config::default(),
+        CollectorClient::new(client::Config::default(),
                                         tcp::connect(cfg.server0, Bincode::default).await?
         ).spawn();
     let mut client1 =
-        counttree::CollectorClient::new(client::Config::default(),
-                                        tcp::connect(cfg.server1, Bincode::default).await?
+        CollectorClient::new(client::Config::default(),
+                                      tcp::connect(cfg.server1, Bincode::default).await?
         ).spawn();
     // let start = Instant::now();
     // println!("Generating keys...");

@@ -1,5 +1,5 @@
 use crate::data_structures::prg;
-use crate::{MSB_u32_to_bits, add_bitstrings, subtract_bitstrings};
+use crate::{msb_u32_to_bits, add_bitstrings, subtract_bitstrings};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -35,10 +35,11 @@ type TupleMutIter<'a, T> =
 std::iter::Chain<std::iter::Once<(bool, &'a mut T)>, std::iter::Once<(bool, &'a mut T)>>;
 
 trait TupleExt<T> {
+    #[allow(unused)]
     fn map_mut<F: Fn(&mut T)>(&mut self, f: F);
     fn get(&self, val: bool) -> &T;
     fn get_mut(&mut self, val: bool) -> &mut T;
-    fn iter_mut(&mut self) -> TupleMutIter<T>;
+    fn iter_mut(&mut self) -> TupleMutIter<'_, T>;
 }
 
 impl<T, U> TupleMapToExt<T, U> for (T, T) {
@@ -73,7 +74,7 @@ impl<T> TupleExt<T> for (T, T) {
         }
     }
 
-    fn iter_mut(&mut self) -> TupleMutIter<T> {
+    fn iter_mut(&mut self) -> TupleMutIter<'_, T> {
         std::iter::once((false, &mut self.0)).chain(std::iter::once((true, &mut self.1)))
     }
 }
@@ -133,7 +134,7 @@ pub fn eval_str(keys : &Vec<(IbDCFKey, IbDCFKey)>, states: &Vec<(EvalState,EvalS
 impl IbDCFKey
 {
 
-    pub fn gen_ibDCF(alpha_bits: &[bool], side : bool) -> (IbDCFKey, IbDCFKey) {
+    pub fn gen_ib_dcf(alpha_bits: &[bool], side : bool) -> (IbDCFKey, IbDCFKey) {
         let root_seeds = (prg::PrgSeed::random(), prg::PrgSeed::random());
         let root_bits = (false, true);
 
@@ -165,15 +166,15 @@ impl IbDCFKey
         // let r = &[false; 512];
         // let l_minus_one = left_bits.to_vec();
         // let r_plus_one = right_bits.to_vec();
-        let left_key = Self::gen_ibDCF(left_bits, true);
-        let right_key = Self::gen_ibDCF(right_bits, true);
+        let left_key = Self::gen_ib_dcf(left_bits, true);
+        let right_key = Self::gen_ib_dcf(right_bits, true);
         ((left_key.0, right_key.0), (left_key.1, right_key.1))
     }
 
     pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(IbDCFKey, IbDCFKey)>, Vec<(IbDCFKey, IbDCFKey)>){
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
-        let delta = MSB_u32_to_bits(alpha[0].len() as u8, size);
+        let delta = msb_u32_to_bits(alpha[0].len() as u8, size);
         // let delta_p1 = MSB_u32_to_bits(alpha[0].len() as u8, size + 1);
         for i in 0..alpha.len() {
             let left = subtract_bitstrings(alpha[i].as_slice(), delta.as_slice());
@@ -217,7 +218,7 @@ impl IbDCFKey
         }
     }
 
-    pub fn eval_ibDCF(&self, idx: &[bool]) -> bool {
+    pub fn eval_ib_dcf(&self, idx: &[bool]) -> bool {
         debug_assert!(idx.len() <= self.domain_size());
         debug_assert!(!idx.is_empty());
         let mut state = self.eval_init();

@@ -47,10 +47,10 @@ pub struct ExperimentResults {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TimeBreakdown {
-    pub FSS: f64,
-    pub GCequality: f64,
-    pub FieldActions : f64,
-    pub GCCompare: f64
+    pub fss: f64,
+    pub gc_equality: f64,
+    pub field_actions : f64,
+    pub gc_compare: f64
 
 }
 

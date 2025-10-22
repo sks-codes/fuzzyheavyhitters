@@ -1,9 +1,10 @@
+use mosaic::{
+    fss::ldcf::LdcfKey,
+    data_structures::ringvec::RingVec,
+};
 use std::env;
 use std::time::Instant;
 use std::hint::black_box;
-
-use counttree::fss::ldcf::{LdcfKey, LdcfEval};
-use counttree::data_structures::payload::RingVec;
 
 fn parse_arg<T: std::str::FromStr>(idx: usize, default: T) -> T { env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default) }
 
@@ -19,7 +20,7 @@ fn bench<const N: usize>(iterations: usize, depth: usize, modulus_bits: usize) {
     let a = RingVec::<N>::random(modulus);
     let b = RingVec::<N>::random(modulus);
 
-    let (k0, _k1) = LdcfKey::<N>::gen_LdcfKey(&alpha_bits, &a, &b, modulus);
+    let (k0, _k1) = LdcfKey::<N>::gen_ldcf_key(&alpha_bits, &a, &b, modulus);
     // We'll just benchmark key 0.
     let mut state = k0.eval_init(modulus);
 

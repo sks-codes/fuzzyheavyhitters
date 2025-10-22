@@ -70,12 +70,17 @@ impl AbstractChannel for CommTrackingChannel {
 }
 
 pub fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
-    // Give evaluator time to start listening
-    thread::sleep(Duration::from_millis(100));
-    
     let addr = format!("{}:{}", ip, port);
     println!("Connecting to {}", addr);
-    let stream = TcpStream::connect(&addr)?;
+    let stream = loop {
+        match TcpStream::connect(&addr) {
+            Ok(s) => break s,
+            Err(e) => {
+                println!("Failed to connect to {}: {}. Retrying...", addr, e);
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    };
     stream.set_nodelay(true)?;
     let reader = BufReader::new(stream.try_clone()?);
     let writer = BufWriter::new(stream);
@@ -92,4 +97,29 @@ pub fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn s
     let reader = BufReader::with_capacity(64 * 4096 * 4096, stream.try_clone()?);
     let writer = BufWriter::with_capacity(64 * 4096 * 4096, stream);
     Ok(CommTrackingChannel::new(reader, writer))
+}
+
+// Set up multiple parallel channels
+// CAUTION: The number of channels should be exactly equal to the number of threads used. We do not use Mutex here.
+pub fn setup_parallel_channels(
+    is_connector: bool, // true if this side initiates connections
+    num_channels: usize,
+    target_addr: &str,
+    base_port: u16,
+) -> Result<Vec<CommTrackingChannel>, String> {
+    let mut channels = Vec::with_capacity(num_channels);
+
+    for i in 0..num_channels {
+        let port = base_port + i as u16;
+        let channel = if is_connector {
+            connect_to(target_addr.to_string(), port)
+                .map_err(|e| format!("Failed to connect to {}: {}: {}", target_addr, port, e))?
+        } else {
+            listen_to(target_addr.to_string(), port)
+                .map_err(|e| format!("Failed to listen on {}: {}: {}", target_addr, port, e))?
+        };
+        channels.push(channel);
+    }
+
+    Ok(channels)
 }

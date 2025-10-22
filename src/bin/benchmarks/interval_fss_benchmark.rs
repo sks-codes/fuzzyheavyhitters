@@ -1,6 +1,8 @@
+use mosaic::{
+    fss::interval::IntervalFSSKey,
+    data_structures::ringvec::RingVec,
+};
 use std::time::Instant;
-use counttree::fss::interval::IntervalFSSKey;
-use counttree::data_structures::payload::RingVec;
 use rand::Rng;
 
 fn main() {
@@ -19,9 +21,9 @@ fn main() {
         println!("\n--- Domain size: {} bits ---", domain_size);
         
         // Generate random alpha and beta bit strings
-        let mut rng = rand::thread_rng();
-        let mut alpha_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
-        let mut beta_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
+        let mut rng = rand::rng();
+        let mut alpha_bits: Vec<bool> = (0..domain_size).map(|_| rng.random()).collect();
+        let mut beta_bits: Vec<bool> = (0..domain_size).map(|_| rng.random()).collect();
 
         if alpha_bits > beta_bits {
             (beta_bits, alpha_bits) = (alpha_bits, beta_bits);
@@ -37,7 +39,7 @@ fn main() {
         
         let start = Instant::now();
         for _ in 0..iterations {
-            let (_key0, _key1) = IntervalFSSKey::<N>::gen_IntervalFSSKey(
+            let (_key0, _key1) = IntervalFSSKey::<N>::gen_interval_fss_key(
                 &alpha_bits,
                 &beta_bits,
                 &a,
@@ -53,7 +55,7 @@ fn main() {
         
         // Benchmark a single key generation to get detailed stats
         let start = Instant::now();
-        let (key0, key1) = IntervalFSSKey::<N>::gen_IntervalFSSKey(
+        let (key0, _key1) = IntervalFSSKey::<N>::gen_interval_fss_key(
             &alpha_bits,
             &beta_bits,
             &a,
@@ -84,7 +86,7 @@ fn main() {
         
         let start = Instant::now();
         for _ in 0..eval_iterations {
-            let _result = key0.eval_intervalFSS(&test_input, modulus);
+            let _result = key0.eval_interval_fss(&test_input, modulus);
         }
         let eval_duration = start.elapsed();
         
@@ -105,8 +107,8 @@ fn main() {
         println!("\n--- Payload vector size: {} ---", payload_size);
         
         let mut rng = rand::thread_rng();
-        let mut alpha_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
-        let mut beta_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
+        let mut alpha_bits: Vec<bool> = (0..domain_size).map(|_| rng.random()).collect();
+        let mut beta_bits: Vec<bool> = (0..domain_size).map(|_| rng.random()).collect();
         
         // Ensure alpha < beta
         for i in 0..domain_size {
@@ -125,7 +127,7 @@ fn main() {
                 
                 let start = Instant::now();
                 for _ in 0..iterations {
-                    let (_key0, _key1) = IntervalFSSKey::<1>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+                    let (_key0, _key1) = IntervalFSSKey::<1>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
                 }
                 let duration = start.elapsed();
                 println!("Key generation x {}: {:?}", iterations, duration);
@@ -138,7 +140,7 @@ fn main() {
                 
                 let start = Instant::now();
                 for _ in 0..iterations {
-                    let (_key0, _key1) = IntervalFSSKey::<2>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+                    let (_key0, _key1) = IntervalFSSKey::<2>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
                 }
                 let duration = start.elapsed();
                 println!("Key generation x {}: {:?}", iterations, duration);
@@ -151,7 +153,7 @@ fn main() {
                 
                 let start = Instant::now();
                 for _ in 0..iterations {
-                    let (_key0, _key1) = IntervalFSSKey::<4>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+                    let (_key0, _key1) = IntervalFSSKey::<4>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
                 }
                 let duration = start.elapsed();
                 println!("Key generation x {}: {:?}", iterations, duration);
@@ -164,7 +166,7 @@ fn main() {
                 
                 let start = Instant::now();
                 for _ in 0..iterations {
-                    let (_key0, _key1) = IntervalFSSKey::<8>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+                    let (_key0, _key1) = IntervalFSSKey::<8>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
                 }
                 let duration = start.elapsed();
                 println!("Key generation x {}: {:?}", iterations, duration);
@@ -177,7 +179,7 @@ fn main() {
                 
                 let start = Instant::now();
                 for _ in 0..iterations {
-                    let (_key0, _key1) = IntervalFSSKey::<16>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+                    let (_key0, _key1) = IntervalFSSKey::<16>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
                 }
                 let duration = start.elapsed();
                 println!("Key generation x {}: {:?}", iterations, duration);
@@ -192,7 +194,7 @@ fn main() {
     let domain_size = 16;
     let iterations = 1000;
     
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut alpha_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
     let mut beta_bits: Vec<bool> = (0..domain_size).map(|_| rng.gen()).collect();
 
@@ -210,7 +212,7 @@ fn main() {
     
     let start = Instant::now();
     for _ in 0..iterations {
-        let (_key0, _key1) = IntervalFSSKey::<N>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+        let (_key0, _key1) = IntervalFSSKey::<N>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
     }
     let pre_alloc_duration = start.elapsed();
     
@@ -220,7 +222,7 @@ fn main() {
         let a_fresh = RingVec::<N>::random(modulus);
         let b_fresh = RingVec::<N>::random(modulus);
         let c_fresh = RingVec::<N>::random(modulus);
-        let (_key0, _key1) = IntervalFSSKey::<N>::gen_IntervalFSSKey(&alpha_bits, &beta_bits, &a_fresh, &b_fresh, &c_fresh, modulus);
+        let (_key0, _key1) = IntervalFSSKey::<N>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a_fresh, &b_fresh, &c_fresh, modulus);
     }
     let fresh_alloc_duration = start.elapsed();
     

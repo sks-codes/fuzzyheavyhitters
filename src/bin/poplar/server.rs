@@ -1,7 +1,7 @@
 // Starter code from:
 //   https://github.com/google/tarpc/blob/master/example-service/src/server.rs
 
-use counttree::{
+use mosaic::{
     collect, config,
     FieldElm,
     data_structures::fastfield::FE, data_structures::prg,
@@ -11,6 +11,8 @@ use counttree::{
         TreePruneRequest,
         TreePruneLastRequest,
     },
+    data_structures::logexperiments::ServerSide,
+    rpc::TreeCrawlLastRequest,
 };
 
 use futures::{
@@ -21,11 +23,8 @@ use std::{
     io,
     sync::{Arc, Mutex},
 };
-use std::convert::TryFrom;
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
 use std::thread::available_parallelism;
 use std::time::Duration;
 use tarpc::{
@@ -34,8 +33,6 @@ use tarpc::{
     tokio_serde::formats::Bincode,
     serde_transport::tcp,
 };
-use counttree::data_structures::logexperiments::ServerSide;
-use counttree::rpc::TreeCrawlLastRequest;
 
 extern crate num_cpus;
 // type MyChannel = scuttlebutt::SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>;
@@ -46,7 +43,6 @@ type MyChannel = scuttlebutt::SyncChannel<BufReader<TcpStream>, BufWriter<TcpStr
 struct CollectorServer {
     seed: prg::PrgSeed,
     data_len: usize,
-    server_idx: u16,
     arc: Arc<Mutex<collect::KeyCollection<FE, FieldElm>>>,
     // gc_channel: Option<Arc<Mutex<MyChannel>>>
     gc_channels: Vec<Arc<Mutex<MyChannel>>>
@@ -166,7 +162,6 @@ fn create_server_tcp_socket(port: u16) -> io::Result<MyChannel> {
 fn setup_tcp_sockets(
     server_idx: u16,
     num_cpus: usize,
-    server0_addr: SocketAddr,
     server1_addr: SocketAddr,
 ) -> io::Result<Vec<Arc<Mutex<MyChannel>>>> {
     let mut channels = Vec::with_capacity(num_cpus);
@@ -192,7 +187,6 @@ fn setup_tcp_sockets(
 
 fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
     let mut retries = 0;
-    let mut last_error = None;
 
     loop {
         match TcpStream::connect(addr) {
@@ -204,7 +198,7 @@ fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
                 ));
             }
             Err(e) => {
-                last_error = Some(e);
+                let last_error = Some(e);
                 if retries >= 10 {
                     return Err(io::Error::new(
                         io::ErrorKind::ConnectionRefused,
@@ -244,7 +238,7 @@ async fn main() -> io::Result<()> {
 
     let num_cpus = available_parallelism().unwrap().get();
 
-    let gc_channels = setup_tcp_sockets(server_idx, num_cpus, cfg.server0, cfg.server1).unwrap_or_else(|e| {
+    let gc_channels = setup_tcp_sockets(server_idx, num_cpus, cfg.server1).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to setup GC channels: {}", e);
         vec![]
     });
@@ -258,7 +252,6 @@ async fn main() -> io::Result<()> {
         .map(server::BaseChannel::with_defaults)
         .map(|channel| {
             let coll_server = CollectorServer {
-                server_idx,
                 seed: seed.clone(),
                 data_len: cfg.data_len,
                 arc: arc.clone(),

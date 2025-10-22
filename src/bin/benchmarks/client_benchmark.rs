@@ -1,6 +1,8 @@
-use counttree::fuzzy_match::client::Client;
-use counttree::fuzzy_match::{
-    share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase},
+use mosaic::{
+    fuzzy_match::client::Client,
+    fuzzy_match::{
+        share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+    },
 };
 use std::time::Instant;
 use rand::Rng;
@@ -21,7 +23,7 @@ fn main() {
     let num_clients = 1usize << 10;
     let modulus = 1u128 << 20;
     let random_points = (0..num_clients).map(|_| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..4).map(|_| {
             rng.random::<u128>() % modulus
         }).collect::<Vec<u128>>()

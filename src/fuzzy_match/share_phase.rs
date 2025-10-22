@@ -7,7 +7,7 @@ use crate::fss::{
     rdcf::{RdcfKey, RdcfEval},
     distance::{DistanceFSSKey, DistanceFSSEval},
 };
-use crate::data_structures::payload::RingVec;
+use crate::data_structures::ringvec::RingVec;
 use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
 use std::cmp::{max, min};
 use std::convert::TryInto;
@@ -795,14 +795,14 @@ impl SharePhase {
             let beta_bits = u128_to_bits_msb(beta, self.config.h1);
 
             // Create Interval FSS keys for both servers
-            let (fss_key_00, fss_key_10) = LdcfKey::<1>::gen_LdcfKey(
+            let (fss_key_00, fss_key_10) = LdcfKey::<1>::gen_ldcf_key(
                 &alpha_bits,
                 &left_payload,
                 &mid_payload,
                 modulus,
             );
 
-            let (fss_key_01, fss_key_11) = RdcfKey::<1>::gen_RdcfKey(
+            let (fss_key_01, fss_key_11) = RdcfKey::<1>::gen_rdcf_key(
                 &beta_bits,
                 &zero_payload,
                 &(right_payload - mid_payload),

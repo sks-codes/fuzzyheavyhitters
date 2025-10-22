@@ -2,7 +2,7 @@ use crate::data_structures::modint::ModInt;
 use crate::util::{xor, and_bit};
 use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
-use crate::data_structures::payload::RingVec;
+use crate::data_structures::ringvec::RingVec;
 
 use rand_core::RngCore; 
 use rand::Rng;
@@ -252,7 +252,7 @@ impl<const N: usize> DpfKey<N>
 {
 
     // Need alpha < beta
-    pub fn gen_DpfKey(alpha_bits: &[bool], a: &RingVec<N>, b: &RingVec<N>, modulus: u128) -> (DpfKey<N>, DpfKey<N>) {
+    pub fn gen_dpf_key(alpha_bits: &[bool], a: &RingVec<N>, b: &RingVec<N>, modulus: u128) -> (DpfKey<N>, DpfKey<N>) {
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
         let u = alpha_bits.len();

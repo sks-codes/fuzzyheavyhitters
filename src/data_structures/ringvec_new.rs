@@ -49,16 +49,16 @@ impl DynRingVec {
         let mask = v.mask;
         match &mut v.storage {
             RingStorage::U8(data) => {
-                for x in data.iter_mut() { *x = (rand::rng().random::<u8>() & (mask as u8)); }
+                for x in data.iter_mut() { *x = rand::rng().random::<u8>() & (mask as u8); }
             }
             RingStorage::U16(data) => {
-                for x in data.iter_mut() { *x = (rand::rng().random::<u16>() & (mask as u16)); }
+                for x in data.iter_mut() { *x = rand::rng().random::<u16>() & (mask as u16); }
             }
             RingStorage::U32(data) => {
-                for x in data.iter_mut() { *x = (rand::rng().random::<u32>() & (mask as u32)); }
+                for x in data.iter_mut() { *x = rand::rng().random::<u32>() & (mask as u32); }
             }
             RingStorage::U64(data) => {
-                for x in data.iter_mut() { *x = (rand::rng().random::<u64>() & (mask as u64)); }
+                for x in data.iter_mut() { *x = rand::rng().random::<u64>() & (mask as u64); }
             }
             RingStorage::U128(data) => {
                 for x in data.iter_mut() { *x = rand::rng().random::<u128>() & mask; }
@@ -208,9 +208,9 @@ impl DynRingVec {
 enum BinOp { Add, Sub, Mul }
 
 // Implement trait ops producing a new owned vector (like original RingVec)
-impl Add for DynRingVec { type Output = Self; fn add(self, rhs: Self) -> Self::Output { self.add(rhs) } }
-impl Sub for DynRingVec { type Output = Self; fn sub(self, rhs: Self) -> Self::Output { self.sub(rhs) } }
-impl Mul for DynRingVec { type Output = Self; fn mul(self, rhs: Self) -> Self::Output { self.mul(rhs) } }
+impl Add for DynRingVec { type Output = Self; fn add(self, rhs: Self) -> Self::Output { DynRingVec::add(&self, &rhs) } }
+impl Sub for DynRingVec { type Output = Self; fn sub(self, rhs: Self) -> Self::Output { DynRingVec::sub(&self, &rhs) } }
+impl Mul for DynRingVec { type Output = Self; fn mul(self, rhs: Self) -> Self::Output { DynRingVec::mul(&self, &rhs) } }
 
 #[cfg(test)]
 mod tests {

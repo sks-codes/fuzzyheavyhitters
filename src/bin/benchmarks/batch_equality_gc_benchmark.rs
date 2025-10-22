@@ -1,7 +1,9 @@
-use counttree::channel::{CommTrackingChannel, connect_to, listen_to};
-use counttree::configs::property_test_config::BenchmarkConfig;
-use counttree::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty};
-use counttree::fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase};
+use mosaic::{
+    channel::{CommTrackingChannel, connect_to, listen_to},
+    configs::property_test_config::BenchmarkConfig,
+    fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
+    fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase},
+};
 use scuttlebutt::{AesRng, Channel, AbstractChannel};
 use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, BufWriter};
@@ -58,7 +60,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     };
     
     let share_phase = SharePhase::new(share_config);
-    let check_phase = CheckPhase::new(check_config, share_phase);
+    let check_phase = CheckPhase::new(check_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);

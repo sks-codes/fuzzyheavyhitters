@@ -1,31 +1,28 @@
-use counttree::channel::{CommTrackingChannel, connect_to, listen_to};
-use counttree::data_structures::modint::ModInt;
-use counttree::fss::dpf::DpfKey;
-use counttree::fuzzy_match::{
-    check_phase::{CheckProperty, CheckMethod},
-    threshold_phase::{ThresholdMethod, ThresholdPhase, ThresholdConfig, ThresholdData, ThresholdPhaseError},
-    protocol::request_dealer_threshold,
-    dealer::{FssDealer, FssKeyBatch},
+use mosaic::{
+    channel::{connect_to, listen_to},
+    fuzzy_match::{
+        share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase},
+        check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
+        protocol::request_dealer_equality,
+        dealer::{FssDealer, DpfKeyBatch},
+    },
 };
-use counttree::configs::property_test_config::BenchmarkConfig;
-use scuttlebutt::{AesRng, Channel, AbstractChannel};
-use tarpc::server;
-use std::net::{TcpListener, TcpStream};
-use std::io::{BufReader, BufWriter};
-use std::thread;
-use std::time::{Duration, Instant};
+use mosaic::configs::property_test_config::BenchmarkConfig;
+use scuttlebutt::AbstractChannel;
+use std::time::Instant;
 use rand::Rng;
 use clap::{Arg, App};
 
-fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
-    let mut rng = rand::thread_rng();
+fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
+    let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
-            ModInt::new(rng.random::<u128>(), modulus)
+            (0..input_bit_length)
+                .map(|_| rng.random::<bool>())
+                .collect()
         })
         .collect()
 }
-
 
 fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config = BenchmarkConfig::from_file(config_path)?;
@@ -42,41 +39,31 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         config.h3,
         config.num_clients,
         config.d,
-        CheckProperty::MuBounded,
-        CheckMethod::FSS,
-        ThresholdMethod::FSS,
     );
 
     println!("Starting dealer benchmark...");
 
-    let mut key_gen_time = 0;
-    let mut key_send_time = 0;
+    let signal = dealer.read_dealer_signal(&mut signal_server0_channel)?;
+    println!("Received signal from server 0: {:?}", signal);
     let start_time = Instant::now();
-    for _ in 0..config.num_clients {
-        let signal = dealer.read_dealer_signal(&mut signal_server0_channel)?;
-        // println!("Received signal from server 0: {:?}", signal);
-        let start = Instant::now();
-        let (server0_keys, server1_keys, random_pairs) = dealer.generate_fss_keys_for_threshold().unwrap();
-        key_gen_time += start.elapsed().as_micros();
-        let start_time = Instant::now();
-        let batch_server0 = FssKeyBatch {
-            keys: server0_keys,
-            random_values: random_pairs.iter().map(|(r0, _)| r0.clone()).collect(),
-        };
-        let batch_server1 = FssKeyBatch {
-            keys: server1_keys,
-            random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
-        };
+    let (server0_keys, server1_keys, random_pairs) = dealer.generate_fss_keys_for_equality().unwrap();
+    println!("Time to generate FSS keys: {:?}", start_time.elapsed());
 
-        let (server0_result, server1_result) = rayon::join(
-            || dealer.write_threshold_key_batch(&mut check_server0_channel.clone(), &batch_server0),
-            || dealer.write_threshold_key_batch(&mut check_server1_channel.clone(), &batch_server1),
-        );
-        key_send_time += start_time.elapsed().as_micros();
-    }
+    let start_time = Instant::now();
+    let batch_server0 = DpfKeyBatch {
+        keys: server0_keys,
+        random_values: random_pairs.iter().map(|(r0, _)| r0.clone()).collect(),
+    };
+    let batch_server1 = DpfKeyBatch {
+        keys: server1_keys,
+        random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
+    };
 
-    println!("Total key gen time: {:?}", key_gen_time);
-    println!("Total key send time: {:?}", key_send_time);
+    let (server0_result, server1_result) = rayon::join(
+        || dealer.write_equality_key_batch(&mut check_server0_channel.clone(), &batch_server0),
+        || dealer.write_equality_key_batch(&mut check_server1_channel.clone(), &batch_server1),
+    );
+    println!("Time to send key batch: {:?}", start_time.elapsed());
     let (server0_sent, server0_received) = check_server0_channel.get_communication_stats();
     println!("Sent {} bytes to server0", server0_sent);
     println!("Received {} bytes from server0", server0_received);
@@ -112,50 +99,38 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     } else {
         listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
     };
-    
-    let threshold_config = ThresholdConfig {
+    // Create CheckConfig for garbler
+    let check_config = CheckConfig {
+        h2: config.h2,
         h3: config.h3,
+        d: config.d,
         is_garbler_side: server,
-        method: ThresholdMethod::FSS,
+        property: CheckProperty::Equality,
+        method: CheckMethod::FSS,
     };
-
-    let threshold_phase = ThresholdPhase::new(threshold_config);
+    
+    // Create SharePhase (dummy configuration since we're not using it for generation)
+    let share_config = ShareConfig {
+        method: ShareMethod::OKVS,
+        metric: DistanceMetric::LInfinity,
+        dictionary_type: DictionaryType::Known,
+        h1: config.h1,
+        h2: config.h2,
+        d: config.d,
+    };
+    
+    let share_phase = SharePhase::new(share_config);
+    let check_phase = CheckPhase::new(check_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);
-    let inputs = generate_test_inputs(config.num_clients, 1u128 << config.h3 as u128);
+    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2 * config.d);
+    let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
 
     println!("Starting server benchmark...");
 
     let start_time = Instant::now();
-    let threshold_data_list = {
-        // Request threshold FSS keys from dealer using the parallel threshold dealer channel
-        let threshold_data_vec = (0..config.num_clients).map(|_| {
-            let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut check_dealer_channel, 2).unwrap();
-            if batch.keys.len() < 1 {
-                panic!("Dealer provided {} keys but {} are needed", batch.keys.len(), 1);
-            }
-
-            ThresholdData::IntervalFSS {
-                fss_key: batch.keys[0].clone(),
-                random_value: batch.random_values[0],
-            }
-        }).collect::<Vec<ThresholdData>>();
-        threshold_data_vec
-    };
-    println!("Time to request dealer threshold: {:?}", start_time.elapsed());
-
-    let mut fss_keys = Vec::new();
-    let mut random_values = Vec::new();
-    for threshold_data in threshold_data_list {
-        match threshold_data {
-            ThresholdData::IntervalFSS { fss_key, random_value } => {
-                fss_keys.push(fss_key.clone());
-                random_values.push(ModInt::new(random_value, 1u128 << config.h3));
-            },
-            _ => return Ok(())
-        }
-    }
+    let batch = request_dealer_equality(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << config.h3 as u128).unwrap();
+    println!("Time to request dealer equality: {:?}", start_time.elapsed());
 
     if server {
         other_server_channel.write_bytes(&[1u8]).unwrap();
@@ -166,8 +141,17 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         other_server_channel.read_bytes(&mut ack).unwrap();
     }
 
+    let keys = batch.keys;
+    let random_values = batch.random_values;
+
     let start_time = Instant::now();
-    let _results = threshold_phase.compare_with_threshold_intervalfss(&inputs, &random_values, &fss_keys, &mut other_server_channel).unwrap();
+    let _results = check_phase.batch_equality_testing_fss(
+        &inputs,
+        &keys,
+        &random_values,
+        &mut other_server_channel,
+    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
+    
     let elapsed = start_time.elapsed();
     
     // Print results

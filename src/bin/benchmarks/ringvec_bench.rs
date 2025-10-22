@@ -1,9 +1,10 @@
+use mosaic::{
+    data_structures::ringvec::RingVec,
+    util::{u128_to_bits_msb, bits_to_u128_msb},
+};
 use std::time::Instant;
 use std::env;
 use std::hint::black_box;
-
-use counttree::data_structures::payload::RingVec;
-use counttree::util::{u128_to_bits_msb, bits_to_u128_msb};
 
 fn parse_arg<T: std::str::FromStr>(idx: usize, default: T) -> T { env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default) }
 

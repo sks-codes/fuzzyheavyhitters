@@ -28,11 +28,11 @@ unsafe impl Sync for TreeNode {}
 #[derive(Clone)]
 pub struct KeyCollection<T,U>
 {
-    depth: usize,
+    _depth: usize,
     pub keys: Vec<(bool, Vec<(IbDCFKey, IbDCFKey)>)>,
     frontier: Vec<TreeNode>,
     frontier_last: Vec<Result<U>>,
-    rand_stream: prg::PrgStream,
+    _rand_stream: prg::PrgStream,
     _phantom: PhantomData<(T, U)>,
 }
 
@@ -50,11 +50,11 @@ where
 {
     pub fn new(seed: &prg::PrgSeed, depth: usize) -> KeyCollection<T,U> {
         KeyCollection::<T,U> {
-            depth,
+            _depth: depth,
             keys: vec![],
             frontier: vec![],
             frontier_last: vec![],
-            rand_stream: seed.to_rng(),
+            _rand_stream: seed.to_rng(),
             _phantom: PhantomData,
         }
     }
@@ -158,8 +158,8 @@ where
             })
             .collect();
 
-        let FSS = start.elapsed();
-        println!("Tree searching and FSS - {:?}", FSS);
+        let fss = start.elapsed();
+        println!("Tree searching and FSS - {:?}", fss);
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
@@ -232,8 +232,8 @@ where
             results
         }).unwrap();
 
-        let GC_and_ot = start.elapsed() - FSS;
-        println!("Equality Garbled Circuit and OT - {:?}", GC_and_ot);
+        let gc_and_ot = start.elapsed() - fss;
+        println!("Equality Garbled Circuit and OT - {:?}", gc_and_ot);
         let results_by_node: Vec<T> = node_client_string
             .par_iter()
             .enumerate()
@@ -254,7 +254,7 @@ where
                 node_sum
             })
             .collect();
-        let fa = start.elapsed() - (GC_and_ot + FSS);
+        let fa = start.elapsed() - (gc_and_ot + fss);
         println!("Field actions - {:?}", fa);
 
         let final_res = crossbeam::scope(|s| {
@@ -297,8 +297,8 @@ where
             results
         }).unwrap();
 
-        let GCcomp_time = start.elapsed() - (GC_and_ot + FSS + fa);
-        println!("GEQ garbled circuit - {:?}", GCcomp_time);
+        let gc_comp_time = start.elapsed() - (gc_and_ot + fss + fa);
+        println!("GEQ garbled circuit - {:?}", gc_comp_time);
 
         println!("...done");
 
@@ -307,10 +307,10 @@ where
         (final_res, ServerSide{
             total_level_time: start.elapsed().as_secs_f64(),
             time_breakdown: TimeBreakdown {
-                FSS: FSS.as_secs_f64(),
-                GCequality: GC_and_ot.as_secs_f64(),
-                FieldActions: fa.as_secs_f64(),
-                GCCompare: GCcomp_time.as_secs_f64(),
+                fss: fss.as_secs_f64(),
+                gc_equality: gc_and_ot.as_secs_f64(),
+                field_actions: fa.as_secs_f64(),
+                gc_compare: gc_comp_time.as_secs_f64(),
             },
             num_threads: channels.len(),
             nodes_searched: results_by_node.len(),
@@ -359,8 +359,8 @@ where
             })
             .collect();
 
-        let FSS = start.elapsed();
-        println!("Tree searching and FSS - {:?}", FSS);
+        let fss = start.elapsed();
+        println!("Tree searching and FSS - {:?}", fss);
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
@@ -431,8 +431,8 @@ where
         }).unwrap();
 
 
-        let GC_and_ot = start.elapsed() - FSS;
-        println!("Equality Garbled Circuit and OT - {:?}", GC_and_ot);
+        let gc_and_ot = start.elapsed() - fss;
+        println!("Equality Garbled Circuit and OT - {:?}", gc_and_ot);
         let mut results_by_node = Vec::new();
         let mut current_idx = 0;
         for node in &node_client_string {
@@ -451,7 +451,7 @@ where
             current_idx += num_clients;
         }
 
-        let fa = start.elapsed() - (GC_and_ot + FSS);
+        let fa = start.elapsed() - (gc_and_ot + fss);
         println!("Field actions - {:?}", fa);
         let final_res = crossbeam::scope(|s| {
             let mut results = vec![];
@@ -498,8 +498,8 @@ where
             results
         }).unwrap();
 
-        let GCcomp_time = start.elapsed() - (GC_and_ot + FSS + fa);
-        println!("GEQ garbled circuit - {:?}", GCcomp_time);
+        let gc_comp_time = start.elapsed() - (gc_and_ot + fss + fa);
+        println!("GEQ garbled circuit - {:?}", gc_comp_time);
         println!("...done");
         self.frontier_last = next_frontier.par_iter().enumerate().map(|(i,node)| {
                 Result::<U> {
@@ -511,10 +511,10 @@ where
         (final_res, ServerSide{
             total_level_time: start.elapsed().as_secs_f64(),
             time_breakdown: TimeBreakdown {
-                FSS: FSS.as_secs_f64(),
-                GCequality: GC_and_ot.as_secs_f64(),
-                FieldActions: fa.as_secs_f64(),
-                GCCompare: GCcomp_time.as_secs_f64(),
+                fss: fss.as_secs_f64(),
+                gc_equality: gc_and_ot.as_secs_f64(),
+                field_actions: fa.as_secs_f64(),
+                gc_compare: gc_comp_time.as_secs_f64(),
             },
             num_threads: channels.len(),
             nodes_searched: results_by_node.len(),

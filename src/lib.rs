@@ -68,7 +68,7 @@ pub fn u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
     out
 }
 
-pub fn  MSB_u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
+pub fn  msb_u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
     assert!(nbits <= 32);
 
     let mut out: Vec<bool> = Vec::new();

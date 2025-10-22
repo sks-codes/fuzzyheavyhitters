@@ -1,5 +1,5 @@
 use crate::channel::CommTrackingChannel;
-use crate::fuzzy_match::share_phase::{SharePhase, SharePhaseError};
+use crate::fuzzy_match::share_phase::SharePhaseError;
 use crate::garbled_circuits::{
     batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
     less_than_or_equal_threshold::{multiple_gb_less_than_ss, multiple_ev_less_than_ss},
@@ -83,13 +83,12 @@ impl From<SharePhaseError> for CheckPhaseError {
 #[derive(Clone)]
 pub struct CheckPhase {
     config: CheckConfig,
-    share_phase: SharePhase,
 }
 
 impl CheckPhase {
     /// Create a new check phase with the given configuration
-    pub fn new(config: CheckConfig, share_phase: SharePhase) -> Self {
-        Self { config, share_phase }
+    pub fn new(config: CheckConfig) -> Self {
+        Self { config}
     }
 
     pub fn run_batch_fuzzy_match_check(
@@ -253,31 +252,42 @@ impl CheckPhase {
         let values_bits_length = masked_values[0].len();
 
         let other_masked_values_u8s: Vec<Vec<u8>> = if self.config.is_garbler_side {
-            masked_values_u8s.iter().for_each(|u8s| {
-                channel.write_bytes(u8s)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush();
+            for u8s in masked_values_u8s.iter() {
+                channel
+                    .write_bytes(u8s)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
-            (0..num_values).map(|_| {
+            let mut out = Vec::with_capacity(num_values);
+            for _ in 0..num_values {
                 let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
-                channel.read_bytes(&mut other_masked_eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
-                other_masked_eval_bytes
-            }).collect::<Vec<Vec<u8>>>()
+                channel
+                    .read_bytes(&mut other_masked_eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                out.push(other_masked_eval_bytes);
+            }
+            out
         } else {
-            let other_masked_values_u8s = (0..num_values).map(|_| {
+            let mut other_masked_values_u8s = Vec::with_capacity(num_values);
+            for _ in 0..num_values {
                 let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
-                channel.read_bytes(&mut other_masked_eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
-                other_masked_eval_bytes
-            }).collect::<Vec<Vec<u8>>>();
+                channel
+                    .read_bytes(&mut other_masked_eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                other_masked_values_u8s.push(other_masked_eval_bytes);
+            }
 
-            masked_values_u8s.iter().for_each(|u8s| {
-                channel.write_bytes(u8s)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush();
+            for u8s in masked_values_u8s.iter() {
+                channel
+                    .write_bytes(u8s)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
             other_masked_values_u8s
         };
 
@@ -339,35 +349,46 @@ impl CheckPhase {
         }).collect::<Vec<ModInt>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
-            masked_values.iter().for_each(|masked_eval| {
+            for masked_eval in masked_values.iter() {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel.write_bytes(&eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush().map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
+                channel
+                    .write_bytes(&eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
-            masked_values.iter().map(|&masked_value| {
+            let mut out = Vec::with_capacity(masked_values.len());
+            for &masked_value in masked_values.iter() {
                 let mut received_bytes = [0u8; 16];
-                channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
+                channel
+                    .read_bytes(&mut received_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
                 let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
-                masked_value + other_masked_value
-            }).collect::<Vec<ModInt>>()
+                out.push(masked_value + other_masked_value);
+            }
+            out
         } else {
-            let combined_masked_values = masked_values.iter().map(|&masked_value| {
+            let mut combined_masked_values = Vec::with_capacity(masked_values.len());
+            for &masked_value in masked_values.iter() {
                 let mut received_bytes = [0u8; 16];
-                channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
+                channel
+                    .read_bytes(&mut received_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
                 let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
-                masked_value + other_masked_value
-            }).collect::<Vec<ModInt>>();
+                combined_masked_values.push(masked_value + other_masked_value);
+            }
 
-            masked_values.iter().for_each(|masked_eval| {
+            for masked_eval in masked_values.iter() {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel.write_bytes(&eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush().map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
+                channel
+                    .write_bytes(&eval_bytes)
+                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
             combined_masked_values
         };
 

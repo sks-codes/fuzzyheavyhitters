@@ -27,7 +27,7 @@ pub fn pack_bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 pub fn unpack_bytes_to_bits(bytes: &[u8], expected_length: usize) -> Vec<bool> {
     let mut bits = Vec::new();
     
-    for (byte_idx, &byte) in bytes.iter().enumerate() {
+    for &byte in bytes.iter() {
         for bit_idx in 0..8 {
             if bits.len() >= expected_length {
                 break;

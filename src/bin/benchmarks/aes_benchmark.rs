@@ -1,5 +1,5 @@
 use std::time::Instant;
-use counttree::aes::FixedKeyPrgStream;
+use mosaic::aes::FixedKeyPrgStream;
 use rand_core::RngCore;
 
 fn main() {

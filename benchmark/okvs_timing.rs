@@ -1,5 +1,5 @@
+use mosaic::okvs_f2k::RbOkvsF2k;
 use std::time::Instant;
-use counttree::okvs_f2k::RbOkvsF2k;
 use rand::Rng;
 
 fn main() {
@@ -17,13 +17,13 @@ fn main() {
     let okvs: RbOkvsF2k<u128> = RbOkvsF2k::new(kv_count, columns, band_width, &r1, &r2);
     
     // Generate test data
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut keys = Vec::new();
     let mut values = Vec::new();
     
     for i in 0..kv_count {
-        let key_length = rng.gen_range(20..40);
-        let key: Vec<bool> = (0..key_length).map(|_| rng.gen_bool(0.5)).collect();
+        let key_length = rng.random_range(20..40);
+        let key: Vec<bool> = (0..key_length).map(|_| rng.random_bool(0.5)).collect();
         let value: u128 = (i as u128) * 12345 + 67890;
         
         keys.push(key);

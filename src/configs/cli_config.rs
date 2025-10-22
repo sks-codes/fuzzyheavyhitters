@@ -214,3 +214,44 @@ impl CliConfig {
             .map_err(|e| format!("Failed to write config file {}: {}", path, e))
     }
 }
+
+/// Generate a sample configuration file
+pub fn generate_config(output_path: &str) -> Result<(), String> {
+    let sample_config = CliConfig {
+        data_file: "data/synthetic/client_points.json".to_string(),
+        query_file: "data/synthetic/server_points.json".to_string(),
+        protocol: ProtocolParameters {
+            delta: 5,
+            threshold: 3,
+            h1: 10,
+            h2: 16,
+            h3: 20, // output_bit_length + 4 for aggregation
+            d: 2,
+            share_method: "OKVS".to_string(), // Can also be "IntervalFSS"
+            dictionary_type: "Known".to_string(), // Can also be "Unknown"
+            check_method: "FSS".to_string(), // Can also be "GC"
+            check_property: "Equality".to_string(), // Can also be "MuBounded"
+            threshold_method: "GarbledCircuits".to_string(), // Can also be "IntervalFSS"
+            distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
+            num_clients: 100, // Number of clients participating in the protocol
+        },
+        network: NetworkConfig {
+            server0_addr: "127.0.0.1".to_string(),
+            server1_addr: "127.0.0.1".to_string(),
+            server0_to_server1_port: 8000,
+            dealer_to_server0_port: 9000,
+            dealer_to_server1_port: 9001,
+            client_to_server0_port: 7000,
+            client_to_server1_port: 7001,
+        },
+        output: OutputConfig {
+            verbose: true,
+            show_intermediate: false,
+            output_file: Some("results.json".to_string()),
+        },
+    };
+    
+    sample_config.to_file(output_path)?;
+    println!("Sample configuration written to {}", output_path);
+    Ok(())
+}

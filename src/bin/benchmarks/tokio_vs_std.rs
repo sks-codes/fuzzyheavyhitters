@@ -36,7 +36,7 @@ fn std_server() {
 
 fn std_client() {
 	// Create all streams first
-	let mut streams: Vec<TcpStream> = (0..N_MSGS)
+	let streams: Vec<TcpStream> = (0..N_MSGS)
 		.map(|_| TcpStream::connect(ADDR).unwrap())
 		.collect();
 	// Now send/receive in parallel

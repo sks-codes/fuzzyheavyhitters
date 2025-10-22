@@ -1,6 +1,6 @@
 use crate::fss::ldcf::{LdcfKey, LdcfEval};
 use crate::fss::rdcf::{RdcfKey, RdcfEval};
-use crate::data_structures::payload::RingVec;
+use crate::data_structures::ringvec::RingVec;
 
 const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
     [1, 0, 0, 0, 0, 0],
@@ -132,28 +132,28 @@ impl<const N: usize> DistanceFSSKey<N> {
         let mut out_payload = RingVec::<N>::zero(modulus);
         out_payload[N-1] = max_distance;
 
-        let (key00, key10) = LdcfKey::gen_LdcfKey(
+        let (key00, key10) = LdcfKey::gen_ldcf_key(
             &left_bits,
             &(out_payload - left_payload),
             &zero_payload,
             modulus,
         );
 
-        let (key01, key11) = LdcfKey::gen_LdcfKey(
+        let (key01, key11) = LdcfKey::gen_ldcf_key(
             &x_bits,
             &left_payload,
             &zero_payload,
             modulus,
         );
 
-        let (key02, key12) = RdcfKey::gen_RdcfKey(
+        let (key02, key12) = RdcfKey::gen_rdcf_key(
             &x_bits,
             &zero_payload,
             &right_payload,
             modulus,
         );
 
-        let (key03, key13) = RdcfKey::gen_RdcfKey(
+        let (key03, key13) = RdcfKey::gen_rdcf_key(
             &right_bits,
             &zero_payload,
             &(out_payload - right_payload),

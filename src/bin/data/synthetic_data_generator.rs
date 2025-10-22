@@ -5,7 +5,7 @@
 //! the fuzzy heavy hitters protocol. It reads configuration from a JSON
 //! file and exports the generated data to specified output files.
 
-use counttree::synthetic_data::{SyntheticDataGenerator, SyntheticDataConfig};
+use mosaic::synthetic_data::{SyntheticDataGenerator, SyntheticDataConfig, SyntheticDataset};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -60,7 +60,7 @@ fn read_config(config_path: &str) -> Result<SyntheticDataConfig, Box<dyn std::er
     Ok(config)
 }
 
-fn export_dataset(dataset: &counttree::synthetic_data::SyntheticDataset, output_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn export_dataset(dataset: &SyntheticDataset, output_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Create output directory if it doesn't exist
     fs::create_dir_all(output_dir)?;
     

@@ -469,43 +469,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "counttree"
-version = "0.1.0"
-dependencies = [
- "aes 0.4.0",
- "aes-ctr",
- "aesni",
- "bincode",
- "blake3",
- "chrono",
- "chrono-tz",
- "clap 2.34.0",
- "crossbeam",
- "csv",
- "env_logger",
- "fancy-garbling",
- "futures",
- "indicatif",
- "lazy_static",
- "memmap2",
- "num",
- "num-bigint 0.4.6",
- "num_cpus",
- "ocelot",
- "primal",
- "rand 0.9.1",
- "rand_core 0.9.3",
- "rand_distr",
- "rayon",
- "scuttlebutt",
- "serde",
- "serde_json",
- "tarpc",
- "tokio",
- "zipf",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1232,6 +1195,43 @@ dependencies = [
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "mosaic"
+version = "0.1.0"
+dependencies = [
+ "aes 0.4.0",
+ "aes-ctr",
+ "aesni",
+ "bincode",
+ "blake3",
+ "chrono",
+ "chrono-tz",
+ "clap 2.34.0",
+ "crossbeam",
+ "csv",
+ "env_logger",
+ "fancy-garbling",
+ "futures",
+ "indicatif",
+ "lazy_static",
+ "memmap2",
+ "num",
+ "num-bigint 0.4.6",
+ "num_cpus",
+ "ocelot",
+ "primal",
+ "rand 0.9.1",
+ "rand_core 0.9.3",
+ "rand_distr",
+ "rayon",
+ "scuttlebutt",
+ "serde",
+ "serde_json",
+ "tarpc",
+ "tokio",
+ "zipf",
 ]
 
 [[package]]

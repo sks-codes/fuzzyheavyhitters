@@ -1,6 +1,8 @@
+use mosaic::{
+    fss::ldcf::LdcfKey,
+    data_structures::ringvec::RingVec,
+};
 use std::time::Instant;
-use counttree::fss::ldcf::LdcfKey;
-use counttree::data_structures::payload::RingVec;
 use rand::Rng;
 
 fn main() {
@@ -33,7 +35,7 @@ fn main() {
 
             let start = Instant::now();
             for _ in 0..iterations {
-                let (_key0, _key1) = LdcfKey::<N>::gen_LdcfKey(
+                let (_key0, _key1) = LdcfKey::<N>::gen_ldcf_key(
                     &alpha_bits,
                     &a,
                     &b,
@@ -46,7 +48,7 @@ fn main() {
             println!("Average per key generation: {:?}", keygen_duration / iterations);
 
             // Benchmark a single key generation to get key size and for serialization/deserialization
-            let (key0, key1) = LdcfKey::<N>::gen_LdcfKey(
+            let (key0, key1) = LdcfKey::<N>::gen_ldcf_key(
                 &alpha_bits,
                 &a,
                 &b,

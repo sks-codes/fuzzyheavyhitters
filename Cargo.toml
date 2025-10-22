@@ -1,9 +1,8 @@
 [dev-dependencies]
 rayon = "1.3.1"
 [package]
-name = "counttree"
+name = "mosaic"
 version = "0.1.0"
-authors = ["Henry Corrigan-Gibbs <henrycg@csail.mit.edu>"]
 edition = "2018"
 
 [dependencies]
@@ -49,37 +48,106 @@ name = "okvs_parallel_stress_test"
 path = "benchmark/parallel_stress_test.rs"
 
 [[bin]]
-name = "fhh_cli"
-path = "src/bin/fhh_cli.rs"
-
-[[bin]]
-name = "ride_austin_json_generator"
-path = "src/bin/ride_austin_json_generator.rs"
-
-[[bin]]
 name = "aes_benchmark"
-path = "src/bin/aes_benchmark.rs"
+path = "src/bin/benchmarks/aes_benchmark.rs"
 
 [[bin]]
-name = "interval_fss_benchmark"
-path = "src/bin/interval_fss_benchmark.rs"
-
-[[bin]]
-name = "ldcf_benchmark"
-path = "src/bin/ldcf_benchmark.rs"
+name = "batch_equality_fss_benchmark"
+path = "src/bin/benchmarks/batch_equality_fss_benchmark.rs"
 
 [[bin]]
 name = "batch_equality_gc_benchmark"
-path = "src/bin/batch_equality_gc_benchmark.rs"
+path = "src/bin/benchmarks/batch_equality_gc_benchmark.rs"
+
+[[bin]]
+name = "batch_mu_bounded_fss_benchmark"
+path = "src/bin/benchmarks/batch_mu_bounded_fss_benchmark.rs"
 
 [[bin]]
 name = "batch_mu_bounded_gc_benchmark"
-path = "src/bin/batch_mu_bounded_gc_benchmark.rs"
+path = "src/bin/benchmarks/batch_mu_bounded_gc_benchmark.rs"
 
 [[bin]]
 name = "bit_conversion_bench"
-path = "src/bin/bit_conversion_bench.rs"
+path = "src/bin/benchmarks/bit_conversion_bench.rs"
+
+[[bin]]
+name = "client_benchmark"
+path = "src/bin/benchmarks/client_benchmark.rs"
+
+[[bin]]
+name = "ibDCFbench"
+path = "src/bin/benchmarks/ibDCFbench.rs"
+
+[[bin]]
+name = "interval_fss_benchmark"
+path = "src/bin/benchmarks/interval_fss_benchmark.rs"
+
+[[bin]]
+name = "ldcf_benchmark"
+path = "src/bin/benchmarks/ldcf_benchmark.rs"
+
+[[bin]]
+name = "ldcf_expand_bench"
+path = "src/bin/benchmarks/ldcf_expand_bench.rs"
 
 [[bin]]
 name = "ringvec_bench"
-path = "src/bin/ringvec_bench.rs"
+path = "src/bin/benchmarks/ringvec_bench.rs"
+
+[[bin]]
+name = "ringvec_dyn_bench"
+path = "src/bin/benchmarks/ringvec_dyn_bench.rs"
+
+[[bin]]
+name = "threshold_fss_benchmark"
+path = "src/bin/benchmarks/threshold_fss_benchmark.rs"
+
+[[bin]]
+name = "threshold_gc_benchmark"
+path = "src/bin/benchmarks/threshold_gc_benchmark.rs"
+
+[[bin]]
+name = "tokio_vs_std"
+path = "src/bin/benchmarks/tokio_vs_std.rs"
+
+
+
+#### Poplar binaries ####
+
+[[bin]]
+name = "leader"
+path = "src/bin/poplar/leader.rs"
+
+[[bin]]
+name = "server"
+path = "src/bin/poplar/server.rs"
+
+
+#### Data Generation binaries ####
+
+[[bin]]
+name = "ride_austin_json_generator"
+path = "src/bin/data/ride_austin_json_generator.rs"
+
+[[bin]]
+name = "synthetic_data_generator"
+path = "src/bin/data/synthetic_data_generator.rs"
+
+#### Mosaic binaries ####
+
+[[bin]]
+name = "mosaic_dealer"
+path = "src/bin/mosaic_dealer.rs"
+
+[[bin]]
+name = "mosaic_client"
+path = "src/bin/mosaic_client.rs"
+
+[[bin]]
+name = "mosaic_server"
+path = "src/bin/mosaic_server.rs"
+
+[[bin]]
+name = "mosaic_others"
+path = "src/bin/mosaic_others.rs"

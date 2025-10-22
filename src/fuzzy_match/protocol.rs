@@ -11,7 +11,6 @@ use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distanc
 use crate::channel::CommTrackingChannel;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 /// Configuration for the entire fuzzy heavy hitters protocol
@@ -33,7 +32,7 @@ pub struct ProtocolConfig {
 
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
 #[derive(Clone)]
-pub struct FuzzyHeavyHittersProtocol {
+pub struct MosaicProtocol {
     config: ProtocolConfig,
     share_phase: SharePhase,
     check_phase: CheckPhase,
@@ -41,11 +40,11 @@ pub struct FuzzyHeavyHittersProtocol {
     is_server1: bool,
 }
 
-impl FuzzyHeavyHittersProtocol {
+impl MosaicProtocol {
     /// Create a new protocol instance
     pub fn new(config: ProtocolConfig, is_server1: bool) -> Self {
         let share_phase = SharePhase::new(config.share_config.clone());
-        let check_phase = CheckPhase::new(config.check_config.clone(), share_phase.clone());
+        let check_phase = CheckPhase::new(config.check_config.clone());
         let threshold_phase = ThresholdPhase::new(config.threshold_config.clone());
         Self {
             config,
@@ -92,10 +91,10 @@ impl FuzzyHeavyHittersProtocol {
         &self,
         client_shares: &[SharedRange],
         query_points: &[Vec<u128>],
-        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &mut [CommTrackingChannel],
+        check_dealer_channels: &mut [CommTrackingChannel],
+        threshold_dealer_channels: &mut [CommTrackingChannel],
+        other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
         // Convert query points from u128 to Vec<Vec<bool>>
         let query_point_sets: Vec<Vec<Vec<bool>>> = query_points.iter()
@@ -122,16 +121,15 @@ impl FuzzyHeavyHittersProtocol {
                  check_dealer_channels.len(), other_server_channels.len());
         let final_results = self.batch_check(
             &evals,
-            &signal_dealer_channels,
-            &check_dealer_channels,
-            &threshold_dealer_channels,
-            &other_server_channels,
+            signal_dealer_channels,
+            check_dealer_channels,
+            threshold_dealer_channels,
+            other_server_channels,
         )?;
 
         // Shutdown dealers using all signal dealer channels
-        for (i, dealer_channel) in signal_dealer_channels.iter().enumerate() {
-            let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock signal dealer channel {}: {}", i, e))?;
-            shutdown_dealer(&mut *locked_dealer_channel)?;
+        for dealer_channel in signal_dealer_channels.iter_mut() {
+            shutdown_dealer(dealer_channel)?;
         }
 
         Ok(final_results)
@@ -141,10 +139,10 @@ impl FuzzyHeavyHittersProtocol {
     pub fn run_server_unknown_dictionary_parallel(
         &self,
         client_shares_list: &[SharedRange],
-        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &mut [CommTrackingChannel],
+        check_dealer_channels: &mut [CommTrackingChannel],
+        threshold_dealer_channels: &mut [CommTrackingChannel],
+        other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<Vec<u128>>, String> {
         let max_bit_length = self.config.share_config.h1;
         let dimension = self.config.share_config.d;
@@ -218,10 +216,10 @@ impl FuzzyHeavyHittersProtocol {
 
                 let exceeds_threshold_results = self.batch_check(
                     &new_eval,
-                    &signal_dealer_channels,
-                    &check_dealer_channels,
-                    &threshold_dealer_channels,
-                    &other_server_channels,
+                    signal_dealer_channels,
+                    check_dealer_channels,
+                    threshold_dealer_channels,
+                    other_server_channels,
                 )?;
 
                 println!("Time for batch check: {:?}", start.elapsed());
@@ -259,9 +257,8 @@ impl FuzzyHeavyHittersProtocol {
             .collect();
 
         // Shutdown dealers using all signal dealer channels
-        for (i, dealer_channel) in signal_dealer_channels.iter().enumerate() {
-            let mut locked_dealer_channel = dealer_channel.lock().map_err(|e| format!("Failed to lock dealer channel {}: {}", i, e))?;
-            shutdown_dealer(&mut *locked_dealer_channel)?;
+        for dealer_channel in signal_dealer_channels.iter_mut() {
+            shutdown_dealer(dealer_channel)?;
         }
 
         Ok(final_heavy_hitters)
@@ -270,10 +267,10 @@ impl FuzzyHeavyHittersProtocol {
     fn batch_check(
         &self,
         current_eval: &[Vec<Vec<u128>>],
-        signal_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        check_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        threshold_dealer_channels: &[Arc<Mutex<CommTrackingChannel>>],
-        other_server_channels: &[Arc<Mutex<CommTrackingChannel>>],
+        signal_dealer_channels: &mut [CommTrackingChannel],
+        check_dealer_channels: &mut [CommTrackingChannel],
+        threshold_dealer_channels: &mut [CommTrackingChannel],
+        other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
         let num_threads = other_server_channels.len();
         println!("Using {} threads for parallel processing {} data chunks", num_threads, current_eval.len());
@@ -296,16 +293,12 @@ impl FuzzyHeavyHittersProtocol {
         server_bits
             .par_chunks_mut(chunk_size)
             .zip(current_eval.par_chunks(chunk_size))
-            .zip(signal_dealer_channels.par_iter())
-            .zip(check_dealer_channels.par_iter())
-            .zip(threshold_dealer_channels.par_iter())
-            .zip(other_server_channels.par_iter())
-            .try_for_each(|(((((result_chunk, eval_chunk), signal_dealer_channel_unlocked), check_dealer_channel_unlocked), threshold_dealer_channel_unlocked), other_server_channel_unlocked)| {
+            .zip(signal_dealer_channels.par_iter_mut())
+            .zip(check_dealer_channels.par_iter_mut())
+            .zip(threshold_dealer_channels.par_iter_mut())
+            .zip(other_server_channels.par_iter_mut())
+            .try_for_each(|(((((result_chunk, eval_chunk), signal_dealer_channel), check_dealer_channel), threshold_dealer_channel), other_server_channel)| {
                 // Use the corresponding dealer channels for this thread
-                let mut signal_dealer_channel = signal_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock signal dealer channel: {}", e))?;
-                let mut check_dealer_channel = check_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock check dealer channel: {}", e))?;
-                let mut threshold_dealer_channel = threshold_dealer_channel_unlocked.lock().map_err(|e| format!("Failed to lock threshold dealer channel: {}", e))?;
-                let mut other_server_channel = other_server_channel_unlocked.lock().map_err(|e| format!("Failed to lock other server channel: {}", e))?;
                 let mut local_rng = AesRng::new();
                 let mut aggregated_counts = Vec::new();
 
@@ -318,7 +311,7 @@ impl FuzzyHeavyHittersProtocol {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
                                     let batch = 
-                                        request_dealer_equality(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << self.config.check_config.h3)?;
+                                        request_dealer_equality(signal_dealer_channel, check_dealer_channel, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < self.config.num_clients {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
@@ -344,7 +337,7 @@ impl FuzzyHeavyHittersProtocol {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
                                     // Request check FSS keys from dealer using the parallel check dealer channel
-                                    let batch = request_dealer_check(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << self.config.check_config.h3)?;
+                                    let batch = request_dealer_check(signal_dealer_channel, check_dealer_channel, 1u128 << self.config.check_config.h3)?;
                                     println!("Received dealer check keys");
 
                                     if batch.keys.len() < self.config.num_clients {
@@ -380,7 +373,7 @@ impl FuzzyHeavyHittersProtocol {
                     let match_results = self.check_phase.run_batch_fuzzy_match_check(
                         &eval,
                         &check_data_list,
-                        &mut other_server_channel,
+                        other_server_channel,
                         &mut local_rng,
                     ).map_err(|e| format!("Batch check phase failed: {:?}", e))?;
 
@@ -392,7 +385,6 @@ impl FuzzyHeavyHittersProtocol {
 
                 println!("Time to process all prefixes and aggregate results: {:?}", start.elapsed());
 
-                let start = std::time::Instant::now();
                 let threshold_data_list = match self.config.threshold_config.method {
                     ThresholdMethod::GC => {
                         // Use garbled circuits for threshold comparison
@@ -401,7 +393,7 @@ impl FuzzyHeavyHittersProtocol {
                     ThresholdMethod::FSS => {
                         // Request threshold FSS keys from dealer using the parallel threshold dealer channel
                         let threshold_data_vec = (0..aggregated_counts.len()).map(|_| {
-                            let batch = request_dealer_threshold(&mut signal_dealer_channel, &mut threshold_dealer_channel, 2).unwrap();
+                            let batch = request_dealer_threshold(signal_dealer_channel, threshold_dealer_channel, 2).unwrap();
                             if batch.keys.len() < 1 {
                                 panic!("Dealer provided {} keys but {} are needed", batch.keys.len(), 1);
                             }
@@ -421,7 +413,7 @@ impl FuzzyHeavyHittersProtocol {
                 let results_bool = self.threshold_phase.compare_with_threshold(
                     &aggregated_counts,
                     &threshold_data_list,
-                    &mut other_server_channel,
+                    other_server_channel,
                     &mut local_rng,
                 ).map_err(|e| format!("Threshold phase failed: {:?}", e))?;
 
@@ -442,25 +434,17 @@ impl FuzzyHeavyHittersProtocol {
         final_results
             .par_chunks_mut(chunk_size)
             .zip(server_bits.par_chunks(chunk_size))
+            .zip(other_server_channels.par_iter_mut())
             .enumerate()
-            .try_for_each(|(chunk_idx, (result_chunk, bits_chunk))| {
+            .try_for_each(|(chunk_idx, ((result_chunk, bits_chunk), other_server_channel))| {
                 // Use the corresponding other server channel for this chunk
-                let other_server_channel = if chunk_idx < other_server_channels.len() {
-                    other_server_channels[chunk_idx].clone()
-                } else {
-                    // Fallback to round-robin if more chunks than channels
-                    other_server_channels[chunk_idx % other_server_channels.len()].clone()
-                };
-
-                let mut locked_other_server_channel = other_server_channel.lock().map_err(|e| format!("Failed to lock other server channel for bit exchange: {}", e))?;
-                
                 let bits_chunk_vec: Vec<bool> = bits_chunk.to_vec();
                 
                 if self.is_server1 {
                     // Server 1: receive bits from server 0, then send our bits
-                    let server0_bits = receive_bool_vec(&mut *locked_other_server_channel)
+                    let server0_bits = receive_bool_vec(other_server_channel)
                         .map_err(|e| format!("Failed to receive bits from server 0 in chunk {}: {:?}", chunk_idx, e))?;
-                    send_bool_vec(&mut *locked_other_server_channel, &bits_chunk_vec)
+                    send_bool_vec(other_server_channel, &bits_chunk_vec)
                         .map_err(|e| format!("Failed to send bits to server 0 in chunk {}: {:?}", chunk_idx, e))?;
                     
                     if server0_bits.len() != bits_chunk_vec.len() {
@@ -472,9 +456,9 @@ impl FuzzyHeavyHittersProtocol {
                     }
                 } else {
                     // Server 0: send our bits, then receive from server 1
-                    send_bool_vec(&mut *locked_other_server_channel, &bits_chunk_vec)
+                    send_bool_vec(other_server_channel, &bits_chunk_vec)
                         .map_err(|e| format!("Failed to send bits to server 1 in chunk {}: {:?}", chunk_idx, e))?;
-                    let server1_bits = receive_bool_vec(&mut *locked_other_server_channel)
+                    let server1_bits = receive_bool_vec(other_server_channel)
                         .map_err(|e| format!("Failed to receive bits from server 1 in chunk {}: {:?}", chunk_idx, e))?;
                     
                     if server1_bits.len() != bits_chunk_vec.len() {
@@ -492,20 +476,6 @@ impl FuzzyHeavyHittersProtocol {
         println!("Time for parallel bit exchange: {:?}", start.elapsed());
         println!("Parallel processing completed successfully");
         Ok(final_results)
-    }
-
-    /// Helper method to send a single bit
-    fn send_single_bit(&self, channel: &mut CommTrackingChannel, bit: bool) -> Result<(), String> {
-        send_bool_vec(channel, &[bit]).map_err(|e| format!("Failed to send bit: {:?}", e))
-    }
-
-    /// Helper method to receive a single bit
-    fn receive_single_bit(&self, channel: &mut CommTrackingChannel) -> Result<bool, String> {
-        let bits = receive_bool_vec(channel).map_err(|e| format!("Failed to receive bit: {:?}", e))?;
-        if bits.len() != 1 {
-            return Err(format!("Expected 1 bit, got {}", bits.len()));
-        }
-        Ok(bits[0])
     }
 }
 
@@ -539,7 +509,6 @@ pub fn request_dealer_check(signal_dealer_channel: &mut CommTrackingChannel, che
 
 pub fn request_dealer_equality(signal_dealer_channel: &mut CommTrackingChannel, check_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
     // Send DealerSignal using custom serialization
-    let start = std::time::Instant::now();
     let signal = DealerSignal::RequestEqualityKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();

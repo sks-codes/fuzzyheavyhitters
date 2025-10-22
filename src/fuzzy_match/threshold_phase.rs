@@ -129,36 +129,52 @@ impl ThresholdPhase {
         }).collect::<Vec<ModInt>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
-            masked_values.iter().for_each(|masked_eval| {
+            // Garbler: send all masked values, then read all counterpart masked values
+            for masked_eval in &masked_values {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel.write_bytes(&eval_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush().map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
+                channel
+                    .write_bytes(&eval_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
 
-            masked_values.iter().map(|&masked_value| {
+            let mut combined = Vec::with_capacity(masked_values.len());
+            for &masked_value in &masked_values {
                 let mut received_bytes = [0u8; 16];
-                channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
-                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
-                masked_value + other_masked_value
-            }).collect::<Vec<ModInt>>()
+                channel
+                    .read_bytes(&mut received_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                let other_masked_value =
+                    ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                combined.push(masked_value + other_masked_value);
+            }
+            combined
         } else {
-            let combined_masked_values = masked_values.iter().map(|&masked_value| {
+            // Evaluator: read all counterpart masked values, then send all our masked values
+            let mut combined = Vec::with_capacity(masked_values.len());
+            for &masked_value in &masked_values {
                 let mut received_bytes = [0u8; 16];
-                channel.read_bytes(&mut received_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)));
-                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
-                masked_value + other_masked_value
-            }).collect::<Vec<ModInt>>();
+                channel
+                    .read_bytes(&mut received_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                let other_masked_value =
+                    ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                combined.push(masked_value + other_masked_value);
+            }
 
-            masked_values.iter().for_each(|masked_eval| {
+            for masked_eval in &masked_values {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel.write_bytes(&eval_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)));
-            });
-            channel.flush().map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)));
-            combined_masked_values
+                channel
+                    .write_bytes(&eval_bytes)
+                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+            }
+            channel
+                .flush()
+                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+
+            combined
         };
 
         let out_modulus = 2;
