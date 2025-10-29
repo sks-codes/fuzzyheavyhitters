@@ -29,10 +29,9 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
 
     // Create channels
     let mut signal_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap())?;
-    let mut check_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap() + 1)?;
-    let mut signal_server1_channel = listen_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap())?;
-    let mut check_server1_channel = listen_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap() + 1)?;
-    let mut dealer = FssDealer::new(
+    let check_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap() + 1)?;
+    let check_server1_channel = listen_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap() + 1)?;
+    let dealer = FssDealer::new(
         config.mu,
         0,
         config.h2,
@@ -59,7 +58,7 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
         random_values: random_pairs.iter().map(|(_, r1)| r1.clone()).collect(),
     };
 
-    let (server0_result, server1_result) = rayon::join(
+    let (_server0_result, _server1_result) = rayon::join(
         || dealer.write_equality_key_batch(&mut check_server0_channel.clone(), &batch_server0),
         || dealer.write_equality_key_batch(&mut check_server1_channel.clone(), &batch_server1),
     );

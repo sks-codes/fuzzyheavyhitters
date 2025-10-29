@@ -12,18 +12,18 @@ use rand::distr::Alphanumeric;
 
 
 fn sample_string(len: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     std::iter::repeat(())
         .map(|()| rng.sample(Alphanumeric) as char)
         .take(len / 8)
         .collect()
 }
-fn generate_ibDCF_keys(string_length : usize, num_keys : usize) -> (Vec<IbDCFKey>, Vec<IbDCFKey>) {
+fn generate_ibdcf_keys(string_length : usize, num_keys : usize) -> (Vec<IbDCFKey>, Vec<IbDCFKey>) {
 
     rayon::iter::repeat(0)
         .take(num_keys)
         .enumerate()
-        .map(|(i, _)| {
+        .map(|(_i, _)| {
             let data_string = sample_string(string_length);
             let keys = IbDCFKey::gen_ib_dcf(string_to_bits(&data_string).as_slice(), false);
             (keys.0.clone(), keys.1.clone())
@@ -61,7 +61,7 @@ async fn main() -> io::Result<()> {
 
     for i in string_lengths{
         let start = Instant::now();
-        let keys= generate_ibDCF_keys(i, num_keys);
+        let keys= generate_ibdcf_keys(i, num_keys);
         let delta = start.elapsed().as_secs_f64();
         println!("Time to generate ibDCF keys for string length {}: {:?}", i, delta);
         let encoded: Vec<u8> = bincode::serialize(&keys.0[0]).unwrap();
@@ -78,7 +78,7 @@ async fn main() -> io::Result<()> {
 
     for i in string_lengths{
         let start = Instant::now();
-        let keys= generate_ibDCF_keys(i, num_keys);
+        let keys= generate_ibdcf_keys(i, num_keys);
         let delta = start.elapsed().as_secs_f64();
         let encoded: Vec<u8> = bincode::serialize(&keys.0[0]).unwrap();
         wtr.write_record(&[i.to_string(), num_keys.to_string(), delta.to_string(), (delta / (num_keys as f64)).to_string(), encoded.len().to_string()])?;

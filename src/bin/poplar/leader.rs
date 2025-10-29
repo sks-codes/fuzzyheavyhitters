@@ -1,6 +1,7 @@
 use mosaic::{
-    collect, config, string_to_bits, FieldElm,
+    collect, string_to_bits, FieldElm,
     data_structures::fastfield, CollectorClient,
+    configs::poplar_config,
     rpc::{
         AddKeysRequest, FinalSharesRequest, ResetRequest,
         TreeInitRequest,
@@ -65,7 +66,7 @@ fn generate_random_bit_vectors(len: usize, d: usize) -> Vec<Vec<bool>> {
         .collect()
 }
 
-fn generate_strings(cfg: &config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
+fn generate_strings(cfg: &poplar_config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
     (0..cfg.num_sites)
         .map(|_| {
             generate_random_bit_vectors(cfg.data_len - aug_len, cfg.n_dims) //leaving space for later per-client augmentation
@@ -85,7 +86,7 @@ fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
 }
 
 
-fn generate_keys(cfg: &config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) {
+fn generate_keys(cfg: &poplar_config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) {
     let (keys0, keys1): (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) = rayon::iter::repeat(0)
         .take(cfg.num_sites)
         .map(|_| {
@@ -126,7 +127,7 @@ async fn tree_init(
 }
 
 async fn add_fuzzy_keys(
-    cfg: &config::Config,
+    cfg: &poplar_config::Config,
     client0: CollectorClient,
     client1: CollectorClient,
     strings: &Vec<Vec<Vec<bool>>>,
@@ -139,7 +140,7 @@ async fn add_fuzzy_keys(
     let mut addkey0 = Vec::with_capacity(nreqs);
     let mut addkey1 = Vec::with_capacity(nreqs);
 
-    for i in 0..nreqs {
+    for _i in 0..nreqs {
         let sample = (rng.sample(zipf) as usize).saturating_sub(1);
         let key_str = augment_string(strings[sample].clone(), aug_len);
         let (key0, key1) = IbDCFKey::gen_l_inf_ball(key_str, cfg.ball_size as u32);
@@ -160,7 +161,7 @@ async fn add_fuzzy_keys(
 }
 
 async fn add_keys(
-    cfg: &config::Config,
+    _cfg: &poplar_config::Config,
     client0: CollectorClient,
     client1: CollectorClient,
     keys0: Vec<Vec<IntervalKey>>,
@@ -180,7 +181,7 @@ async fn add_keys(
 }
 
 async fn run_level(
-    cfg: &config::Config,
+    cfg: &poplar_config::Config,
     client0: &mut CollectorClient,
     client1: &mut CollectorClient,
     level: usize,
@@ -235,7 +236,7 @@ async fn run_level(
 }
 
 async fn run_level_last(
-    cfg: &config::Config,
+    cfg: &poplar_config::Config,
     client0: &mut CollectorClient,
     client1: &mut CollectorClient,
     nreqs: usize,
@@ -301,7 +302,7 @@ async fn main() -> io::Result<()> {
     rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
 
     env_logger::init();
-    let (cfg, _, mut nreqs) = config::get_args("Leader", false, true);
+    let (cfg, _, mut nreqs) = poplar_config::get_args("Leader", false, true);
     debug_assert_eq!(cfg.data_len % 8, 0);
 
     // XXX WARNING: THERE IS NO TLS HERE!!!

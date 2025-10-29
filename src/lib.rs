@@ -1,7 +1,6 @@
 // extern crate cpuprofiler;
 
 pub mod collect;
-pub mod config;
 pub mod data_structures;
 pub mod rpc;
 pub mod fss;

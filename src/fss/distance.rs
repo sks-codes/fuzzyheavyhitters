@@ -32,7 +32,7 @@ impl<const N: usize> DistanceFSSEval<N> {
         out.extend_from_slice(&self.left_eval.1.to_bytes());
         out.extend_from_slice(&self.right_eval.0.to_bytes());
         out.extend_from_slice(&self.right_eval.1.to_bytes());
-        let modulus = self.left_eval.0.y.modulus();
+        let modulus = self.left_eval.0.y().modulus();
         let num_bits = 128 - modulus.leading_zeros();
         out.extend_from_slice(&self.result.to_le_bytes()[..((num_bits + 7) / 8) as usize]);
         out
@@ -179,12 +179,12 @@ impl<const N: usize> DistanceFSSKey<N> {
         let right_eval1 = self.right_fss.1.expand_prefix(&state.right_eval.1, modulus);
 
         let left_eval = (
-            left_eval0.0.y + left_eval1.0.y,
-            left_eval0.1.y + left_eval1.1.y,
+            left_eval0.0.y() + left_eval1.0.y(),
+            left_eval0.1.y() + left_eval1.1.y(),
         );
         let right_eval = (
-            right_eval0.0.y + right_eval1.0.y,
-            right_eval0.1.y + right_eval1.1.y,
+            right_eval0.0.y() + right_eval1.0.y(),
+            right_eval0.1.y() + right_eval1.1.y(),
         );
         let mut x = 0;
         for i in 0..prefix.len() {

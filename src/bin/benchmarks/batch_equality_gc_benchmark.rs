@@ -1,25 +1,20 @@
 use mosaic::{
-    channel::{CommTrackingChannel, connect_to, listen_to},
+    channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
     fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
     fuzzy_match::share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod, SharePhase},
 };
-use scuttlebutt::{AesRng, Channel, AbstractChannel};
-use std::net::{TcpListener, TcpStream};
-use std::io::{BufReader, BufWriter};
-use std::thread;
-use std::time::{Duration, Instant};
+use scuttlebutt::{AesRng, AbstractChannel};
+use std::time::Instant;
 use rand::Rng;
 use clap::{Arg, App};
-use rayon::prelude::*;
-use crossbeam;
 
 fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
             (0..input_bit_length)
-                .map(|_| rng.gen::<bool>())
+                .map(|_| rng.random::<bool>())
                 .collect()
         })
         .collect()
@@ -59,7 +54,6 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         d: config.d,
     };
     
-    let share_phase = SharePhase::new(share_config);
     let check_phase = CheckPhase::new(check_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each

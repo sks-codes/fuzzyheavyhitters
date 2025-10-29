@@ -51,30 +51,12 @@ fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize, bits_conver
     let dur_de = start_de.elapsed();
     black_box(de_count);
 
-    // Optional per-element bit conversion cost simulation
-    let (dur_bits_out, dur_bits_in) = if bits_convert {
-        // Convert each element of each RingVec to bits then back; measure separately
-        let start_out = Instant::now();
-        let bit_len = modulus_bits; // minimal bits
-        let mut tmp_bits = Vec::with_capacity(bit_len);
-        let mut tmp_u128 = 0u128;
-        for v in &vecs_a { for &val in v.val() { tmp_bits = u128_to_bits_msb(val, bit_len); black_box(&tmp_bits); } }
-        let dur_out = start_out.elapsed();
-
-        let start_in = Instant::now();
-        for v in &vecs_b { for &val in v.val() { tmp_u128 ^= bits_to_u128_msb(&u128_to_bits_msb(val, bit_len)); } }
-        let dur_in = start_in.elapsed();
-        black_box(tmp_u128);
-        (Some(dur_out), Some(dur_in))
-    } else { (None, None) };
-
     println!("RingVec<N={}> modulus_bits={} iterations={}", N, modulus_bits, iterations);
     println!(" add: {:?} (avg {:?})", dur_add, dur_add / iterations as u32);
     println!(" sub: {:?} (avg {:?})", dur_sub, dur_sub / iterations as u32);
     println!(" mul: {:?} (avg {:?})", dur_mul, dur_mul / iterations as u32);
     println!(" to_bytes: {:?} total ({} avg bytes serialized per vec)", dur_ser, ser_bytes_total as f64 / iterations as f64);
     println!(" from_bytes (same bytes reused): {:?} (avg {:?})", dur_de, dur_de / iterations as u32);
-    if let (Some(o), Some(i)) = (dur_bits_out, dur_bits_in) { println!(" bit_out(total convert u128->bits): {:?}; bit_in(u128<-bits): {:?}", o, i); }
 }
 
 fn main() {

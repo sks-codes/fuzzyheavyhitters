@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use serde_json::Value;
 use std::{fs, net::SocketAddr};
 
@@ -52,42 +52,38 @@ pub fn get_config(filename: &str) -> Config {
     }
 }
 
-pub fn get_args(name: &str, get_server_id: bool, get_n_reqs: bool) -> (Config, i8, usize) {
-    let mut flags = App::new(name)
+pub fn get_args(name: &'static str, get_server_id: bool, get_n_reqs: bool) -> (Config, i8, usize) {
+    let mut flags = Command::new(name)
         .version("0.1")
         .author("Henry Corrigan-Gibbs <henrycg@csail.mit.edu>")
         .about("Prototype of privacy-preserving heavy hitters scheme.")
         .arg(
-            Arg::with_name("config")
-                .short("c")
+            Arg::new("config")
+                .short('c')
                 .long("config")
                 .value_name("FILENAME")
                 .help("Location of JSON config file")
-                .required(true)
-                .takes_value(true),
+                .required(true),
         );
 
     if get_server_id {
         flags = flags.arg(
-            Arg::with_name("server_id")
-                .short("i")
+            Arg::new("server_id")
+                .short('i')
                 .long("server_id")
                 .value_name("NUMBER")
                 .help("Zero-indexed ID of server")
-                .required(true)
-                .takes_value(true),
+                .required(true),
         );
     }
 
     if get_n_reqs {
         flags = flags.arg(
-            Arg::with_name("num_requests")
-                .short("n")
+            Arg::new("num_requests")
+                .short('n')
                 .long("num_requests")
                 .value_name("NUMBER")
-                .help("Number of client requests to generate")
-                .required(false)
-                .takes_value(true),
+                .help("Number of client requests to generate"),
         );
     }
 
@@ -95,16 +91,30 @@ pub fn get_args(name: &str, get_server_id: bool, get_n_reqs: bool) -> (Config, i
 
     let mut server_id = -1;
     if get_server_id {
-        server_id = flags.value_of("server_id").unwrap().parse().unwrap();
+        server_id = flags
+            .get_one::<String>("server_id")
+            .expect("server_id required")
+            .parse()
+            .expect("invalid server_id");
     }
 
     let mut n_reqs = 0;
     if get_n_reqs {
-        n_reqs = flags.value_of("num_requests").unwrap_or("0").parse().unwrap();
+        n_reqs = flags
+            .get_one::<String>("num_requests")
+            .map(|s| s.as_str())
+            .unwrap_or("0")
+            .parse()
+            .expect("invalid num_requests");
     }
 
     (
-        get_config(flags.value_of("config").unwrap()),
+        get_config(
+            flags
+                .get_one::<String>("config")
+                .expect("config required")
+                .as_str(),
+        ),
         server_id,
         n_reqs,
     )

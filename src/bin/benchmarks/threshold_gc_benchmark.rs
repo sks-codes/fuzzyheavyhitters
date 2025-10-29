@@ -1,21 +1,16 @@
 use mosaic::{
-    channel::{CommTrackingChannel, connect_to, listen_to},
+    channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
     fuzzy_match::threshold_phase::{self, ThresholdPhase, ThresholdConfig, ThresholdMethod},
     data_structures::modint::ModInt,
 };
-use scuttlebutt::{AesRng, Channel, AbstractChannel};
-use std::net::{TcpListener, TcpStream};
-use std::io::{BufReader, BufWriter};
-use std::thread;
-use std::time::{Duration, Instant};
+use scuttlebutt::{AesRng, AbstractChannel};
+use std::time::Instant;
 use rand::Rng;
 use clap::{Arg, App};
-use rayon::prelude::*;
-use crossbeam;
 
 fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
             ModInt::new(rng.random::<u128>(), modulus)

@@ -135,7 +135,7 @@ pub struct RdcfEval<const N: usize> {
     level: usize,
     seed: [u8; AES_BLOCK_SIZE],
     pub bit: bool,
-    pub y: RingVec<N>,
+    y: RingVec<N>,
     pub y_bit: ModInt,
 }
 
@@ -174,6 +174,10 @@ impl<const N: usize> RdcfEval<N> {
             },
             offset
         )
+    }
+
+    pub(crate) fn y(&self) -> &RingVec<N> {
+        &self.y
     }
 }
 
@@ -442,13 +446,13 @@ impl<const N: usize> RdcfKey<N>
         }
     }
 
-    pub fn eval_rdcf(&self, idx: &[bool], modulus: u128) -> RingVec<N> {
-        debug_assert!(idx.len() <= self.domain_size());
-        debug_assert!(!idx.is_empty());
+    pub fn eval_rdcf(&self, prefix: &[bool], modulus: u128) -> RingVec<N> {
+        debug_assert!(prefix.len() <= self.domain_size());
+        debug_assert!(!prefix.is_empty());
         let mut state = self.eval_init(modulus);
 
-        for i in 0..idx.len() {
-            let bit = idx[i];
+        for i in 0..prefix.len() {
+            let bit = prefix[i];
             let state_new = self.eval_bit(&state, modulus, bit);
             state = state_new;
         }
@@ -458,5 +462,21 @@ impl<const N: usize> RdcfKey<N>
 
     pub fn domain_size(&self) -> usize {
         self.cor_words.len()
+    }
+
+    pub fn full_domain_eval(
+        &self,
+        modulus: u128,
+        domain_size: usize,
+    ) -> Vec<RingVec<N>> {
+        let mut states = vec![self.eval_init(modulus); 1 << domain_size];
+        for level in 0..domain_size {
+            for i in (0..(1 << level)).rev() {
+                (states[i << 1], states[i << 1 | 1]) = self.expand_prefix(&states[i], modulus);
+            }
+        }
+        let results = states.iter().map(|s| s.y).collect();
+        states.clear();
+        results
     }
 }

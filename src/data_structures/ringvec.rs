@@ -203,6 +203,32 @@ impl<const N: usize> Mul for RingVec<N> {
     }
 }
 
+// --- Reference Implementations (&RingVec op &RingVec) ---
+// Provide ops for borrowed RingVecs to support expressions like
+// `ldcf_eval.y() - rdcf_eval.y()` and iterator maps over &RingVecs.
+impl<const N: usize> Add<&RingVec<N>> for &RingVec<N> {
+    type Output = RingVec<N>;
+    fn add(self, other: &RingVec<N>) -> Self::Output {
+        // Copy `self` (RingVec is Copy) and reuse existing helper
+        (*self).element_wise_ringvec_op(other, |a, b| a + b)
+    }
+}
+
+impl<const N: usize> Sub<&RingVec<N>> for &RingVec<N> {
+    type Output = RingVec<N>;
+    fn sub(self, other: &RingVec<N>) -> Self::Output {
+        let modulus_mask = self.modulus_mask;
+        (*self).element_wise_ringvec_op(other, move |a, b| a + modulus_mask + 1 - b)
+    }
+}
+
+impl<const N: usize> Mul<&RingVec<N>> for &RingVec<N> {
+    type Output = RingVec<N>;
+    fn mul(self, other: &RingVec<N>) -> Self::Output {
+        (*self).element_wise_ringvec_op(other, |a, b| a * b)
+    }
+}
+
 // --- Indexing Implementations ---
 
 impl<const N: usize> Index<usize> for RingVec<N> {

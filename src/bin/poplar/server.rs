@@ -2,11 +2,12 @@
 //   https://github.com/google/tarpc/blob/master/example-service/src/server.rs
 
 use mosaic::{
-    collect, config,
+    collect, 
     FieldElm,
     data_structures::fastfield::FE, data_structures::prg,
-    rpc::Collector,
+    configs::poplar_config,
     rpc::{
+        Collector,
         AddKeysRequest, FinalSharesRequest, ResetRequest, TreeCrawlRequest, TreeInitRequest,
         TreePruneRequest,
         TreePruneLastRequest,
@@ -217,7 +218,7 @@ fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
 async fn main() -> io::Result<()> {
     env_logger::init();
 
-    let (cfg, sid, _) = config::get_args("Server", true, false);
+    let (cfg, sid, _) = poplar_config::get_args("Server", true, false);
     let server_addr = match sid {
         0 => cfg.server0,
         1 => cfg.server1,

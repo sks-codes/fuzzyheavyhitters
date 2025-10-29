@@ -1106,10 +1106,10 @@ impl SharePhase {
         (data0[dimension].1, data1[dimension].1) = rdcf_key.expand_prefix(&rdcf_data, modulus);
 
         let mut eval0 = eval.to_vec();
-        eval0[dimension] = (data0[dimension].0.y + data0[dimension].1.y)[0];
+        eval0[dimension] = (data0[dimension].0.y() + data0[dimension].1.y())[0];
 
         let mut eval1 = eval.to_vec();
-        eval1[dimension] = (data1[dimension].0.y + data1[dimension].1.y)[0];
+        eval1[dimension] = (data1[dimension].0.y() + data1[dimension].1.y())[0];
 
         Ok((
             ShareData::IntervalFSS {
