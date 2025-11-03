@@ -73,6 +73,8 @@ pub struct ShareConfig {
     pub h2: usize,
     /// Dimension of the input space
     pub d: usize,
+    /// Which server is this
+    pub role: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -736,6 +738,8 @@ impl SharePhase {
     pub fn sketch(
         &self,
         shared_ranges: &[SharedRange],
+        delta: u128,
+        other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // Check the type of all shared ranges
         let first_type = match &shared_ranges[0] {
@@ -760,13 +764,21 @@ impl SharePhase {
             }
         }
 
+        let mut seed = [0u8; AES_KEY_SIZE];
+        if self.config.role {
+            seed = rand::rng().random::<[u8; AES_KEY_SIZE]>();
+            other_server_channels[0].write_bytes(&seed).expect("Failed to send seed to other server");
+        } else {
+            other_server_channels[0].read_bytes(&mut seed).expect("Failed to receive seed from other server");
+        }
+
         // Now sketch based on the type
         match first_type {
             "OKVS" => {
                 println!("Sketching for OKVS not implemented yet, so we skip it.");
                 Ok(true)
             },
-            "IntervalFSS" => self.sketch_interval_fss(shared_ranges),
+            "IntervalFSS" => self.parallel_sketch_interval_fss(shared_ranges, seed, delta, other_server_channels),
             "DistanceFSSL1" => self.sketch_distance_fss::<2>(shared_ranges),
             "DistanceFSSL2" => self.sketch_distance_fss::<3>(shared_ranges),
             "DistanceFSSL3" => self.sketch_distance_fss::<4>(shared_ranges),
@@ -1255,6 +1267,7 @@ impl SharePhase {
         &self,
         shared_ranges: &[SharedRange],
         seed: &[u8; AES_KEY_SIZE],
+        delta: u128,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // First just do full domain evaluation
@@ -1265,42 +1278,112 @@ impl SharePhase {
 
         let num_threads = other_server_channels.len();
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
+        let domain_range = 1u128 << self.config.h1;
+        let total_mod = 1u128 << (self.config.h1 + self.config.sketch_s);
+
+        let mut z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut z3s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut z5s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
 
         thread_pool.install(|| {
-            shared_ranges.par_iter().enumerate().for_each(|(i, shared_range)| {
-                match shared_range {
-                    SharedRange::IntervalFSS { keys, role: _ } => {
-                        // Create a seed for this index only, by xoring the global seed with the index
-                        let mut blocks = vec![[0u8; 16]; (1 << self.config.h1) * d * 2];
-                        let prg = PRG::new(seed, i as u64);
-                        prg.random_16byte_block(&mut blocks);
-                        let rs = blocks.iter().map(|&b| {
-                            let num = u128::from_le_bytes(b);
-                            num % (1u128 << self.config.sketch_s)
-                       }).collect::<Vec<u128>>();
-                        // There are d dimensions
-                        for dimension in 0..self.config.d {
-                            let key = &keys[dimension];
-                            let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1)
-                                .map(|eval| eval[0])
-                                .collect::<Vec<u128>>();
-                            let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1)
-                                .map(|eval| eval[0])
-                                .collect::<Vec<u128>>();
-                            // Now check if the ldcf is an ldcf by shifting by one and subtracting
-                            let ldcf_evals1 = (1..ldcf_evals.len())
-                                .map(|j| {
-                                    (ldcf_evals[j] + modulus - ldcf_evals[j - 1]) % modulus
-                                })
-                                .collect::<Vec<u128>>();
+            shared_ranges.par_iter()
+                .zip(z1s.par_iter_mut())
+                .zip(z2s.par_iter_mut())
+                .zip(z3s.par_iter_mut())
+                .zip(z4s.par_iter_mut())
+                .zip(z5s.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, ((((z1_row, z2_row), z3_row), z4_row), z5_row))| {
+                    match shared_range {
+                        SharedRange::IntervalFSS { keys, role: _ } => {
+                            // Create a seed for this index only, by xoring the global seed with the index
+                            let mut blocks = vec![[0u8; 16]; domain_range * d];
+                            let prg = PRG::new(seed, i as u64);
+                            prg.random_16byte_block(&mut blocks);
+                            let rs = blocks.iter().map(|&b| {
+                                let num = u128::from_le_bytes(b);
+                                num % total_mod
+                            }).collect::<Vec<u128>>();
+                            let rs2 = rs.iter()
+                                .map(|&r| (r * r) % total_mod)
+                                .collect::<Vec<u128>>(); // ri^2
+                            let rs3 = rs.iter().zip(rs2.iter())
+                                .map(|(&r, &r2)| (r * r2) % total_mod)
+                                .collect::<Vec<u128>>(); // ri^3
+                            let rs4 = rs2.iter()
+                                .map(|&r2| (r2 * r2) % total_mod)
+                                .collect::<Vec<u128>>(); // ri^4
+                            let rs6 = rs3.iter()
+                                .map(|&r3| (r3 * r3) % total_mod)
+                                .collect::<Vec<u128>>(); // ri^6
+                            // There are d dimensions
+                            for dimension in 0..self.config.d {
+                                let key = &keys[dimension];
+                                let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1)
+                                    .map(|eval| eval[0])
+                                    .collect::<Vec<u128>>();
+                                let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1)
+                                    .map(|eval| eval[0])
+                                    .collect::<Vec<u128>>();
+
+                                // CHECK LDCF
+                                // Shift by one and subtract to turn into DPF
+                                let ldcf_evals1 = (1..ldcf_evals.len())
+                                    .map(|j| {
+                                        (ldcf_evals[j] + modulus - ldcf_evals[j - 1]) % modulus
+                                    })
+                                    .collect::<Vec<u128>>();
+                                z1_row[dimension] = ldcf_evals1.iter()
+                                    .zip(rs[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .fold(0u128, |acc, (&eval, &r)| {
+                                        (acc + eval * r) % total_mod
+                                    }); // sum of ri * evali. This sum should be non-zero at only one position.
+                                z2_row[dimension] = ldcf_evals1.iter()
+                                    .zip(rs2[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .fold(0u128, |acc, (&eval, &r2)| {
+                                        (acc + eval * r) % total_mod
+                                    }); // sum of ri^2 * evali. We should have z2 = z1^2 if only one position is non-zero, and it is 1.
+                                
+                                // CHECK RDCF
+                                // Shift by one and subtract to turn into DPF
+                                let rdcf_evals1 = (1..rdcf_evals.len())
+                                    .map(|j| {
+                                        (rdcf_evals[j] + modulus - rdcf_evals[j - 1]) % modulus
+                                    })
+                                    .collect::<Vec<u128>>();
+                                z3_row[dimension] = rdcf_evals1.iter()
+                                    .zip(rs3[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .fold(0u128, |acc, (&eval, &r3)| {
+                                        (acc + eval * r3) % total_mod
+                                    }); // sum of ri^3 * evali. This sum should be non-zero at only one position.
+                                z4_row[dimension] = rdcf_evals1.iter()
+                                    .zip(rs6[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .fold(0u128, |acc, (&eval, &r6)| {
+                                        (acc + eval * r6) % total_mod
+                                    }); // sum of ri^6 * evali. We should have z4 = z3^2 if only one position is non-zero, and it is 1.
+
+
+                                // Check whether the interval is smaller than or equal to 2 * delta + 1 by shifting rdcf by 2 * delta + 1 and subtracting
+                                let rdcf_ldcf_evals = (0..rdcf_evals1.len() - (2 * delta as usize + 1))
+                                    .map(|j| {
+                                        (rdcf_evals[j + 2 * delta as usize + 1] + modulus - ldcf_evals1[j]) % modulus
+                                    })
+                                    .collect::<Vec<u128>>();
+                                z5_row[dimension] = rdcf_ldcf_evals.iter()
+                                    .zip(rs4[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .fold(0u128, |acc, (&eval, &r4)| {
+                                        (acc + eval * r4) % total_mod
+                                    }); // sum of ri * evali. This sum should be non-zero at only one position.
+                            }
+                        }
+                        _ => {
+                            panic!("Sketching failed: Expected IntervalFSS shared range");
                         }
                     }
-                    _ => {
-                        panic!("Sketching failed: Expected IntervalFSS shared range");
-                    }
-                }
-            })
-        });
+                })
+            });
 
         Ok(true)
     }
