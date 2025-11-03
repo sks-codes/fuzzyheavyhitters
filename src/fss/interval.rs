@@ -3,6 +3,7 @@ use crate::{data_structures::ringvec::RingVec, fss::{
     rdcf::{RdcfEval, RdcfKey},
 }};
 
+#[derive(Clone, Debug)]
 pub struct IntervalFSSEval<const N: usize> {
     ldcf_eval: LdcfEval<N>,
     rdcf_eval: RdcfEval<N>,
@@ -13,7 +14,6 @@ impl<const N: usize> IntervalFSSEval<N> {
         let mut bytes = Vec::new();
         bytes.extend(self.ldcf_eval.to_bytes());
         bytes.extend(self.rdcf_eval.to_bytes());
-        bytes.extend(self.result.to_bytes());
         bytes
     }
 
@@ -23,14 +23,12 @@ impl<const N: usize> IntervalFSSEval<N> {
         offset += ldcf_size;
         let (rdcf_eval, rdcf_size) = RdcfEval::from_bytes(&bytes[offset..], modulus);
         offset += rdcf_size;
-        let (result, result_size) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to deserialize RingVec");
-        offset += result_size;
         (
             IntervalFSSEval {
                 ldcf_eval,
                 rdcf_eval,
             },
-            offset,
+            offset
         )
     }
 
@@ -43,7 +41,7 @@ impl<const N: usize> IntervalFSSEval<N> {
     }
 
     pub fn result(&self) -> &RingVec<N> {
-        &self.ldcf_eval.y() - &self.rdcf_eval.y()
+        &(self.ldcf_eval.y() - self.rdcf_eval.y())
     }
 }
 

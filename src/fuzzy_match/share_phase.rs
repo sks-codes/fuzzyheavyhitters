@@ -1,25 +1,20 @@
 use blake3;
 use rand::Rng;
-use tokio::time::Interval;
 
-use crate::aes::AES_KEY_SIZE;
-use crate::channel::CommTrackingChannel;
-use crate::fss::interval;
-use crate::okvs_f2k::RbOkvsF2k;
-use crate::fss::{
-    ldcf::{LdcfKey, LdcfEval},
-    rdcf::{RdcfKey, RdcfEval},
-    distance::{DistanceFSSKey, DistanceFSSEval},
-    interval::{IntervalFSSKey, IntervalFSSEval},
+use crate::{
+    aes::AES_KEY_SIZE,
+    channel::CommTrackingChannel,
+    randomness::prg::PRG,
+    okvs_f2k::RbOkvsF2k,
+    fss::{
+        distance::{DistanceFSSKey, DistanceFSSEval},
+        interval::{IntervalFSSKey, IntervalFSSEval},
+    },
 };
 use crate::data_structures::ringvec::RingVec;
 use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
 use std::cmp::{max, min};
 use std::convert::TryInto;
-use aes::{
-    Aes256,
-    block_cipher::generic_array::GenericArray,
-};
 
 // Import strategies from the separate module
 use super::strategies::{
@@ -307,7 +302,7 @@ impl ShareData {
 }
 
 /// Represents the shared data for a range around input x
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SharedRange {
     OKVS {
         okvs_shares: Vec<Vec<u128>>, // One OKVS encoding per dimension
@@ -1268,6 +1263,7 @@ impl SharePhase {
         shared_ranges: &[SharedRange],
         seed: &[u8; AES_KEY_SIZE],
         delta: u128,
+        modulus: u128,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // First just do full domain evaluation
@@ -1295,11 +1291,11 @@ impl SharePhase {
                 .zip(z4s.par_iter_mut())
                 .zip(z5s.par_iter_mut())
                 .enumerate()
-                .for_each(|(i, ((((z1_row, z2_row), z3_row), z4_row), z5_row))| {
+                .for_each(|(i, (((((shared_range, z1_row), z2_row), z3_row), z4_row), z5_row))| {
                     match shared_range {
                         SharedRange::IntervalFSS { keys, role: _ } => {
                             // Create a seed for this index only, by xoring the global seed with the index
-                            let mut blocks = vec![[0u8; 16]; domain_range * d];
+                            let mut blocks = vec![[0u8; 16]; domain_range * self.config.d as usize];
                             let prg = PRG::new(seed, i as u64);
                             prg.random_16byte_block(&mut blocks);
                             let rs = blocks.iter().map(|&b| {
@@ -1343,7 +1339,7 @@ impl SharePhase {
                                 z2_row[dimension] = ldcf_evals1.iter()
                                     .zip(rs2[domain_range * dimension..domain_range * (dimension + 1)].iter())
                                     .fold(0u128, |acc, (&eval, &r2)| {
-                                        (acc + eval * r) % total_mod
+                                        (acc + eval * r2) % total_mod
                                     }); // sum of ri^2 * evali. We should have z2 = z1^2 if only one position is non-zero, and it is 1.
                                 
                                 // CHECK RDCF

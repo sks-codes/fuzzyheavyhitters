@@ -190,7 +190,9 @@ impl MosaicProtocol {
                             let (share_data, _) = ShareData::from_bytes(bytes, eval_len, eval_modulus);
                             match share_data {
                                 ShareData::OKVS { eval } => eval.clone(),
-                                ShareData::IntervalFSS { .. } => eval.clone(),
+                                ShareData::IntervalFSS { data } => {
+                                    data.iter().map(|eval| eval.result()).collect::<Vec<u128>>()
+                                },
                                 ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
                                 ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),
                                 ShareData::DistanceFSSL3 { eval, .. } => eval.clone(),

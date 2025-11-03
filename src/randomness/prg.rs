@@ -29,7 +29,7 @@ impl PRG {
 
     /// Generate a random 16-byte key using a secure random generator.
     fn generate_random_key() -> [u8; 16] {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut key = [0u8; 16];
         rng.fill(&mut key);
         key

@@ -15,17 +15,6 @@ dependencies = [
 
 [[package]]
 name = "aes"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7001367fde4c768a19d1029f0a8be5abd9308e1119846d5bd9ad26297b8faf5"
-dependencies = [
- "aes-soft",
- "aesni",
- "block-cipher",
-]
-
-[[package]]
-name = "aes"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
@@ -33,29 +22,6 @@ dependencies = [
  "cfg-if 1.0.0",
  "cipher",
  "cpufeatures",
-]
-
-[[package]]
-name = "aes-ctr"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e60aeefd2a0243bd53a42e92444e039f67c3d7f0382c9813577696e7c10bf3"
-dependencies = [
- "aes-soft",
- "aesni",
- "ctr",
- "stream-cipher",
-]
-
-[[package]]
-name = "aes-soft"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4925647ee64e5056cf231608957ce7c81e12d6d6e316b9ce1404778cc1d35fa7"
-dependencies = [
- "block-cipher",
- "byteorder",
- "opaque-debug",
 ]
 
 [[package]]
@@ -601,11 +567,11 @@ dependencies = [
 
 [[package]]
 name = "ctr"
-version = "0.4.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3592740fd55aaf61dd72df96756bd0d11e6037b89dcf30ae2e1895b267692be"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
 dependencies = [
- "stream-cipher",
+ "cipher",
 ]
 
 [[package]]
@@ -1177,8 +1143,7 @@ dependencies = [
 name = "mosaic"
 version = "0.1.0"
 dependencies = [
- "aes 0.4.0",
- "aes-ctr",
+ "aes",
  "aesni",
  "bincode",
  "blake3",
@@ -1187,6 +1152,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "csv",
+ "ctr",
  "env_logger",
  "fancy-garbling",
  "futures",
@@ -2381,7 +2347,7 @@ name = "vectoreyes"
 version = "0.6.0"
 source = "git+https://github.com/GaloisInc/swanky?rev=553ede0#553ede0dc97fa6db06d87db395dad4501f0473b1"
 dependencies = [
- "aes 0.8.4",
+ "aes",
  "bytemuck",
  "lazy_static",
  "num-traits",

@@ -2,13 +2,13 @@ use core::arch::x86_64::{
     __m128i, _mm_add_epi64, _mm_loadu_si128, _mm_set_epi64x, _mm_storeu_si128,
 };
 
-use aes::block_cipher::{generic_array::GenericArray, Block, BlockCipher, NewBlockCipher};
-use aes::block_cipher::generic_array::typenum;
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
+use aes::cipher::generic_array::typenum;
 use aes::Aes128;
 
 // AES key size in bytes. We always use AES-128,
 // which has 16-byte keys.
-const AES_KEY_SIZE: usize = 16;
+pub const AES_KEY_SIZE: usize = 16;
 
 // AES block size in bytes. Always 16 bytes.
 pub const AES_BLOCK_SIZE: usize = 16;
@@ -117,7 +117,7 @@ impl FixedKeyPrgStream {
     // Modified from RustCrypto aesni crate
     #[inline(always)]
     fn load(key: &[u8; 16]) -> __m128i {
-        let val = Block::<Aes128>::from_slice(key);
+        let val = GenericArray::from_slice(key);
 
         // Safety: `loadu` supports unaligned loads
         #[allow(clippy::cast_ptr_alignment)]

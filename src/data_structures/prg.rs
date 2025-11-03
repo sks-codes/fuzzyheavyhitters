@@ -2,10 +2,10 @@ use core::arch::x86_64::{
     __m128i, _mm_add_epi64, _mm_loadu_si128, _mm_set_epi64x, _mm_storeu_si128,
 };
 
-use aes::block_cipher::{generic_array::GenericArray, Block, BlockCipher, NewBlockCipher};
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
+use aes::cipher::generic_array::typenum;
 use aes::Aes128;
-use aes_ctr::stream_cipher::{NewStreamCipher, SyncStreamCipher};
-use aes_ctr::Aes128Ctr;
+use ctr::Ctr128BE;
 
 use rand::Rng;
 use rand_core::RngCore;
@@ -13,6 +13,8 @@ use rand_core::RngCore;
 use serde::Deserialize;
 use serde::Serialize;
 use std::ops;
+
+type Aes128Ctr = Ctr128BE<Aes128>;
 
 // AES key size in bytes. We always use AES-128,
 // which has 16-byte keys.
@@ -235,7 +237,8 @@ impl FixedKeyPrgStream {
         self.buf_ptr = 0;
 
         let block = GenericArray::clone_from_slice(&[0u8; 16]);
-        let mut block8 = GenericArray::clone_from_slice(&[block; 8]);
+        let mut block8: GenericArray<GenericArray<u8, typenum::U16>, typenum::U8> =
+            GenericArray::clone_from_slice(&[block; 8]);
 
         let mut cnts = [[0u8; AES_BLOCK_SIZE]; 8];
         for i in 0..8 {
@@ -285,7 +288,7 @@ impl FixedKeyPrgStream {
     // Modified from RustCrypto aesni crate
     #[inline(always)]
     fn load(key: &[u8; 16]) -> __m128i {
-        let val = Block::<Aes128>::from_slice(key);
+        let val: &GenericArray<u8, typenum::U16> = GenericArray::from_slice(key);
 
         // Safety: `loadu` supports unaligned loads
         #[allow(clippy::cast_ptr_alignment)]
