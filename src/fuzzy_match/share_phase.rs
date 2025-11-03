@@ -1,16 +1,25 @@
 use blake3;
 use rand::Rng;
+use tokio::time::Interval;
 
+use crate::aes::AES_KEY_SIZE;
+use crate::channel::CommTrackingChannel;
+use crate::fss::interval;
 use crate::okvs_f2k::RbOkvsF2k;
 use crate::fss::{
     ldcf::{LdcfKey, LdcfEval},
     rdcf::{RdcfKey, RdcfEval},
     distance::{DistanceFSSKey, DistanceFSSEval},
+    interval::{IntervalFSSKey, IntervalFSSEval},
 };
 use crate::data_structures::ringvec::RingVec;
 use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
 use std::cmp::{max, min};
 use std::convert::TryInto;
+use aes::{
+    Aes256,
+    block_cipher::generic_array::GenericArray,
+};
 
 // Import strategies from the separate module
 use super::strategies::{
@@ -72,8 +81,7 @@ pub enum ShareData {
         eval: Vec<u128>,
     },
     IntervalFSS {
-        data: Vec<(LdcfEval<1>, RdcfEval<1>)>,
-        eval: Vec<u128>,
+        data: Vec<IntervalFSSEval<1>>,
     },
     DistanceFSSL1 {
         data: Vec<DistanceFSSEval<2>>,
@@ -101,17 +109,11 @@ impl ShareData {
                     out.extend_from_slice(&bits_to_u8s(&eval_bits));
                 }
             }
-            ShareData::IntervalFSS { data, eval } => {
+            ShareData::IntervalFSS { data } => {
                 out.push(1u8); // tag for IntervalFSS
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                for (ldcf_eval, rdcf_eval) in data {
-                    out.extend_from_slice(&ldcf_eval.to_bytes());
-                    out.extend_from_slice(&rdcf_eval.to_bytes());
-                }
-                out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
-                for v in eval {
-                    let eval_bits = u128_to_bits_msb(*v, eval_len);
-                    out.extend_from_slice(&bits_to_u8s(&eval_bits));
+                for interval in data {
+                    out.extend_from_slice(&interval.to_bytes());
                 }
             }
             ShareData::DistanceFSSL1 { data, eval } => {
@@ -193,28 +195,12 @@ impl ShareData {
                 offset += 4;
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
-                    let (left_key, used_left) = LdcfEval::<1>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used_left;
-                    let (right_key, used_right) = RdcfEval::<1>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used_right;
-                    data.push((left_key, right_key));
-                }
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for IntervalFSS eval length");
-                }
-                let num_of_eval = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut eval = Vec::with_capacity(num_of_eval);
-                for _ in 0..num_of_eval {
-                    if bytes.len() < offset + eval_len_bytes {
-                        panic!("Insufficient bytes for IntervalFSS eval data");
-                    }
-                    let val = u8s_to_bits(&bytes[offset..offset + eval_len_bytes], eval_len);
-                    offset += eval_len_bytes;
-                    eval.push(bits_to_u128_msb(&val));
+                    let (key, used) = IntervalFSSEval::<1>::from_bytes(&bytes[offset..], modulus as u128);
+                    offset += used;
+                    data.push(key);
                 }
                 (
-                    ShareData::IntervalFSS { data, eval },
+                    ShareData::IntervalFSS { data },
                     offset,
                 )
             }
@@ -328,7 +314,7 @@ pub enum SharedRange {
         p: Option<u32>,
     },
     IntervalFSS {
-        keys: Vec<(LdcfKey<1>, RdcfKey<1>)>, // One key pair per dimension
+        keys: Vec<IntervalFSSKey<1>>, // One key pair per dimension
         role: bool,
     },
     DistanceFSSL1 {
@@ -379,8 +365,7 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.0.to_bytes());
-                    out.extend_from_slice(&k.1.to_bytes());
+                    out.extend_from_slice(&k.to_bytes());
                 }
             }
             SharedRange::DistanceFSSL1 { keys, role } => {
@@ -463,11 +448,9 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k0, used_k0) = LdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
-                    offset += used_k0;
-                    let (k1, used_k1) = RdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
-                    offset += used_k1;
-                    keys.push((k0, k1));
+                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
+                    offset += used_k;
+                    keys.push(k);
                 }
                 Ok((SharedRange::IntervalFSS { keys, role }, offset))
             }
@@ -645,6 +628,153 @@ impl SharePhase {
         }
     }
 
+    pub fn expand_prefix(&self, shared_range: &SharedRange, share_data: &ShareData, prefix: &[bool], dimension: usize) -> Result<(ShareData, ShareData), SharePhaseError> {
+        match shared_range {
+            SharedRange::OKVS { okvs_shares, okvs_seeds, role, p: _ } => {
+                match share_data {
+                    ShareData::OKVS { eval } => {
+                        self.expand_prefix_okvs(okvs_shares, okvs_seeds, *role, prefix, eval, dimension)
+                    },
+                    _ => Err(SharePhaseError::InvalidShareData(
+                        "Expected OKVS share data for OKVS shared range".to_string()
+                    )),
+                }
+            },
+            SharedRange::IntervalFSS { keys, role: _ } => {
+                match share_data {
+                    ShareData::IntervalFSS { data } => {
+                        self.expand_prefix_interval_fss(keys, data, dimension)
+                    },
+                    _ => Err(SharePhaseError::InvalidShareData(
+                        "Expected IntervalFSS share data for IntervalFSS shared range".to_string()
+                    )),
+                }
+            },
+            SharedRange::DistanceFSSL1 { keys, role } => {
+                match share_data {
+                    ShareData::DistanceFSSL1 { data, eval } => {
+                        self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension, *role)
+                    },
+                    _ => Err(SharePhaseError::InvalidShareData(
+                        "Expected DistanceFSS share data for DistanceFSSL1 shared range".to_string()
+                    )),
+                }
+            },
+            SharedRange::DistanceFSSL2 { keys, role } => {
+                match share_data {
+                    ShareData::DistanceFSSL2 { data, eval } => {
+                        self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension, *role)
+                    },
+                    _ => Err(SharePhaseError::InvalidShareData(
+                        "Expected DistanceFSS share data for DistanceFSSL2 shared range".to_string()
+                    )),
+                }
+            },
+            SharedRange::DistanceFSSL3 { keys, role } => {
+                match share_data {
+                    ShareData::DistanceFSSL3 { data, eval } => {
+                        self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension, *role)
+                    },
+                    _ => Err(SharePhaseError::InvalidShareData(
+                        "Expected DistanceFSS share data for DistanceFSSL3 shared range".to_string()
+                    )),
+                }
+            },
+        }
+    }
+
+    pub fn share_data_init(&self, shared_range: &SharedRange) -> Result<ShareData, SharePhaseError> {
+        let empty_prefix = vec![vec![]; self.config.d];
+        let evals = (0..self.config.d).map(|dim| {
+            self.evaluate_at_single_dimension(shared_range, &empty_prefix[dim], dim)
+                .map_err(SharePhaseError::from)
+        }).collect::<Result<Vec<u128>, _>>()?;
+
+        let modulus = 1u128 << self.config.h2;
+
+        match shared_range {
+            SharedRange::OKVS { okvs_shares: _, okvs_seeds: _, role: _, p: _ } => {
+                Ok(ShareData::OKVS {
+                    eval: evals,
+                })
+            },
+            SharedRange::IntervalFSS { keys, role: _ } => {
+                Ok(ShareData::IntervalFSS {
+                    data: keys.iter().map(|key| {
+                        key.init_eval(modulus)
+                    }).collect::<Vec<IntervalFSSEval<1>>>(),
+                })
+            },
+            SharedRange::DistanceFSSL1 { keys, role: _ } => {
+                Ok(ShareData::DistanceFSSL1 {
+                    data: keys.iter().map(|key| {
+                        key.init_eval(modulus)
+                    }).collect::<Vec<DistanceFSSEval<2>>>(),
+                    eval: evals,
+                })
+            },
+            SharedRange::DistanceFSSL2 { keys, role: _ } => {
+                Ok(ShareData::DistanceFSSL2 {
+                    data: keys.iter().map(|key| {
+                        key.init_eval(modulus)
+                    }).collect::<Vec<DistanceFSSEval<3>>>(),
+                    eval: evals,
+                })
+            },
+            SharedRange::DistanceFSSL3 { keys, role: _ } => {
+                Ok(ShareData::DistanceFSSL3 {
+                    data: keys.iter().map(|key| {
+                        key.init_eval(modulus)
+                    }).collect::<Vec<DistanceFSSEval<4>>>(),
+                    eval: evals,
+                })
+            },
+        }
+    }
+
+
+    pub fn sketch(
+        &self,
+        shared_ranges: &[SharedRange],
+    ) -> Result<bool, SharePhaseError> {
+        // Check the type of all shared ranges
+        let first_type = match &shared_ranges[0] {
+            SharedRange::OKVS { .. } => "OKVS",
+            SharedRange::IntervalFSS { .. } => "IntervalFSS",
+            SharedRange::DistanceFSSL1 { .. } => "DistanceFSSL1",
+            SharedRange::DistanceFSSL2 { .. } => "DistanceFSSL2",
+            SharedRange::DistanceFSSL3 { .. } => "DistanceFSSL3",
+        };
+        for sr in shared_ranges.iter() {
+            let sr_type = match sr {
+                SharedRange::OKVS { .. } => "OKVS",
+                SharedRange::IntervalFSS { .. } => "IntervalFSS",
+                SharedRange::DistanceFSSL1 { .. } => "DistanceFSSL1",
+                SharedRange::DistanceFSSL2 { .. } => "DistanceFSSL2",
+                SharedRange::DistanceFSSL3 { .. } => "DistanceFSSL3",
+            };
+            if sr_type != first_type {
+                return Err(SharePhaseError::InvalidRange(
+                    "All shared ranges must be of the same type for sketching".to_string()
+                ));
+            }
+        }
+
+        // Now sketch based on the type
+        match first_type {
+            "OKVS" => {
+                println!("Sketching for OKVS not implemented yet, so we skip it.");
+                Ok(true)
+            },
+            "IntervalFSS" => self.sketch_interval_fss(shared_ranges),
+            "DistanceFSSL1" => self.sketch_distance_fss::<2>(shared_ranges),
+            "DistanceFSSL2" => self.sketch_distance_fss::<3>(shared_ranges),
+            "DistanceFSSL3" => self.sketch_distance_fss::<4>(shared_ranges),
+            _ => Err(SharePhaseError::InvalidRange(
+                "Unknown shared range type for sketching".to_string()
+            )),
+        }
+    }
 
     /// Generic OKVS sharing method that uses different strategies for key-value pair preparation
     fn share_with_okvs<T: KeyValuePairStrategy>(
@@ -781,7 +911,6 @@ impl SharePhase {
         let left_payload = RingVec::<1>::new([1], modulus);
         let mid_payload = RingVec::<1>::new([0], modulus);
         let right_payload = RingVec::<1>::new([1], modulus);
-        let zero_payload = RingVec::<1>::zero(modulus);
 
         for (&alpha, &beta) in left_bound.iter().zip(right_bound.iter()) {
             if alpha > beta {
@@ -794,23 +923,17 @@ impl SharePhase {
             let alpha_bits = u128_to_bits_msb(alpha, self.config.h1);
             let beta_bits = u128_to_bits_msb(beta, self.config.h1);
 
-            // Create Interval FSS keys for both servers
-            let (fss_key_00, fss_key_10) = LdcfKey::<1>::gen_ldcf_key(
-                &alpha_bits,
+            let (fss_key_0, fss_key_1) = IntervalFSSKey::<1>::gen_interval_fss_key(
+                &alpha_bits, 
+                &beta_bits, 
                 &left_payload,
                 &mid_payload,
+                &right_payload,
                 modulus,
             );
 
-            let (fss_key_01, fss_key_11) = RdcfKey::<1>::gen_rdcf_key(
-                &beta_bits,
-                &zero_payload,
-                &(right_payload - mid_payload),
-                modulus,
-            );
-
-            keys_0.push((fss_key_00, fss_key_01));
-            keys_1.push((fss_key_10, fss_key_11));
+            keys_0.push(fss_key_0);
+            keys_1.push(fss_key_1);
         }
         
         Ok((
@@ -827,11 +950,11 @@ impl SharePhase {
 
     fn evaluate_interval_fss_at_single_dimension(
         &self,
-        fss_key: &(LdcfKey<1>, RdcfKey<1>),
+        fss_key: &IntervalFSSKey<1>,
         point_bits: &[bool],
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
-        let result = fss_key.0.eval_ldcf(point_bits, modulus) + fss_key.1.eval_rdcf(point_bits, modulus);
+        let result = fss_key.eval_interval_fss(point_bits, modulus).expect("Interval FSS eval failed");
         Ok(result[0])
     }
 
@@ -1004,61 +1127,6 @@ impl SharePhase {
         }
     }
 
-    pub fn expand_prefix(&self, shared_range: &SharedRange, share_data: &ShareData, prefix: &[bool], dimension: usize) -> Result<(ShareData, ShareData), SharePhaseError> {
-        match shared_range {
-            SharedRange::OKVS { okvs_shares, okvs_seeds, role, p: _ } => {
-                match share_data {
-                    ShareData::OKVS { eval } => {
-                        self.expand_prefix_okvs(okvs_shares, okvs_seeds, *role, prefix, eval, dimension)
-                    },
-                    _ => Err(SharePhaseError::InvalidShareData(
-                        "Expected OKVS share data for OKVS shared range".to_string()
-                    )),
-                }
-            },
-            SharedRange::IntervalFSS { keys, role: _ } => {
-                match share_data {
-                    ShareData::IntervalFSS { data, eval } => {
-                        self.expand_prefix_interval_fss(keys, data, eval, dimension)
-                    },
-                    _ => Err(SharePhaseError::InvalidShareData(
-                        "Expected IntervalFSS share data for IntervalFSS shared range".to_string()
-                    )),
-                }
-            },
-            SharedRange::DistanceFSSL1 { keys, role } => {
-                match share_data {
-                    ShareData::DistanceFSSL1 { data, eval } => {
-                        self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension, *role)
-                    },
-                    _ => Err(SharePhaseError::InvalidShareData(
-                        "Expected DistanceFSS share data for DistanceFSSL1 shared range".to_string()
-                    )),
-                }
-            },
-            SharedRange::DistanceFSSL2 { keys, role } => {
-                match share_data {
-                    ShareData::DistanceFSSL2 { data, eval } => {
-                        self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension, *role)
-                    },
-                    _ => Err(SharePhaseError::InvalidShareData(
-                        "Expected DistanceFSS share data for DistanceFSSL2 shared range".to_string()
-                    )),
-                }
-            },
-            SharedRange::DistanceFSSL3 { keys, role } => {
-                match share_data {
-                    ShareData::DistanceFSSL3 { data, eval } => {
-                        self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension, *role)
-                    },
-                    _ => Err(SharePhaseError::InvalidShareData(
-                        "Expected DistanceFSS share data for DistanceFSSL3 shared range".to_string()
-                    )),
-                }
-            },
-        }
-    }
-
     pub fn expand_prefix_okvs(
         &self,
         okvs_shares: &Vec<Vec<u128>>,
@@ -1089,41 +1157,29 @@ impl SharePhase {
 
     pub fn expand_prefix_interval_fss(
         &self,
-        keys: &Vec<(LdcfKey<1>, RdcfKey<1>)>,
-        data: &[(LdcfEval<1>, RdcfEval<1>)],
-        eval: &[u128],
+        keys: &Vec<IntervalFSSKey<1>>,
+        data: &[IntervalFSSEval<1>],
         dimension: usize,
     ) -> Result<(ShareData, ShareData), SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
-        let ldcf_key = &keys[dimension].0;
-        let rdcf_key = &keys[dimension].1;
-        let ldcf_data = &data[dimension].0;
-        let rdcf_data = &data[dimension].1;
+        let interval_fss_key = &keys[dimension];
+        let interval_fss_data = &data[dimension];
 
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
-        (data0[dimension].0, data1[dimension].0) = ldcf_key.expand_prefix(&ldcf_data, modulus);
-        (data0[dimension].1, data1[dimension].1) = rdcf_key.expand_prefix(&rdcf_data, modulus);
-
-        let mut eval0 = eval.to_vec();
-        eval0[dimension] = (data0[dimension].0.y() + data0[dimension].1.y())[0];
-
-        let mut eval1 = eval.to_vec();
-        eval1[dimension] = (data1[dimension].0.y() + data1[dimension].1.y())[0];
+        (data0[dimension], data1[dimension]) = interval_fss_key.expand_prefix(interval_fss_data, modulus);
 
         Ok((
             ShareData::IntervalFSS {
                 data: data0,
-                eval: eval0,
             },
             ShareData::IntervalFSS {
                 data: data1,
-                eval: eval1,
             },
         ))
     }
 
-    pub fn expand_prefix_distance_fss<const N: usize>(
+    fn expand_prefix_distance_fss<const N: usize>(
         &self,
         keys: &Vec<DistanceFSSKey<N>>,
         prefix: &[bool],
@@ -1195,54 +1251,65 @@ impl SharePhase {
         }
     }
 
-    pub fn share_data_init(&self, shared_range: &SharedRange) -> Result<ShareData, SharePhaseError> {
-        let empty_prefix = vec![vec![]; self.config.d];
-        let evals = (0..self.config.d).map(|dim| {
-            self.evaluate_at_single_dimension(shared_range, &empty_prefix[dim], dim)
-                .map_err(SharePhaseError::from)
-        }).collect::<Result<Vec<u128>, _>>()?;
+    fn parallel_sketch_interval_fss(
+        &self,
+        shared_ranges: &[SharedRange],
+        seed: &[u8; AES_KEY_SIZE],
+        other_server_channels: &mut [CommTrackingChannel],
+    ) -> Result<bool, SharePhaseError> {
+        // First just do full domain evaluation
+        // Check dcf by shifting by one, and subtract, to reduce to dpf. Don't need to pad one to the left, since we only want to check if the whole interval is equal to each other, don't care about the payload.
+        // Check interval equals delta by shifting with delta and minus. The lefter dcf does not need to pad to the left, since we already checked that the payload inside the interval is the same. 
+        // In this code, we just use Aes256 in ctr mode as random oracle
+        // WARNING! Only works when the input range is smaller than 60 bits
 
-        let modulus = 1u128 << self.config.h2;
+        let num_threads = other_server_channels.len();
+        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
 
-        match shared_range {
-            SharedRange::OKVS { okvs_shares: _, okvs_seeds: _, role: _, p: _ } => {
-                Ok(ShareData::OKVS {
-                    eval: evals,
-                })
-            },
-            SharedRange::IntervalFSS { keys, role: _ } => {
-                Ok(ShareData::IntervalFSS {
-                    data: keys.iter().map(|(ldcf_key, rdcf_key)| {
-                        (ldcf_key.eval_init(modulus), rdcf_key.eval_init(modulus))
-                    }).collect::<Vec<(LdcfEval<1>, RdcfEval<1>)>>(),
-                    eval: evals,
-                })
-            },
-            SharedRange::DistanceFSSL1 { keys, role: _ } => {
-                Ok(ShareData::DistanceFSSL1 {
-                    data: keys.iter().map(|key| {
-                        key.init_eval(modulus)
-                    }).collect::<Vec<DistanceFSSEval<2>>>(),
-                    eval: evals,
-                })
-            },
-            SharedRange::DistanceFSSL2 { keys, role: _ } => {
-                Ok(ShareData::DistanceFSSL2 {
-                    data: keys.iter().map(|key| {
-                        key.init_eval(modulus)
-                    }).collect::<Vec<DistanceFSSEval<3>>>(),
-                    eval: evals,
-                })
-            },
-            SharedRange::DistanceFSSL3 { keys, role: _ } => {
-                Ok(ShareData::DistanceFSSL3 {
-                    data: keys.iter().map(|key| {
-                        key.init_eval(modulus)
-                    }).collect::<Vec<DistanceFSSEval<4>>>(),
-                    eval: evals,
-                })
-            },
-        }
+        thread_pool.install(|| {
+            shared_ranges.par_iter().enumerate().for_each(|(i, shared_range)| {
+                match shared_range {
+                    SharedRange::IntervalFSS { keys, role: _ } => {
+                        // Create a seed for this index only, by xoring the global seed with the index
+                        let mut blocks = vec![[0u8; 16]; (1 << self.config.h1) * d * 2];
+                        let prg = PRG::new(seed, i as u64);
+                        prg.random_16byte_block(&mut blocks);
+                        let rs = blocks.iter().map(|&b| {
+                            let num = u128::from_le_bytes(b);
+                            num % (1u128 << self.config.sketch_s)
+                       }).collect::<Vec<u128>>();
+                        // There are d dimensions
+                        for dimension in 0..self.config.d {
+                            let key = &keys[dimension];
+                            let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1)
+                                .map(|eval| eval[0])
+                                .collect::<Vec<u128>>();
+                            let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1)
+                                .map(|eval| eval[0])
+                                .collect::<Vec<u128>>();
+                            // Now check if the ldcf is an ldcf by shifting by one and subtracting
+                            let ldcf_evals1 = (1..ldcf_evals.len())
+                                .map(|j| {
+                                    (ldcf_evals[j] + modulus - ldcf_evals[j - 1]) % modulus
+                                })
+                                .collect::<Vec<u128>>();
+                        }
+                    }
+                    _ => {
+                        panic!("Sketching failed: Expected IntervalFSS shared range");
+                    }
+                }
+            })
+        });
+
+        Ok(true)
+    }
+
+    fn sketch_distance_fss<const N: usize>(
+        &self,
+        shared_ranges: &[SharedRange],
+    ) -> Result<bool, SharePhaseError> {
+        unimplemented!()
     }
 }
 

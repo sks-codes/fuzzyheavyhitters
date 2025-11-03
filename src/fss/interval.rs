@@ -6,7 +6,6 @@ use crate::{data_structures::ringvec::RingVec, fss::{
 pub struct IntervalFSSEval<const N: usize> {
     ldcf_eval: LdcfEval<N>,
     rdcf_eval: RdcfEval<N>,
-    result: RingVec<N>,
 }
 
 impl<const N: usize> IntervalFSSEval<N> {
@@ -30,7 +29,6 @@ impl<const N: usize> IntervalFSSEval<N> {
             IntervalFSSEval {
                 ldcf_eval,
                 rdcf_eval,
-                result,
             },
             offset,
         )
@@ -42,6 +40,10 @@ impl<const N: usize> IntervalFSSEval<N> {
 
     pub fn rdcf_eval(&self) -> &RdcfEval<N> {
         &self.rdcf_eval 
+    }
+
+    pub fn result(&self) -> &RingVec<N> {
+        &self.ldcf_eval.y() - &self.rdcf_eval.y()
     }
 }
 
@@ -107,11 +109,9 @@ impl<const N: usize> IntervalFSSKey<N> {
     ) -> IntervalFSSEval<N> {
         let ldcf_eval = self.ldcf_key.eval_bit(&state.ldcf_eval(), modulus, dir);
         let rdcf_eval = self.rdcf_key.eval_bit(&state.rdcf_eval(), modulus, dir);
-        let result = ldcf_eval.y() - rdcf_eval.y();
         IntervalFSSEval {
             ldcf_eval,
             rdcf_eval,
-            result,
         }
     }
 
@@ -123,19 +123,14 @@ impl<const N: usize> IntervalFSSKey<N> {
         let (ldcf_eval0, ldcf_eval1) = self.ldcf_key.expand_prefix(&state.ldcf_eval(), modulus);
         let (rdcf_eval0, rdcf_eval1) = self.rdcf_key.expand_prefix(&state.rdcf_eval(), modulus);
 
-        let result0 = ldcf_eval0.y() - rdcf_eval0.y();
-        let result1 = ldcf_eval1.y() - rdcf_eval1.y();
-
         (
             IntervalFSSEval {
                 ldcf_eval: ldcf_eval0,
                 rdcf_eval: rdcf_eval0,
-                result: result0,
             },
             IntervalFSSEval {
                 ldcf_eval: ldcf_eval1,
                 rdcf_eval: rdcf_eval1,
-                result: result1,
             },
         )
     }
@@ -146,11 +141,9 @@ impl<const N: usize> IntervalFSSKey<N> {
     ) -> IntervalFSSEval<N> {
         let ldcf_eval = self.ldcf_key.eval_init(modulus);
         let rdcf_eval = self.rdcf_key.eval_init(modulus);
-        let result = ldcf_eval.y() - rdcf_eval.y();
         IntervalFSSEval {
             ldcf_eval,
             rdcf_eval,
-            result,
         }
     }
 
@@ -173,5 +166,21 @@ impl<const N: usize> IntervalFSSKey<N> {
         let ldcf_full_domain_eval = self.ldcf_key.full_domain_eval(modulus, domain_size);
         let rdcf_full_domain_eval = self.rdcf_key.full_domain_eval(modulus, domain_size);
         ldcf_full_domain_eval.iter().zip(rdcf_full_domain_eval.iter()).map(|(ldcf, rdcf)| ldcf - rdcf).collect()
+    }
+
+    pub fn full_domain_eval_ldcf(
+        &self,
+        modulus: u128,
+        domain_size: usize,
+    ) -> Vec<RingVec<N>> {
+        self.ldcf_key.full_domain_eval(modulus, domain_size)
+    }
+
+    pub fn full_domain_eval_rdcf(
+        &self,
+        modulus: u128,
+        domain_size: usize,
+    ) -> Vec<RingVec<N>> {
+        self.rdcf_key.full_domain_eval(modulus, domain_size)
     }
 }

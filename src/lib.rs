@@ -13,6 +13,7 @@ pub mod okvs_f2k;
 pub mod configs;
 pub mod util;
 pub mod channel;
+pub mod randomness;
 
 #[macro_use]
 extern crate lazy_static;
