@@ -1,6 +1,5 @@
 use mosaic::{
     data_structures::ringvec::RingVec,
-    util::{u128_to_bits_msb, bits_to_u128_msb},
 };
 use std::time::Instant;
 use std::env;
@@ -8,13 +7,13 @@ use std::hint::black_box;
 
 fn parse_arg<T: std::str::FromStr>(idx: usize, default: T) -> T { env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default) }
 
-fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize, bits_convert: bool) {
+fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize) {
     assert!(modulus_bits > 0 && modulus_bits <= 64, "modulus bits must be 1..=64");
     let modulus: u128 = 1u128 << modulus_bits;
 
     // Pre-generate vectors to avoid timing RNG for every op inside tight loops.
-    let mut vecs_a: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
-    let mut vecs_b: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
+    let vecs_a: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
+    let vecs_b: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
 
     // Addition
     let start_add = Instant::now();
@@ -64,15 +63,14 @@ fn main() {
     let iterations = parse_arg(1, 100_000usize);
     let n_runtime = parse_arg(2, 4usize);
     let modulus_bits = parse_arg(3, 16usize);
-    let bits_convert = parse_arg(4, 0usize) == 1;
 
     match n_runtime {
-        1 => bench_for::<1>(iterations, modulus_bits, bits_convert),
-        2 => bench_for::<2>(iterations, modulus_bits, bits_convert),
-        4 => bench_for::<4>(iterations, modulus_bits, bits_convert),
-        8 => bench_for::<8>(iterations, modulus_bits, bits_convert),
-        16 => bench_for::<16>(iterations, modulus_bits, bits_convert),
-        32 => bench_for::<32>(iterations, modulus_bits, bits_convert),
+        1 => bench_for::<1>(iterations, modulus_bits),
+        2 => bench_for::<2>(iterations, modulus_bits),
+        4 => bench_for::<4>(iterations, modulus_bits),
+        8 => bench_for::<8>(iterations, modulus_bits),
+        16 => bench_for::<16>(iterations, modulus_bits),
+        32 => bench_for::<32>(iterations, modulus_bits),
         other => {
             eprintln!("Unsupported N {} (choose one of 1,2,4,8,16,32)", other);
             std::process::exit(1);

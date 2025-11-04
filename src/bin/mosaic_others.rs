@@ -7,7 +7,7 @@ use mosaic::{
     configs::cli_config::{CliConfig, generate_config},
     util::{bits_to_u128_msb, calculate_distance, calculate_optimistic_distance, get_distance_threshold},
 };
-use clap::{App, Arg, SubCommand};
+use clap::{Arg, Command};
 use std::process;
 use std::fs;
 use serde_json;
@@ -256,15 +256,15 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
 }
 
 fn main() {
-    let matches = App::new("Fuzzy Heavy Hitters CLI")
+    let matches = Command::new("Fuzzy Heavy Hitters CLI")
         .version("1.0")
         .about("CLI for running the fuzzy heavy hitters protocol in distributed or local mode")
         .subcommand(
-            SubCommand::with_name("generate-config")
+            Command::new("generate-config")
                 .about("Generate a sample configuration file")
                 .arg(
-                    Arg::with_name("output")
-                        .short("o")
+                    Arg::new("output")
+                        .short('o')
                         .long("output")
                         .value_name("FILE")
                         .help("Output configuration file path")
@@ -272,11 +272,11 @@ fn main() {
                 )
         )
         .subcommand(
-            SubCommand::with_name("ground-truth")
+            Command::new("ground-truth")
                 .about("Run ground truth (non-secure plaintext) protocol for verification")
                 .arg(
-                    Arg::with_name("config")
-                        .short("c")
+                    Arg::new("config")
+                        .short('c')
                         .long("config")
                         .value_name("FILE")
                         .help("Configuration file path")
@@ -286,13 +286,17 @@ fn main() {
         .get_matches();
 
     let result = match matches.subcommand() {
-        ("generate-config", Some(sub_matches)) => {
-            let output_path = sub_matches.value_of("output").unwrap();
-            generate_config(output_path)
+        Some(("generate-config", sub_matches)) => {
+            let output_path = sub_matches
+                .get_one::<String>("output")
+                .expect("output has a default value");
+            generate_config(output_path.as_str())
         },
-        ("ground-truth", Some(sub_matches)) => {
-            let config_path = sub_matches.value_of("config").unwrap();
-            run_ground_truth(config_path)
+        Some(("ground-truth", sub_matches)) => {
+            let config_path = sub_matches
+                .get_one::<String>("config")
+                .expect("config is required");
+            run_ground_truth(config_path.as_str())
         },
         _ => {
             eprintln!("No subcommand specified. Use --help for usage information.");

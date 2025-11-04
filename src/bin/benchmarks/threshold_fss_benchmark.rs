@@ -11,7 +11,7 @@ use mosaic::{
 use scuttlebutt::AbstractChannel;
 use std::time::Instant;
 use rand::Rng;
-use clap::{Arg, App};
+use clap::Parser;
 
 fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
     let mut rng = rand::rng();
@@ -170,34 +170,23 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     Ok(())
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    role: String,
+    #[arg(short, long)]
+    config: String,
+}
+
 fn main() {
-    let matches = App::new("Batch Mu Bounded FSS Benchmark")
-        .version("1.0")
-        .author("Your Name")
-        .about("Benchmarks batch mu bounded FSS testing")
-        .arg(Arg::with_name("role")
-            .short("r")
-            .long("role")
-            .value_name("ROLE")
-            .help("Role to play: 'server0', 'server1', or 'dealer'")
-            .required(true)
-            .takes_value(true))
-        .arg(Arg::with_name("config")
-            .short("c")
-            .long("config")
-            .value_name("CONFIG_PATH")
-            .help("Path to the configuration file")
-            .required(true)
-            .takes_value(true))
-        .get_matches();
-
-    let role = matches.value_of("role").unwrap();
-    let config_path = matches.value_of("config").unwrap();
-
+    let args = Args::parse();
+    let role = args.role;
+    let config_path = args.config;
     let result = match role.to_lowercase().as_str() {
-        "server0" => run_server_benchmark(config_path, false),
-        "server1" => run_server_benchmark(config_path, true),
-        "dealer" => run_dealer_benchmark(config_path),
+        "server0" => run_server_benchmark(&config_path, false),
+        "server1" => run_server_benchmark(&config_path, true),
+        "dealer" => run_dealer_benchmark(&config_path),
         _ => {
             eprintln!("Invalid role '{}'. Must be 'server0', 'server1', or 'dealer'", role);
             std::process::exit(1);

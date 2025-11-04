@@ -4,7 +4,7 @@ use mosaic::{
     fuzzy_match::client::Client,
 };
 use std::fs;
-use clap::{App, Arg};
+use clap::Parser;
 
 /// Load client points directly from JSON file
 fn load_client_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
@@ -70,21 +70,16 @@ fn run_client(config_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    config: String,
+}
 
 fn main() {
-    let matches = App::new("Server CLI for Mosaic")
-    .version("1.0")
-    .about("CLI for running the fuzzy heavy hitters protocol in distributed or local mode")
-        .arg(
-            Arg::with_name("config")
-                .short("c")
-                .long("config")
-                .value_name("FILE")
-                .help("Configuration file path")
-                .required(true)
-        )
-    .get_matches();
-    let config_path = matches.value_of("config").unwrap();
+    let args = Args::parse();
+    let config_path = &args.config;
     let result = run_client(config_path);
     if let Err(e) = result {
         eprintln!("Error running client: {}", e);

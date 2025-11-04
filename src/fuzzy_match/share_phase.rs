@@ -10,11 +10,13 @@ use crate::{
         distance::{DistanceFSSKey, DistanceFSSEval},
         interval::{IntervalFSSKey, IntervalFSSEval},
     },
+    data_structures::ringvec::RingVec,
+    util::u128_to_bits_msb,
+    fuzzy_match::shared_range::{SharedRange, ShareData},
 };
-use crate::data_structures::ringvec::RingVec;
-use crate::util::{u128_to_bits_msb, bits_to_u128_msb, bits_to_u8s, u8s_to_bits};
 use std::cmp::{max, min};
-use std::convert::TryInto;
+use scuttlebutt::AbstractChannel;
+use rayon::prelude::*;
 
 // Import strategies from the separate module
 use super::strategies::{
@@ -68,437 +70,6 @@ pub struct ShareConfig {
     pub h2: usize,
     /// Dimension of the input space
     pub d: usize,
-    /// Which server is this
-    pub role: bool,
-}
-
-#[derive(Clone, Debug)]
-pub enum ShareData {
-    OKVS {
-        eval: Vec<u128>,
-    },
-    IntervalFSS {
-        data: Vec<IntervalFSSEval<1>>,
-    },
-    DistanceFSSL1 {
-        data: Vec<DistanceFSSEval<2>>,
-        eval: Vec<u128>,
-    },
-    DistanceFSSL2 {
-        data: Vec<DistanceFSSEval<3>>,
-        eval: Vec<u128>,
-    },
-    DistanceFSSL3 {
-        data: Vec<DistanceFSSEval<4>>,
-        eval: Vec<u128>,
-    },
-}
-
-impl ShareData {
-    pub fn to_bytes(&self, eval_len: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        match self {
-            ShareData::OKVS { eval } => {
-                out.push(0u8); // tag for OKVS
-                out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
-                for v in eval {
-                    let eval_bits = u128_to_bits_msb(*v, eval_len);
-                    out.extend_from_slice(&bits_to_u8s(&eval_bits));
-                }
-            }
-            ShareData::IntervalFSS { data } => {
-                out.push(1u8); // tag for IntervalFSS
-                out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                for interval in data {
-                    out.extend_from_slice(&interval.to_bytes());
-                }
-            }
-            ShareData::DistanceFSSL1 { data, eval } => {
-                out.push(2u8); // tag for DistanceFSSL1
-                out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
-                }
-                out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
-                for v in eval {
-                    let eval_bits = u128_to_bits_msb(*v, eval_len);
-                    out.extend_from_slice(&bits_to_u8s(&eval_bits));
-                }
-            }
-            ShareData::DistanceFSSL2 { data, eval } => {
-                out.push(3u8); // tag for DistanceFSSL2
-                out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
-                }
-                out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
-                for v in eval {
-                    let eval_bits = u128_to_bits_msb(*v, eval_len);
-                    out.extend_from_slice(&bits_to_u8s(&eval_bits));
-                }
-            }
-            ShareData::DistanceFSSL3 { data, eval } => {
-                out.push(4u8); // tag for DistanceFSSL3
-                out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-                for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
-                }
-                out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
-                for v in eval {
-                    let eval_bits = u128_to_bits_msb(*v, eval_len);
-                    out.extend_from_slice(&bits_to_u8s(&eval_bits));
-                }
-            }
-        }
-        out
-    }
-
-    pub fn from_bytes(bytes: &[u8], eval_len: usize, modulus: u128) -> (Self, usize) {
-        let eval_len_bytes = (eval_len + 7) / 8; // Calculate the number of bytes needed to represent eval_len bits
-        let mut offset = 0;
-        if bytes.is_empty() {
-            panic!("Empty byte slice");
-        }
-        let tag = bytes[offset];
-        offset += 1;
-        match tag {
-            0 => {
-                // OKVS
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for OKVS eval length");
-                }
-                let num_of_eval = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut eval = Vec::with_capacity(num_of_eval);
-                for _ in 0..num_of_eval {
-                    if bytes.len() < offset + eval_len_bytes {
-                        panic!("Insufficient bytes for OKVS eval data");
-                    }
-                    let val = u8s_to_bits(&bytes[offset..offset + eval_len_bytes], eval_len);
-                    offset += eval_len_bytes;
-                    eval.push(bits_to_u128_msb(&val));
-                }
-                (
-                    ShareData::OKVS { eval },
-                    offset,
-                )
-            }
-            1 => {
-                // IntervalFSS
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for IntervalFSS keys length");
-                }
-                let num_of_data = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut data = Vec::with_capacity(num_of_data);
-                for _ in 0..num_of_data {
-                    let (key, used) = IntervalFSSEval::<1>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used;
-                    data.push(key);
-                }
-                (
-                    ShareData::IntervalFSS { data },
-                    offset,
-                )
-            }
-            2 => {
-                // DistanceFSSL1
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for DistanceFSSL1 keys length");
-                }
-                let num_of_data = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut data = Vec::with_capacity(num_of_data);
-                for _ in 0..num_of_data {
-                    let (key, used) = DistanceFSSEval::<2>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used;
-                    data.push(key);
-                }
-                let num_of_eval = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut eval = Vec::with_capacity(num_of_eval);
-                for _ in 0..num_of_eval {
-                    if bytes.len() < offset + eval_len_bytes {
-                        panic!("Insufficient bytes for IntervalFSS eval data");
-                    }
-                    let val = u8s_to_bits(&bytes[offset..offset + eval_len_bytes], eval_len);
-                    offset += eval_len_bytes;
-                    eval.push(bits_to_u128_msb(&val));
-                }
-                (
-                    ShareData::DistanceFSSL1 { data, eval },
-                    offset,
-                )
-            }
-            3 => {
-                // DistanceFSSL2
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for DistanceFSSL2 keys length");
-                }
-                let num_of_data = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut data = Vec::with_capacity(num_of_data);
-                for _ in 0..num_of_data {
-                    let (key, used) = DistanceFSSEval::<3>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used;
-                    data.push(key);
-                }
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for DistanceFSSL2 eval length");
-                }
-                let num_of_eval = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut eval = Vec::with_capacity(num_of_eval);
-                for _ in 0..num_of_eval {
-                    if bytes.len() < offset + eval_len_bytes {
-                        panic!("Insufficient bytes for DistanceFSSL2 eval data");
-                    }
-                    let val = u8s_to_bits(&bytes[offset..offset + eval_len_bytes], eval_len);
-                    offset += eval_len_bytes;
-                    eval.push(bits_to_u128_msb(&val));
-                }
-                (
-                    ShareData::DistanceFSSL2 { data, eval },
-                    offset,
-                )
-            }
-            4 => {
-                // DistanceFSSL3
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for DistanceFSSL3 keys length");
-                }
-                let num_of_data = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut data = Vec::with_capacity(num_of_data);
-                for _ in 0..num_of_data {
-                    let (key, used) = DistanceFSSEval::<4>::from_bytes(&bytes[offset..], modulus as u128);
-                    offset += used;
-                    data.push(key);
-                }
-                if bytes.len() < offset + 4 {
-                    panic!("Insufficient bytes for DistanceFSSL3 eval length");
-                }
-                let num_of_eval = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut eval = Vec::with_capacity(num_of_eval);
-                for _ in 0..num_of_eval {
-                    if bytes.len() < offset + eval_len_bytes {
-                        panic!("Insufficient bytes for DistanceFSSL3 eval data");
-                    }
-                    let val = u8s_to_bits(&bytes[offset..offset + eval_len_bytes], eval_len);
-                    offset += eval_len_bytes;
-                    eval.push(bits_to_u128_msb(&val));
-                }
-                (
-                    ShareData::DistanceFSSL3 { data, eval },
-                    offset,
-                )
-            }
-            _ => {
-                panic!("Unknown ShareData tag: {}", tag);
-            }
-        }
-    }
-}
-
-/// Represents the shared data for a range around input x
-#[derive(Debug, Clone)]
-pub enum SharedRange {
-    OKVS {
-        okvs_shares: Vec<Vec<u128>>, // One OKVS encoding per dimension
-        okvs_seeds: Vec<([u8; 16], [u8; 16])>, // Seeds for OKVS (r1, r2)
-        role: bool, // True for server 1, false for server 0
-        p: Option<u32>,
-    },
-    IntervalFSS {
-        keys: Vec<IntervalFSSKey<1>>, // One key pair per dimension
-        role: bool,
-    },
-    DistanceFSSL1 {
-        keys: Vec<DistanceFSSKey<2>>, // N = p+1 = 2
-        role: bool,
-    },
-    DistanceFSSL2 {
-        keys: Vec<DistanceFSSKey<3>>, // N = p+1 = 3
-        role: bool,
-    },
-    DistanceFSSL3 {
-        keys: Vec<DistanceFSSKey<4>>, // N = p+1 = 4
-        role: bool,
-    },
-}
-
-// TODO: Need to pad the number of OKVS key-value pairs to be deterministic
-impl SharedRange {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        match self {
-            SharedRange::OKVS { okvs_shares, okvs_seeds, role, p } => {
-                out.push(0u8); // tag for OKVS
-                out.push(*role as u8);
-                match p {
-                    Some(val) => {
-                        out.push(1u8);
-                        out.extend_from_slice(&val.to_le_bytes());
-                    },
-                    None => {
-                        out.push(0u8);
-                    }
-                }
-                out.extend_from_slice(&(okvs_shares.len() as u32).to_le_bytes());
-                for dim in okvs_shares {
-                    out.extend_from_slice(&(dim.len() as u32).to_le_bytes());
-                    for v in dim {
-                        out.extend_from_slice(&v.to_le_bytes());
-                    }
-                }
-                for (r1, r2) in okvs_seeds {
-                    out.extend_from_slice(r1);
-                    out.extend_from_slice(r2);
-                }
-            }
-            SharedRange::IntervalFSS { keys, role } => {
-                out.push(1u8); // tag for IntervalFSS
-                out.push(*role as u8);
-                out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
-                }
-            }
-            SharedRange::DistanceFSSL1 { keys, role } => {
-                out.push(2u8); // tag for DistanceFSSL1
-                out.push(*role as u8);
-                out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
-                }
-            }
-            SharedRange::DistanceFSSL2 { keys, role } => {
-                out.push(3u8); // tag for DistanceFSSL2
-                out.push(*role as u8);
-                out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
-                }
-            }
-            SharedRange::DistanceFSSL3 { keys, role } => {
-                out.push(4u8); // tag for DistanceFSSL3
-                out.push(*role as u8);
-                out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
-                for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
-                }
-            }
-        }
-        out
-    }
-
-    /// Returns (SharedRange, rest)
-    pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
-        if bytes.is_empty() { return Err("Empty bytes for SharedRange".to_string()); }
-        let mut offset = 0;
-        let tag = bytes[offset];
-        offset += 1;
-        match tag {
-            0 => {
-                // OKVS
-                if bytes[offset..].len() < 2 { return Err("Too short for OKVS header".to_string()); }
-                let role = bytes[offset] != 0;
-                offset += 1;
-                let has_p = bytes[offset];
-                offset += 1;
-                let p = if has_p == 1 {
-                    let mut arr = [0u8; 4];
-                    arr.copy_from_slice(&bytes[offset..offset + 4]);
-                    offset += 4;
-                    Some(u32::from_le_bytes(arr))
-                } else { None };
-                let dim_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut okvs_shares = Vec::with_capacity(dim_count);
-                for _ in 0..dim_count {
-                    let dim_len = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                    offset += 4;
-                    let mut dim = Vec::with_capacity(dim_len);
-                    for _ in 0..dim_len {
-                        dim.push(u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap()));
-                        offset += 16;
-                    }
-                    okvs_shares.push(dim);
-                }
-                let mut okvs_seeds = Vec::with_capacity(dim_count);
-                for _ in 0..dim_count {
-                    let r1: [u8; 16] = bytes[offset..offset + 16].try_into().unwrap();
-                    offset += 16;
-                    let r2: [u8; 16] = bytes[offset..offset + 16].try_into().unwrap();
-                    offset += 16;
-                    okvs_seeds.push((r1, r2));
-                }
-                Ok((SharedRange::OKVS { okvs_shares, okvs_seeds, role, p }, offset))
-            }
-            1 => {
-                // IntervalFSS
-                if bytes[offset..].len() < 5 { return Err("Too short for IntervalFSS header".to_string()); }
-                let role = bytes[offset] != 0;
-                offset += 1;
-                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut keys = Vec::with_capacity(key_count);
-                for _ in 0..key_count {
-                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
-                    offset += used_k;
-                    keys.push(k);
-                }
-                Ok((SharedRange::IntervalFSS { keys, role }, offset))
-            }
-            2 => {
-                // DistanceFSSL1
-                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL1 header".to_string()); }
-                let role = bytes[offset] != 0;
-                offset += 1;
-                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut keys = Vec::with_capacity(key_count);
-                for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<2>::from_bytes(&bytes[offset..], modulus);
-                    keys.push(k);
-                    offset += used_k;
-                }
-                Ok((SharedRange::DistanceFSSL1 { keys, role }, offset))
-            }
-            3 => {
-                // DistanceFSSL2
-                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL2 header".to_string()); }
-                let role = bytes[offset] != 0;
-                offset += 1;
-                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut keys = Vec::with_capacity(key_count);
-                for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<3>::from_bytes(&bytes[offset..], modulus);
-                    keys.push(k);
-                    offset += used_k;
-                }
-                Ok((SharedRange::DistanceFSSL2 { keys, role }, offset))
-            }
-            4 => {
-                // DistanceFSSL3
-                if bytes[offset..].len() < 5 { return Err("Too short for DistanceFSSL3 header".to_string()); }
-                let role = bytes[offset] != 0;
-                offset += 1;
-                let key_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-                offset += 4;
-                let mut keys = Vec::with_capacity(key_count);
-                for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<4>::from_bytes(&bytes[offset..], modulus);
-                    keys.push(k);
-                    offset += used_k;
-                }
-                Ok((SharedRange::DistanceFSSL3 { keys, role }, offset))
-            }
-            _ => Err("Unknown SharedRange tag".to_string()),
-        }
-    }
 }
 
 /// Share phase handler
@@ -759,8 +330,16 @@ impl SharePhase {
             }
         }
 
+        let role = match &shared_ranges[0] {
+            SharedRange::OKVS { role, .. } => *role,
+            SharedRange::IntervalFSS { role, .. } => *role,
+            SharedRange::DistanceFSSL1 { role, .. } => *role,
+            SharedRange::DistanceFSSL2 { role, .. } => *role,
+            SharedRange::DistanceFSSL3 { role, .. } => *role,
+        };
+
         let mut seed = [0u8; AES_KEY_SIZE];
-        if self.config.role {
+        if role {
             seed = rand::rng().random::<[u8; AES_KEY_SIZE]>();
             other_server_channels[0].write_bytes(&seed).expect("Failed to send seed to other server");
         } else {
@@ -961,7 +540,7 @@ impl SharePhase {
         point_bits: &[bool],
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
-        let result = fss_key.eval_interval_fss(point_bits, modulus).expect("Interval FSS eval failed");
+        let result = fss_key.eval_interval_fss(point_bits, modulus);
         Ok(result[0])
     }
 
@@ -1258,12 +837,12 @@ impl SharePhase {
         }
     }
 
+    // This function is NOT READY to be used!!!
     fn parallel_sketch_interval_fss(
         &self,
         shared_ranges: &[SharedRange],
-        seed: &[u8; AES_KEY_SIZE],
+        seed: [u8; AES_KEY_SIZE],
         delta: u128,
-        modulus: u128,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // First just do full domain evaluation
@@ -1275,7 +854,8 @@ impl SharePhase {
         let num_threads = other_server_channels.len();
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
         let domain_range = 1u128 << self.config.h1;
-        let total_mod = 1u128 << (self.config.h1 + self.config.sketch_s);
+        let total_mod = 1u128 << self.config.h1;
+        let modulus = 1u128 << self.config.h2;
 
         let mut z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
@@ -1293,10 +873,10 @@ impl SharePhase {
                 .enumerate()
                 .for_each(|(i, (((((shared_range, z1_row), z2_row), z3_row), z4_row), z5_row))| {
                     match shared_range {
-                        SharedRange::IntervalFSS { keys, role: _ } => {
+                        SharedRange::IntervalFSS { keys, .. } => {
                             // Create a seed for this index only, by xoring the global seed with the index
-                            let mut blocks = vec![[0u8; 16]; domain_range * self.config.d as usize];
-                            let prg = PRG::new(seed, i as u64);
+                            let mut blocks = vec![[0u8; 16]; domain_range as usize * self.config.d];
+                            let mut prg = PRG::new(Some(&seed), i as u64);
                             prg.random_16byte_block(&mut blocks);
                             let rs = blocks.iter().map(|&b| {
                                 let num = u128::from_le_bytes(b);
@@ -1317,10 +897,10 @@ impl SharePhase {
                             // There are d dimensions
                             for dimension in 0..self.config.d {
                                 let key = &keys[dimension];
-                                let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1)
+                                let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1).iter()
                                     .map(|eval| eval[0])
                                     .collect::<Vec<u128>>();
-                                let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1)
+                                let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1).iter()
                                     .map(|eval| eval[0])
                                     .collect::<Vec<u128>>();
 
@@ -1331,13 +911,15 @@ impl SharePhase {
                                         (ldcf_evals[j] + modulus - ldcf_evals[j - 1]) % modulus
                                     })
                                     .collect::<Vec<u128>>();
+                                let range_start = domain_range as usize * dimension;
+                                let range_end = domain_range as usize * (dimension + 1);
                                 z1_row[dimension] = ldcf_evals1.iter()
-                                    .zip(rs[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .zip(rs[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r)| {
                                         (acc + eval * r) % total_mod
                                     }); // sum of ri * evali. This sum should be non-zero at only one position.
                                 z2_row[dimension] = ldcf_evals1.iter()
-                                    .zip(rs2[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .zip(rs2[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r2)| {
                                         (acc + eval * r2) % total_mod
                                     }); // sum of ri^2 * evali. We should have z2 = z1^2 if only one position is non-zero, and it is 1.
@@ -1350,12 +932,12 @@ impl SharePhase {
                                     })
                                     .collect::<Vec<u128>>();
                                 z3_row[dimension] = rdcf_evals1.iter()
-                                    .zip(rs3[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .zip(rs3[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r3)| {
                                         (acc + eval * r3) % total_mod
                                     }); // sum of ri^3 * evali. This sum should be non-zero at only one position.
                                 z4_row[dimension] = rdcf_evals1.iter()
-                                    .zip(rs6[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .zip(rs6[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r6)| {
                                         (acc + eval * r6) % total_mod
                                     }); // sum of ri^6 * evali. We should have z4 = z3^2 if only one position is non-zero, and it is 1.
@@ -1368,7 +950,7 @@ impl SharePhase {
                                     })
                                     .collect::<Vec<u128>>();
                                 z5_row[dimension] = rdcf_ldcf_evals.iter()
-                                    .zip(rs4[domain_range * dimension..domain_range * (dimension + 1)].iter())
+                                    .zip(rs4[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r4)| {
                                         (acc + eval * r4) % total_mod
                                     }); // sum of ri * evali. This sum should be non-zero at only one position.
@@ -1386,7 +968,7 @@ impl SharePhase {
 
     fn sketch_distance_fss<const N: usize>(
         &self,
-        shared_ranges: &[SharedRange],
+        _shared_ranges: &[SharedRange],
     ) -> Result<bool, SharePhaseError> {
         unimplemented!()
     }

@@ -4,7 +4,7 @@ use mosaic::{
     util::get_distance_threshold,
     fuzzy_match::dealer::FssDealer,
 };
-use clap::{App, Arg};
+use clap::Parser;
 
 /// Run as dealer - generates and distributes FSS keys to servers
 fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
@@ -142,34 +142,19 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    config: String,
+    #[arg(short, long)]
+    threads: usize,
+}
 
 fn main() {
-    let matches = App::new("Dealer CLI for Mosaic")
-        .version("1.0")
-        .about("CLI for running the fuzzy heavy hitters protocol in distributed or local mode")
-            .arg(
-                Arg::with_name("config")
-                    .short("c")
-                    .long("config")
-                    .value_name("FILE")
-                    .help("Configuration file path")
-                    .required(true)
-            )
-            .arg(
-                Arg::with_name("threads")
-                    .short("t")
-                    .long("threads")
-                    .value_name("NUMBER")
-                    .help("Number of parallel threads/channels to use")
-                    .default_value("1")
-            )
-        .get_matches();
-
-    let config_path = matches.value_of("config").unwrap();
-    let num_threads = matches.value_of("threads").unwrap()
-        .parse::<usize>()
-        .map_err(|_| "Invalid number of threads").expect("Failed to parse number of threads");
-
+    let args = Args::parse();
+    let config_path = &args.config;
+    let num_threads = args.threads;
 
     let result = run_dealer(config_path, num_threads);
     

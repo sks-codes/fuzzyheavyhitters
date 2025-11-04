@@ -40,8 +40,9 @@ impl<const N: usize> IntervalFSSEval<N> {
         &self.rdcf_eval 
     }
 
-    pub fn result(&self) -> &RingVec<N> {
-        &(self.ldcf_eval.y() - self.rdcf_eval.y())
+    pub fn result(&self) -> RingVec<N> {
+        // Return by value to avoid borrowing a temporary
+        self.ldcf_eval.y() - self.rdcf_eval.y()
     }
 }
 
@@ -133,7 +134,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         )
     }
 
-    pub fn eval_init(
+    pub fn init_eval(
         &self,
         modulus: u128,
     ) -> IntervalFSSEval<N> {

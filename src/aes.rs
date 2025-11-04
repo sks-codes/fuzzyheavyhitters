@@ -117,7 +117,8 @@ impl FixedKeyPrgStream {
     // Modified from RustCrypto aesni crate
     #[inline(always)]
     fn load(key: &[u8; 16]) -> __m128i {
-        let val = GenericArray::from_slice(key);
+        // Help the compiler infer the GenericArray length (U16)
+        let val: &GenericArray<u8, typenum::U16> = GenericArray::from_slice(key);
 
         // Safety: `loadu` supports unaligned loads
         #[allow(clippy::cast_ptr_alignment)]

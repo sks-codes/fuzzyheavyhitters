@@ -90,10 +90,8 @@ fn main() {
     // Create chunks and process them in parallel
     let chunks: Vec<usize> = (0..total_runs).step_by(chunk_size).collect();
     
-    chunks.par_iter().enumerate().for_each(|(chunk_idx, &start_run)| {
+    chunks.par_iter().enumerate().for_each(|(_chunk_idx, &start_run)| {
         // Each thread gets its own RNG
-        let rng = rand::rng();
-        
         let end_run = std::cmp::min(start_run + chunk_size, total_runs);
         let chunk_successes = Arc::new(AtomicUsize::new(0));
         let chunk_failures = Arc::new(AtomicUsize::new(0));

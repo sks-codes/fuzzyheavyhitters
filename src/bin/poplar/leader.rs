@@ -86,6 +86,7 @@ fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
 }
 
 
+#[allow(unused)]
 fn generate_keys(cfg: &poplar_config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) {
     let (keys0, keys1): (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) = rayon::iter::repeat(0)
         .take(cfg.num_sites)
@@ -166,7 +167,7 @@ async fn add_keys(
     client1: CollectorClient,
     keys0: Vec<Vec<IntervalKey>>,
     keys1: Vec<Vec<IntervalKey>>,
-    nreqs: usize,
+    _nreqs: usize,
 ) -> io::Result<()> {
 
     let req0 = AddKeysRequest { keys: keys0 };
@@ -290,7 +291,7 @@ async fn final_shares(
     let results = &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1);
     for res in results{
         println!("Path = {:?}", res.path);
-        save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
+        let _ = save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
     }
 
     Ok(results.len())
@@ -417,10 +418,10 @@ async fn main() -> io::Result<()> {
 
 
     let start = Instant::now();
-    let mut active_paths = 0;
+    // let mut active_paths = 0;
     let mut server_data : Vec<(ServerSide, ServerSide)> = vec![];
     for level in 0..cfg.data_len-1 {
-        let (active_paths, server_data0, server_data1) = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
+        let (_active_paths, server_data0, server_data1) = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
         server_data.push((server_data0, server_data1));
         println!(
             "Level {:?} {:?}",
@@ -454,6 +455,6 @@ async fn main() -> io::Result<()> {
         ball_radius: cfg.ball_size as u32,
     }, client_side: client_data, server_side: server_data, experiment_results: ExperimentResults{total_time, num_heavy_hitters}};
 
-    log_experiment_to_json(&data, "data/ride_austin_experiments.json");
+    let _ = log_experiment_to_json(&data, "data/ride_austin_experiments.json");
     Ok(())
 }

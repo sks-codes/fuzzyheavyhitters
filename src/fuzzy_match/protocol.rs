@@ -3,12 +3,17 @@
 //! This module provides a high-level interface for running the complete fuzzy heavy hitters protocol
 //! including share phase, check phase, and threshold phase.
 
-use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange, ShareData, DistanceMetric};
-use crate::fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty};
-use crate::fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData};
-use crate::fuzzy_match::dealer::{FssKeyBatch, DpfKeyBatch, DealerSignal};
-use crate::util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distance_threshold};
-use crate::channel::CommTrackingChannel;
+use crate::{
+    fuzzy_match::{
+        share_phase::{SharePhase, ShareConfig, DistanceMetric},
+        shared_range::{SharedRange, ShareData},
+        check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty},
+        threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
+        dealer::{FssKeyBatch, DpfKeyBatch, DealerSignal},
+    },
+    util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distance_threshold},
+    channel::CommTrackingChannel,
+};
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
 use rayon::prelude::*;
@@ -191,7 +196,7 @@ impl MosaicProtocol {
                             match share_data {
                                 ShareData::OKVS { eval } => eval.clone(),
                                 ShareData::IntervalFSS { data } => {
-                                    data.iter().map(|eval| eval.result()).collect::<Vec<u128>>()
+                                    data.iter().map(|eval| eval.result()[0]).collect::<Vec<u128>>()
                                 },
                                 ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
                                 ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),

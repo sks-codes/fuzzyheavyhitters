@@ -1,5 +1,8 @@
-use crate::channel::CommTrackingChannel;
-use crate::fuzzy_match::share_phase::{SharePhase, ShareConfig, SharedRange};
+use crate::{
+    channel::CommTrackingChannel,
+    fuzzy_match::share_phase::{SharePhase, ShareConfig},
+    fuzzy_match::shared_range::SharedRange,
+};
 use scuttlebutt::AbstractChannel;
 
 /// Client structure that handles client-side operations

@@ -4,7 +4,7 @@ use mosaic::{
     channel::{setup_parallel_channels, listen_to},
 };
 use std::fs;
-use clap::{App, Arg};
+use clap::Parser;
 
 /// Load query points from JSON file
 fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
@@ -198,50 +198,27 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     Ok(())
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    side: u8,
+    #[arg(short, long)]
+    config: String,
+    #[arg(short, long, default_value_t = 1)]
+    threads: usize,
+}
 
 fn main() {
-    let matches = App::new("Server CLI for Mosaic")
-    .version("1.0")
-    .about("CLI for running the fuzzy heavy hitters protocol in distributed or local mode")
-        .arg(
-            Arg::with_name("side")
-                .short("s")
-                .long("side")
-                .value_name("SIDE")
-                .help("Server side: 0 or 1")
-                .required(true)
-        )
-        .arg(
-            Arg::with_name("config")
-                .short("c")
-                .long("config")
-                .value_name("FILE")
-                .help("Configuration file path")
-                .required(true)
-        )
-        .arg(
-            Arg::with_name("threads")
-                .short("t")
-                .long("threads")
-                .value_name("NUMBER")
-                .help("Number of parallel threads/channels to use")
-                .default_value("1")
-        )
-    .get_matches();
-
-    let side = matches.value_of("side").unwrap()
-        .parse::<u8>()
-        .map_err(|_| "Invalid side, must be 0 or 1").expect("Failed to parse side");
-    let config_path = matches.value_of("config").unwrap();
-    let num_threads = matches.value_of("threads").unwrap()
-        .parse::<usize>()
-        .map_err(|_| "Invalid number of threads").expect("Failed to parse number of threads");
-
+    let args = Args::parse();
+    let side = args.side;
+    let config_path = args.config;
+    let num_threads = args.threads;
 
    let result = if side == 0 {
-        run_server(config_path, false, num_threads)
+        run_server(&config_path, false, num_threads)
     } else if side == 1 {
-        run_server(config_path, true, num_threads)
+        run_server(&config_path, true, num_threads)
     } else {
         Err("Side must be 0 or 1".to_string())
     };
