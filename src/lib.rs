@@ -1,19 +1,21 @@
 // extern crate cpuprofiler;
 
-pub mod collect;
 pub mod data_structures;
-pub mod rpc;
-pub mod fss;
 pub mod garbled_circuits;
+pub mod randomness;
+pub mod collect;
+pub mod fss;
+pub mod fuzzy_match;
+pub mod configs;
+pub mod naive;
+
+pub mod rpc;
 pub mod sample_driving_data;
 pub mod synthetic_data;
-pub mod fuzzy_match;
 pub mod aes;
 pub mod okvs_f2k;
-pub mod configs;
 pub mod util;
 pub mod channel;
-pub mod randomness;
 
 #[macro_use]
 extern crate lazy_static;
