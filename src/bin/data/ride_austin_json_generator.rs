@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use csv::Reader;
+use clap::Parser;
 
 fn read_csv_and_convert<P: AsRef<Path>>(path: P) -> Result<Vec<Vec<u128>>, Box<dyn Error>> {
     let mut rdr = Reader::from_path(path)?;
@@ -13,23 +14,31 @@ fn read_csv_and_convert<P: AsRef<Path>>(path: P) -> Result<Vec<Vec<u128>>, Box<d
         let record = record?;
         let start_lon = record[15].parse::<f64>()?;
         let start_lat = record[16].parse::<f64>()?;
-        let end_lat = record[6].parse::<f64>()?;
-        let end_lon = record[7].parse::<f64>()?;
+        // let end_lat = record[6].parse::<f64>()?;
+        // let end_lon = record[7].parse::<f64>()?;
         
         // Convert to grid coordinates (same as csv_to_bitvecs function)
         let (start_lat_grid, start_lon_grid) = geo_to_grid(start_lat, start_lon);
-        let (end_lat_grid, end_lon_grid) = geo_to_grid(end_lat, end_lon);
+        // let (end_lat_grid, end_lon_grid) = geo_to_grid(end_lat, end_lon);
         
         // Convert to u128 and create point as [lat, lon]
-        Ok(vec![start_lat_grid as u128, start_lon_grid as u128, end_lat_grid as u128, end_lon_grid as u128])
+        Ok(vec![start_lat_grid as u128, start_lon_grid as u128])
     }).collect()
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    input: String,
+    output: String,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+    let input_file = &args.input;
+    let output_file = &args.output;
+
     println!("Starting RideAustin client points JSON generation...");
-    
-    let input_file = "data/sample_busiest_week.csv";
-    let output_file = "data/ride-austin/client_rides_busiest_week.json";
 
     // Check if input file exists
     if !Path::new(input_file).exists() {
@@ -57,7 +66,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !client_points.is_empty() {
         println!("\nSample points:");
         for (i, point) in client_points.iter().take(5).enumerate() {
-            println!("  Point {}: [start_lat_grid: {}, start_lon_grid: {}, end_lat_grid: {}, end_lon_grid: {}]", i+1, point[0], point[1], point[2], point[3]);
+            println!("Point {}: [start_lat_grid: {}, start_lon_grid: {}]", i + 1, point[0], point[1]);
+            // println!("  Point {}: [start_lat_grid: {}, start_lon_grid: {}, end_lat_grid: {}, end_lon_grid: {}]", i+1, point[0], point[1], point[2], point[3]);
         }
     }
     

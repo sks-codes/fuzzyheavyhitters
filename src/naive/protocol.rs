@@ -1,11 +1,13 @@
-use crossbeam::thread;
-
 use crate::{
     channel::CommTrackingChannel,
     fss::dpf::DpfKey,
     fuzzy_match::share_phase::ShareConfig, 
     util::u128_to_bits_msb,
 };
+use scuttlebutt::AbstractChannel;
+use std::convert::TryInto;
+use rayon::ThreadPool;
+use rayon::prelude::*;
 
 const BATCH_SIZE_PER_CORE: usize = 10;
 
@@ -38,8 +40,7 @@ impl NaiveProtocol {
         offset += 8;
         let modulus = 1u128 << self.share_config.h2;
         for _ in 0..count {
-            let (key, read_bytes) = DpfKey::<1>::from_bytes(&bytes[offset..], modulus)
-                .map_err(|e| anyhow::anyhow!("Failed to deserialize DPF key: {}", e))?;
+            let (key, read_bytes) = DpfKey::<1>::from_bytes(&bytes[offset..], modulus);
             dpf_keys.push(key);
             offset += read_bytes;
         }
@@ -64,7 +65,7 @@ impl NaiveProtocol {
                 .zip(query_points.par_iter())
                 .for_each(|(bits, point)| {
                     let point_bits = point.iter()
-                        .map(|x| u128_to_bits_msb(x, self.share_config.h1))
+                        .map(|&x| u128_to_bits_msb(x, self.share_config.h1))
                         .collect::<Vec<Vec<bool>>>();
                     for i in 0..self.share_config.h1 {
                         for dimension in 0..self.share_config.d {
@@ -78,31 +79,33 @@ impl NaiveProtocol {
         server_bits
             .chunks_mut(num_threads * BATCH_SIZE_PER_CORE)
             .zip(query_points_bits.chunks(num_threads * BATCH_SIZE_PER_CORE))
-            .try_for_each(|(server_bits_chunk, query_points_bit_chunk)| {
+            .for_each(|(_server_bits_chunk, query_points_bits_chunk)| {
                 let mut evals = Vec::new();
-                let chunk_size = (query_points_chunk.len() + num_threads - 1) / num_threads;
+                let _chunk_size = (query_points_bits_chunk.len() + num_threads - 1) / num_threads;
                 for query_point_bits in query_points_bits_chunk {
                     let mut aggregated_eval = 0u128;
                     thread_pool.install(|| {
                         let point_evals = client_shares
                             .par_iter()
                             .map(|dpf_key| {
-                                dpf_key.eval_pdf(&query_point_bits, modulus)
+                                dpf_key.eval_dpf(&query_point_bits, modulus)[0]
                             })
                             .collect::<Vec<u128>>();
-                        aggregated_eval = _point_evals.iter()
+                        aggregated_eval = point_evals.iter()
                             .fold(0u128, |acc, &x| (acc + x) % modulus);
                     });
                     evals.push(aggregated_eval);
                 }
                 // TODO batch check
-            }).map_err(|e| anyhow::anyhow!("Error during parallel processing: {}", e))?;
+            });
+        Ok(server_bits)
     }
 
+    #[allow(unused)]
     fn batch_check(
         &self,
         evals: &[u128],
-        other_server_channels: &mut [CommTrackingChannel],
+        _other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, anyhow::Error> {
         // Implement batch checking logic here
         Ok(vec![false; evals.len()]) // Placeholder

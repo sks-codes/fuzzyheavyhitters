@@ -231,7 +231,7 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
             dictionary_type: "Known".to_string(), // Can also be "Unknown"
             check_method: "FSS".to_string(), // Can also be "GC"
             check_property: "Equality".to_string(), // Can also be "MuBounded"
-            threshold_method: "GarbledCircuits".to_string(), // Can also be "IntervalFSS"
+            threshold_method: "GC".to_string(), // Can also be "IntervalFSS"
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
             num_clients: 100, // Number of clients participating in the protocol
         },

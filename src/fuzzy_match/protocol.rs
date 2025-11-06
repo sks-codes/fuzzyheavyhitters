@@ -188,6 +188,11 @@ impl MosaicProtocol {
                         .collect::<Vec<Vec<Vec<u8>>>>()
                 });
                 println!("Time to collect new data: {:?}", start.elapsed());
+                println!("Number of new data stored: {}", new_data.len());
+                println!("Memory consumption of new_data: {:?} bytes", new_data.iter().map(|data_bytes| data_bytes.iter().map(|b| b.len()).sum::<usize>()).sum::<usize>());
+
+                crate::util::print_memory_usage();
+
                 let mut new_eval = thread_pool.install(|| {
                     new_data.par_iter().map(|data_bytes| {
                         data_bytes.iter()
@@ -232,18 +237,27 @@ impl MosaicProtocol {
                 println!("Time for batch check: {:?}", start.elapsed());
 
                 let start_copy = std::time::Instant::now();
+
+                crate::util::print_memory_usage();
+
                 // Use std::mem::take to move qualifying entries out without cloning.
                 current_data.clear();
                 current_prefixes.clear();
-                new_eval.clear();
                 for ((data, prefix), &exceed) in new_data.iter_mut().zip(new_prefixes.iter_mut()).zip(exceeds_threshold_results.iter()) {
                     if exceed {
                         current_data.push(std::mem::take(data));
                         current_prefixes.push(std::mem::take(prefix));
                     }
                 }
-                new_data.clear();
-                new_prefixes.clear();
+                // new_eval.clear();
+                // new_data.clear();
+                // new_prefixes.clear();
+                drop(new_eval);
+                drop(new_data);
+                drop(new_prefixes);
+
+                crate::util::print_memory_usage();
+
                 // new_data/new_prefixes now contain empty Vecs for moved entries; they'll be dropped.
                 println!("Time to filter data based on threshold (move-based): {:?}", start_copy.elapsed());
 

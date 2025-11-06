@@ -294,6 +294,20 @@ pub fn and_bit<const N: usize>(a: [u8; N], b: bool) -> [u8; N] {
     }
 }
 
+pub fn print_memory_usage() {
+    let mut sys = sysinfo::System::new_all();   
+    sys.refresh_memory();
+    let total = sys.total_memory(); // in KiB
+    let used = sys.used_memory();   // in KiB
+
+    println!(
+        "Mem: {:.2} GB / {:.2} GB ({:.1}%)",
+        used as f64 / 2u64.pow(30) as f64,
+        total as f64 / 2u64.pow(30) as f64,
+        (used as f64 / total as f64) * 100.0
+    );
+}
+
 
 #[cfg(test)]
 mod tests {
