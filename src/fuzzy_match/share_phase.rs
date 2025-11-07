@@ -1,4 +1,5 @@
 use blake3;
+use crossbeam::epoch::Shared;
 use rand::Rng;
 
 use crate::{
@@ -12,9 +13,12 @@ use crate::{
     },
     data_structures::ringvec::RingVec,
     util::u128_to_bits_msb,
-    fuzzy_match::shared_range::{SharedRange, ShareData},
+    fuzzy_match::{
+        shared_range::{SharedRange, ShareData},
+        shared_sketch::SketchData,
+    }
 };
-use std::cmp::{max, min};
+use std::{cmp::{max, min}, convert::TryInto};
 use scuttlebutt::AbstractChannel;
 use rayon::prelude::*;
 
@@ -841,8 +845,11 @@ impl SharePhase {
     fn parallel_sketch_interval_fss(
         &self,
         shared_ranges: &[SharedRange],
+        sketch_data: &[SketchData],
         seed: [u8; AES_KEY_SIZE],
         delta: u128,
+        sketch_modulus: u128,
+        thread_pool: &ThreadPool,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // First just do full domain evaluation
@@ -852,10 +859,8 @@ impl SharePhase {
         // WARNING! Only works when the input range is smaller than 60 bits
 
         let num_threads = other_server_channels.len();
-        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
         let domain_range = 1u128 << self.config.h1;
-        let total_mod = 1u128 << self.config.h1;
-        let modulus = 1u128 << self.config.h2;
+        let role = shared_ranges[0].role();
 
         let mut z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
@@ -863,6 +868,7 @@ impl SharePhase {
         let mut z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut z5s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
 
+        // Compute all the sketches first. Will exchange message and prove things later.
         thread_pool.install(|| {
             shared_ranges.par_iter()
                 .zip(z1s.par_iter_mut())
@@ -878,82 +884,94 @@ impl SharePhase {
                             let mut blocks = vec![[0u8; 16]; domain_range as usize * self.config.d];
                             let mut prg = PRG::new(Some(&seed), i as u64);
                             prg.random_16byte_block(&mut blocks);
+                            // Generate random values and their powers in Zp
                             let rs = blocks.iter().map(|&b| {
                                 let num = u128::from_le_bytes(b);
-                                num % total_mod
+                                num % sketch_modulus
                             }).collect::<Vec<u128>>();
                             let rs2 = rs.iter()
-                                .map(|&r| (r * r) % total_mod)
+                                .map(|&r| (r * r) % sketch_modulus)
                                 .collect::<Vec<u128>>(); // ri^2
                             let rs3 = rs.iter().zip(rs2.iter())
-                                .map(|(&r, &r2)| (r * r2) % total_mod)
+                                .map(|(&r, &r2)| (r * r2) % sketch_modulus)
                                 .collect::<Vec<u128>>(); // ri^3
                             let rs4 = rs2.iter()
-                                .map(|&r2| (r2 * r2) % total_mod)
+                                .map(|&r2| (r2 * r2) % sketch_modulus)
                                 .collect::<Vec<u128>>(); // ri^4
                             let rs6 = rs3.iter()
-                                .map(|&r3| (r3 * r3) % total_mod)
+                                .map(|&r3| (r3 * r3) % sketch_modulus)
                                 .collect::<Vec<u128>>(); // ri^6
                             // There are d dimensions
+
+                            let out_modulus = 1 << self.config.h2;
                             for dimension in 0..self.config.d {
                                 let key = &keys[dimension];
-                                let ldcf_evals = key.full_domain_eval_ldcf(modulus, self.config.h1).iter()
+                                let ldcf_evals = key.full_domain_eval_ldcf(out_modulus, self.config.h1).iter()
                                     .map(|eval| eval[0])
                                     .collect::<Vec<u128>>();
-                                let rdcf_evals = key.full_domain_eval_rdcf(modulus, self.config.h1).iter()
+                                let rdcf_evals = key.full_domain_eval_rdcf(out_modulus, self.config.h1).iter()
                                     .map(|eval| eval[0])
                                     .collect::<Vec<u128>>();
 
                                 // CHECK LDCF
-                                // Shift by one and subtract to turn into DPF
+                                // Shift by one and subtract to turn into DPF, still working in Z_2
+                                // The difference of shares of two parties should be 0 at everywhere except one point.
+                                // At that point, the difference would be either -1 or 1 in Zp.
                                 let ldcf_evals1 = (1..ldcf_evals.len())
                                     .map(|j| {
-                                        (ldcf_evals[j] + modulus - ldcf_evals[j - 1]) % modulus
+                                        (ldcf_evals[j] + out_modulus - ldcf_evals[j - 1]) % out_modulus
                                     })
                                     .collect::<Vec<u128>>();
                                 let range_start = domain_range as usize * dimension;
                                 let range_end = domain_range as usize * (dimension + 1);
+                                // Multiply with the sketching random values, now working in Zp
                                 z1_row[dimension] = ldcf_evals1.iter()
                                     .zip(rs[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r)| {
-                                        (acc + eval * r) % total_mod
-                                    }); // sum of ri * evali. This sum should be non-zero at only one position.
+                                        (acc + eval * r) % sketch_modulus
+                                    }); // sum of ri * evali. This sum should be equal to either ri or -ri, where i is the non-zero position.
                                 z2_row[dimension] = ldcf_evals1.iter()
                                     .zip(rs2[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r2)| {
-                                        (acc + eval * r2) % total_mod
-                                    }); // sum of ri^2 * evali. We should have z2 = z1^2 if only one position is non-zero, and it is 1.
+                                        (acc + eval * r2) % sketch_modulus
+                                    }); // sum of ri^2 * evali. This sum should be equal to either ri^2 or -ri^2, where i is the non-zero position.
+                                // We will want to check that z1^4 == z2^2 later.
                                 
                                 // CHECK RDCF
-                                // Shift by one and subtract to turn into DPF
+                                // Shift by one and subtract to turn into DPF, still working in Z_2
                                 let rdcf_evals1 = (1..rdcf_evals.len())
                                     .map(|j| {
                                         (rdcf_evals[j] + modulus - rdcf_evals[j - 1]) % modulus
                                     })
                                     .collect::<Vec<u128>>();
+                                // Multiply with the sketching random values, now working in Zp
                                 z3_row[dimension] = rdcf_evals1.iter()
                                     .zip(rs3[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r3)| {
-                                        (acc + eval * r3) % total_mod
-                                    }); // sum of ri^3 * evali. This sum should be non-zero at only one position.
+                                        (acc + eval * r3) % sketch_modulus
+                                    }); // sum of ri^3 * evali. This sum should be equal to either ri^3 or -ri^3, where i is the non-zero position.
+                                // Multiply with the sketching random values, now working in Zp
                                 z4_row[dimension] = rdcf_evals1.iter()
                                     .zip(rs6[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r6)| {
-                                        (acc + eval * r6) % total_mod
-                                    }); // sum of ri^6 * evali. We should have z4 = z3^2 if only one position is non-zero, and it is 1.
+                                        (acc + eval * r6) % sketch_modulus 
+                                    }); // sum of ri^6 * evali. This sum should be equal to either ri^6 or -ri^6, where i is the non-zero position.
+                                // We will want to check that z3^2 == z4 later.
 
-
-                                // Check whether the interval is smaller than or equal to 2 * delta + 1 by shifting rdcf by 2 * delta + 1 and subtracting
-                                let rdcf_ldcf_evals = (0..rdcf_evals1.len() - (2 * delta as usize + 1))
+                                // Check whether the interval is smaller than or equal to 2 * delta by shifting rdcf by 2 * delta and subtracting
+                                // Shift rdcf by 2 * delta and subtract by ldcf. Working in Z2.
+                                let rdcf_ldcf_evals = (0..rdcf_evals1.len() - (2 * delta as usize))
                                     .map(|j| {
-                                        (rdcf_evals[j + 2 * delta as usize + 1] + modulus - ldcf_evals1[j]) % modulus
+                                        (rdcf_evals[j + 2 * delta as usize] + modulus - ldcf_evals1[j]) % modulus
                                     })
                                     .collect::<Vec<u128>>();
+                                // Multiply with the sketching random values, now working in Zp
                                 z5_row[dimension] = rdcf_ldcf_evals.iter()
                                     .zip(rs4[range_start..range_end].iter())
                                     .fold(0u128, |acc, (&eval, &r4)| {
-                                        (acc + eval * r4) % total_mod
-                                    }); // sum of ri * evali. This sum should be non-zero at only one position.
+                                        (acc + eval * r4) % sketch_modulus
+                                    }); // sum of ri * evali. This sum should just be equal to 0.
+                                // We will want to check that z5 == 0 later.
                             }
                         }
                         _ => {
@@ -962,6 +980,92 @@ impl SharePhase {
                     }
                 })
             });
+        
+        // Now that we have all the sketches, exchange messages and prove things
+        // 1. z1^4 == z2^2
+        // 2. z3^4 == z4^2
+        // 3. z5 == 0
+
+        // First step, obtain noised values from given client's sketch data
+        // We don't need to noise z5s since the two server's shares should just be equal
+        let mut noised_z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut noised_z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut noised_z3s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut noised_z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        
+        thread_pool.install(|| {
+            sketch_data.par_iter()
+                .zip(noised_z1s.par_iter_mut())
+                .zip(noised_z2s.par_iter_mut())
+                .zip(noised_z3s.par_iter_mut())
+                .zip(noised_z4s.par_iter_mut())
+                .enumerate()
+                .for_each(|(i, ((((sketch, noised_z1_row), noised_z2_row), noised_z3_row), noised_z4_row))| {
+                    for dimension in 0..self.config.d {
+                        noised_z1_row[dimension] = (z1s[i][dimension] + sketch.a[dimension]) % sketch_modulus;
+                        noised_z2_row[dimension] = (z2s[i][dimension] + sketch.b[dimension]) % sketch_modulus;
+                        noised_z3_row[dimension] = (z3s[i][dimension] + sketch.a[dimension + self.config.d]) % sketch_modulus;
+                        noised_z4_row[dimension] = (z4s[i][dimension] + sketch.b[dimension + self.config.d]) % sketch_modulus;
+                    }
+                });
+        });
+
+        // Exchange noised values
+        let mut plain_z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut plain_z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut plain_z3s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut plain_z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let chunk_size = (shared_ranges.len() + num_threads - 1) / num_threads;
+        if role {
+            send_array(&mut other_server_channels[0], &noised_z1s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z2s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z3s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z4s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z1s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z2s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z3s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z4s, shared_ranges.len(), self.config.d)?;
+        } else {
+            recv_array(&mut other_server_channels[0], &mut plain_z1s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z2s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z3s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut plain_z4s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z1s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z2s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z3s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &noised_z4s, shared_ranges.len(), self.config.d)?;
+        }
+
+        thread_pool.install(|| {
+            plain_z1s.par_iter_mut()
+                .zip(plain_z2s.par_iter_mut())
+                .zip(plain_z3s.par_iter_mut())
+                .zip(plain_z4s.par_iter_mut())
+                .zip(z1s.par_iter())
+                .zip(z2s.par_iter())
+                .zip(z3s.par_iter())
+                .zip(z4s.par_iter())
+                .for_each(|(((((((plain_z1_row, plain_z2_row), plain_z3_row), plain_z4_row), z1_row), z2_row), z3_row), z4_row)| {
+                    for dimension in 0..self.config.d {
+                        if role {
+                            // Server 1: subtract own share
+                            plain_z1_row[dimension] = (plain_z1_row[dimension] + sketch_modulus - z1_row[dimension]) % sketch_modulus;
+                            plain_z2_row[dimension] = (plain_z2_row[dimension] + sketch_modulus - z2_row[dimension]) % sketch_modulus;
+                            plain_z3_row[dimension] = (plain_z3_row[dimension] + sketch_modulus - z3_row[dimension]) % sketch_modulus;
+                            plain_z4_row[dimension] = (plain_z4_row[dimension] + sketch_modulus - z4_row[dimension]) % sketch_modulus;
+                        } else {
+                            // Server 0: subtract own share
+                            plain_z1_row[dimension] = (z1_row[dimension] + sketch_modulus - plain_z1_row[dimension]) % sketch_modulus;
+                            plain_z2_row[dimension] = (z2_row[dimension] + sketch_modulus - plain_z2_row[dimension]) % sketch_modulus;
+                            plain_z3_row[dimension] = (z3_row[dimension] + sketch_modulus - plain_z3_row[dimension]) % sketch_modulus;
+                            plain_z4_row[dimension] = (z4_row[dimension] + sketch_modulus - plain_z4_row[dimension]) % sketch_modulus;
+                        }
+                    }
+                });
+        });
+
+        // Now start doing local computation
+        // Try to do linear combination for everything to save communication.
 
         Ok(true)
     }
@@ -972,6 +1076,48 @@ impl SharePhase {
     ) -> Result<bool, SharePhaseError> {
         unimplemented!()
     }
+}
+
+fn send_array(
+    channel: &mut CommTrackingChannel,
+    array: &Vec<Vec<u128>>,
+    length: usize,
+    width: usize,
+) -> Result<(), SharePhaseError> {
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(&array.len().to_le_bytes());
+    for l in 0..length {
+        for w in 0..width {
+            buffer.extend_from_slice(&array[l][w].to_le_bytes());
+        }
+    }
+    let len_buf: [u8; 8] = buffer.len().to_le_bytes().try_into().unwrap();
+    channel.write_bytes(&len_buf).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to send array length: {}", e)))?;
+    channel.write_bytes(&buffer).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to send array data: {}", e)))?;
+    Ok(())
+}
+
+fn recv_array(
+    channel: &mut CommTrackingChannel,
+    array: &mut Vec<Vec<u128>>,
+    length: usize,
+    width: usize,
+) -> Result<(), SharePhaseError> {
+    let mut len_buf = [0u8; 8];
+    channel.read_bytes(&mut len_buf).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to receive array length: {}", e)))?;
+    let data_len = usize::from_le_bytes(len_buf);
+    let mut buffer = vec![0u8; data_len];
+    channel.read_bytes(&mut buffer).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to receive array data: {}", e)))?;
+    let mut offset = 0;
+    for l in 0..length {
+        for w in 0..width {
+            let mut num_buf = [0u8; 16];
+            num_buf.copy_from_slice(&buffer[offset..offset + 16]);
+            array[l][w] = u128::from_le_bytes(num_buf);
+            offset += 16;
+        }
+    }
+    Ok(())
 }
 
 /// Errors that can occur during the share phase

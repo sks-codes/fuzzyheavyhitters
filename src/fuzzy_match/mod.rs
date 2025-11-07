@@ -10,6 +10,7 @@
 
 pub mod share_phase;
 pub mod shared_range;
+pub mod shared_sketch;
 pub mod check_phase;
 pub mod threshold_phase;
 pub mod strategies;

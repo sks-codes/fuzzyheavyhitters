@@ -434,4 +434,14 @@ impl SharedRange {
             _ => Err("Unknown SharedRange tag".to_string()),
         }
     }
+
+    pub fn role(&self) -> bool {
+        match self {
+            SharedRange::OKVS { role, .. } => *role,
+            SharedRange::IntervalFSS { role, .. } => *role,
+            SharedRange::DistanceFSSL1 { role, .. } => *role,
+            SharedRange::DistanceFSSL2 { role, .. } => *role,
+            SharedRange::DistanceFSSL3 { role, .. } => *role,
+        }
+    }
 }
