@@ -3,21 +3,26 @@ use crate::{
     fss::dpf::DpfKey,
     fuzzy_match::share_phase::ShareConfig, 
     util::u128_to_bits_msb,
+    data_structures::modint::ModInt,
+    garbled_circuits::greater_than_or_equal_threshold::{
+        multiple_gb_greater_than_ss,
+        multiple_ev_greater_than_ss,
+    },
 };
-use scuttlebutt::AbstractChannel;
+use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
 use rayon::ThreadPool;
 use rayon::prelude::*;
 
-const BATCH_SIZE_PER_CORE: usize = 10;
-
 pub struct NaiveProtocol {
     share_config: ShareConfig,
+    side: bool,
+    threshold: u128,
 }
 
 impl NaiveProtocol {
-    pub fn new(share_config: ShareConfig) -> Self {
-        NaiveProtocol { share_config }
+    pub fn new(share_config: ShareConfig, side: bool, threshold: u128) -> Self {
+        NaiveProtocol { share_config, side, threshold }
     }
 
     pub fn receive_client_shares (
@@ -56,8 +61,6 @@ impl NaiveProtocol {
     ) -> Result<Vec<bool>, anyhow::Error> {
         let num_threads = other_server_channels.len();
 
-        let modulus = 1u128 << self.share_config.h2;
-
         let mut query_points_bits: Vec<Vec<bool>> = vec![vec![]; query_points.len()];
         thread_pool.install(|| {
             query_points_bits
@@ -74,40 +77,43 @@ impl NaiveProtocol {
                     }
                 });
         });
+        println!("Query points converted to bits.");
 
+        let chunk_size = (client_shares.len() + num_threads - 1) / num_threads;
         let mut server_bits = vec![false; query_points_bits.len()];
-        server_bits
-            .chunks_mut(num_threads * BATCH_SIZE_PER_CORE)
-            .zip(query_points_bits.chunks(num_threads * BATCH_SIZE_PER_CORE))
-            .for_each(|(_server_bits_chunk, query_points_bits_chunk)| {
-                let mut evals = Vec::new();
-                let _chunk_size = (query_points_bits_chunk.len() + num_threads - 1) / num_threads;
-                for query_point_bits in query_points_bits_chunk {
-                    let mut aggregated_eval = 0u128;
-                    thread_pool.install(|| {
-                        let point_evals = client_shares
-                            .par_iter()
-                            .map(|dpf_key| {
-                                dpf_key.eval_dpf(&query_point_bits, modulus)[0]
-                            })
-                            .collect::<Vec<u128>>();
-                        aggregated_eval = point_evals.iter()
-                            .fold(0u128, |acc, &x| (acc + x) % modulus);
-                    });
-                    evals.push(aggregated_eval);
-                }
-                // TODO batch check
-            });
-        Ok(server_bits)
-    }
+        let modulus = 1u128 << self.share_config.h2;
 
-    #[allow(unused)]
-    fn batch_check(
-        &self,
-        evals: &[u128],
-        _other_server_channels: &mut [CommTrackingChannel],
-    ) -> Result<Vec<bool>, anyhow::Error> {
-        // Implement batch checking logic here
-        Ok(vec![false; evals.len()]) // Placeholder
+
+        thread_pool.install(|| {
+            server_bits.par_chunks_mut(chunk_size)
+                .zip(query_points_bits.par_chunks(chunk_size))
+                .zip(other_server_channels.par_iter_mut())
+                .for_each(|((server_bits_chunk, query_points_bits_chunk), other_channel)| {
+                    let mut count_shares: Vec<ModInt> = Vec::with_capacity(server_bits_chunk.len());
+                    for (_server_bit, query_bits) in server_bits_chunk.iter_mut().zip(query_points_bits_chunk.iter()) {
+                        let mut acc = 0u128;
+                        for client_share in client_shares.iter() {
+                            let eval = client_share.eval_dpf(query_bits, modulus);
+                            acc = (acc + eval[0]) % modulus;
+                        }
+                        let acc_modint = ModInt::new(acc, modulus);
+                        count_shares.push(acc_modint);
+                        println!("Computed count share: {}", acc);
+                    }
+
+                    let mut local_rng = AesRng::new();
+                    let threshold = ModInt::new(self.threshold, modulus);
+                    let comparison_result = if self.side {
+                        multiple_gb_greater_than_ss(&mut local_rng, other_channel, &count_shares, &threshold)
+                    } else {
+                        // Evaluator side - gets the actual comparison result
+                        multiple_ev_greater_than_ss(&mut local_rng, other_channel, &count_shares)
+                    };
+                    for (i, server_bit) in server_bits_chunk.iter_mut().enumerate() {
+                        *server_bit = comparison_result[i];
+                    }
+                });
+        });
+        Ok(server_bits)
     }
 }

@@ -193,7 +193,7 @@ impl MosaicProtocol {
 
                 crate::util::print_memory_usage();
 
-                let mut new_eval = thread_pool.install(|| {
+                let new_eval = thread_pool.install(|| {
                     new_data.par_iter().map(|data_bytes| {
                         data_bytes.iter()
                         .map(|bytes| {
