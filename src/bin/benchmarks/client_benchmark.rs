@@ -15,6 +15,8 @@ fn main() {
         h1: 20,
         h2: 80,
         d: 4,
+        sketch_modulus: 1362378130168812918549609490751,
+        delta: 160,
     };
     
     // let share_phase = SharePhase::new(share_config);

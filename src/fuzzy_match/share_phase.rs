@@ -1,5 +1,4 @@
 use blake3;
-use crossbeam::epoch::Shared;
 use rand::Rng;
 
 use crate::{
@@ -21,6 +20,7 @@ use crate::{
 use std::{cmp::{max, min}, convert::TryInto};
 use scuttlebutt::AbstractChannel;
 use rayon::prelude::*;
+use rayon::ThreadPool;
 
 // Import strategies from the separate module
 use super::strategies::{
@@ -74,6 +74,10 @@ pub struct ShareConfig {
     pub h2: usize,
     /// Dimension of the input space
     pub d: usize,
+    /// Prime modulo for arithmetic sketching
+    pub sketch_modulus: u128,
+    /// Delta for distance 
+    pub delta: u128,
 }
 
 /// Share phase handler
@@ -308,7 +312,8 @@ impl SharePhase {
     pub fn sketch(
         &self,
         shared_ranges: &[SharedRange],
-        delta: u128,
+        sketch_data: &[SketchData],
+        thread_pool: &ThreadPool,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
         // Check the type of all shared ranges
@@ -356,7 +361,7 @@ impl SharePhase {
                 println!("Sketching for OKVS not implemented yet, so we skip it.");
                 Ok(true)
             },
-            "IntervalFSS" => self.parallel_sketch_interval_fss(shared_ranges, seed, delta, other_server_channels),
+            "IntervalFSS" => self.parallel_sketch_interval_fss(shared_ranges, sketch_data, seed, thread_pool, other_server_channels),
             "DistanceFSSL1" => self.sketch_distance_fss::<2>(shared_ranges),
             "DistanceFSSL2" => self.sketch_distance_fss::<3>(shared_ranges),
             "DistanceFSSL3" => self.sketch_distance_fss::<4>(shared_ranges),
@@ -847,8 +852,6 @@ impl SharePhase {
         shared_ranges: &[SharedRange],
         sketch_data: &[SketchData],
         seed: [u8; AES_KEY_SIZE],
-        delta: u128,
-        sketch_modulus: u128,
         thread_pool: &ThreadPool,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool, SharePhaseError> {
@@ -861,6 +864,9 @@ impl SharePhase {
         let num_threads = other_server_channels.len();
         let domain_range = 1u128 << self.config.h1;
         let role = shared_ranges[0].role();
+        let delta = self.config.delta;
+        let sketch_modulus = self.config.sketch_modulus;
+        let out_modulus = 1 << self.config.h2;
 
         let mut z1s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
@@ -903,7 +909,6 @@ impl SharePhase {
                                 .collect::<Vec<u128>>(); // ri^6
                             // There are d dimensions
 
-                            let out_modulus = 1 << self.config.h2;
                             for dimension in 0..self.config.d {
                                 let key = &keys[dimension];
                                 let ldcf_evals = key.full_domain_eval_ldcf(out_modulus, self.config.h1).iter()
@@ -941,7 +946,7 @@ impl SharePhase {
                                 // Shift by one and subtract to turn into DPF, still working in Z_2
                                 let rdcf_evals1 = (1..rdcf_evals.len())
                                     .map(|j| {
-                                        (rdcf_evals[j] + modulus - rdcf_evals[j - 1]) % modulus
+                                        (rdcf_evals[j] + out_modulus - rdcf_evals[j - 1]) % out_modulus
                                     })
                                     .collect::<Vec<u128>>();
                                 // Multiply with the sketching random values, now working in Zp
@@ -962,7 +967,7 @@ impl SharePhase {
                                 // Shift rdcf by 2 * delta and subtract by ldcf. Working in Z2.
                                 let rdcf_ldcf_evals = (0..rdcf_evals1.len() - (2 * delta as usize))
                                     .map(|j| {
-                                        (rdcf_evals[j + 2 * delta as usize] + modulus - ldcf_evals1[j]) % modulus
+                                        (rdcf_evals[j + 2 * delta as usize] + out_modulus - ldcf_evals1[j]) % out_modulus
                                     })
                                     .collect::<Vec<u128>>();
                                 // Multiply with the sketching random values, now working in Zp
@@ -1001,11 +1006,18 @@ impl SharePhase {
                 .zip(noised_z4s.par_iter_mut())
                 .enumerate()
                 .for_each(|(i, ((((sketch, noised_z1_row), noised_z2_row), noised_z3_row), noised_z4_row))| {
-                    for dimension in 0..self.config.d {
-                        noised_z1_row[dimension] = (z1s[i][dimension] + sketch.a[dimension]) % sketch_modulus;
-                        noised_z2_row[dimension] = (z2s[i][dimension] + sketch.b[dimension]) % sketch_modulus;
-                        noised_z3_row[dimension] = (z3s[i][dimension] + sketch.a[dimension + self.config.d]) % sketch_modulus;
-                        noised_z4_row[dimension] = (z4s[i][dimension] + sketch.b[dimension + self.config.d]) % sketch_modulus;
+                    match sketch {
+                        SketchData::IntervalFSS { a, b, .. } => { 
+                            for dimension in 0..self.config.d {
+                                noised_z1_row[dimension] = (z1s[i][dimension] + a[dimension]) % sketch_modulus;
+                                noised_z2_row[dimension] = (z2s[i][dimension] + b[dimension]) % sketch_modulus;
+                                noised_z3_row[dimension] = (z3s[i][dimension] + a[dimension + self.config.d]) % sketch_modulus;
+                                noised_z4_row[dimension] = (z4s[i][dimension] + b[dimension + self.config.d]) % sketch_modulus;
+                            }
+                        }
+                        _ => {
+                            panic!("Sketching failed: Expected IntervalFSS sketch data");
+                        }
                     }
                 });
         });

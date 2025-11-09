@@ -50,6 +50,8 @@ pub struct ProtocolParameters {
     pub distance_metric: String,
     /// Number of clients participating in the protocol
     pub num_clients: usize,
+    /// Prime modulo for arithmetic sketching
+    pub sketch_modulus: u128,
 }
 
 /// Network configuration
@@ -115,6 +117,8 @@ impl CliConfig {
             h1: self.protocol.h1,
             h2: self.protocol.h2,
             d: self.protocol.d,
+            sketch_modulus: self.protocol.sketch_modulus,
+            delta: self.protocol.delta,
         };
 
         // Convert check method
@@ -193,6 +197,8 @@ impl CliConfig {
             h1: self.protocol.h1,
             h2: self.protocol.h2,
             d: self.protocol.d,
+            sketch_modulus: self.protocol.sketch_modulus,
+            delta: self.protocol.delta,
         })
     }
 
@@ -234,6 +240,7 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
             threshold_method: "GC".to_string(), // Can also be "IntervalFSS"
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
             num_clients: 100, // Number of clients participating in the protocol
+            sketch_modulus: 1362378130168812918549609490751, // A prime number of 100 bits
         },
         network: NetworkConfig {
             server0_addr: "127.0.0.1".to_string(),
