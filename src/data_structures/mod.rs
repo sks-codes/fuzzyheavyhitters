@@ -11,3 +11,4 @@ pub mod ringvec;
 pub mod prg;
 pub mod logexperiments;
 pub mod ringvec_new;
+pub mod bigmod;

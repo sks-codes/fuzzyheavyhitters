@@ -39,6 +39,7 @@ chrono = "0.4"
 chrono-tz = "0.8"
 anyhow = "1"
 sysinfo = "0.37.2"
+uint = "0.10.0"
 
 
 [[bin]]

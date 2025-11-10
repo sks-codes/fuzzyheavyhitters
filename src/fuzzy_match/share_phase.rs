@@ -10,7 +10,10 @@ use crate::{
         distance::{DistanceFSSKey, DistanceFSSEval},
         interval::{IntervalFSSKey, IntervalFSSEval},
     },
-    data_structures::ringvec::RingVec,
+    data_structures::{
+        ringvec::RingVec,
+        bigmod::mul_mod,
+    },
     util::u128_to_bits_msb,
     fuzzy_match::{
         shared_range::{SharedRange, ShareData},
@@ -861,7 +864,6 @@ impl SharePhase {
         // In this code, we just use Aes256 in ctr mode as random oracle
         // WARNING! Only works when the input range is smaller than 60 bits
 
-        let num_threads = other_server_channels.len();
         let domain_range = 1u128 << self.config.h1;
         let role = shared_ranges[0].role();
         let delta = self.config.delta;
@@ -888,7 +890,7 @@ impl SharePhase {
                         SharedRange::IntervalFSS { keys, .. } => {
                             // Create a seed for this index only, by xoring the global seed with the index
                             let mut blocks = vec![[0u8; 16]; domain_range as usize * self.config.d];
-                            let mut prg = PRG::new(Some(&seed), i as u64);
+                            let mut prg = PRG::new(Some(&seed), (i+5) as u64);
                             prg.random_16byte_block(&mut blocks);
                             // Generate random values and their powers in Zp
                             let rs = blocks.iter().map(|&b| {
@@ -896,16 +898,16 @@ impl SharePhase {
                                 num % sketch_modulus
                             }).collect::<Vec<u128>>();
                             let rs2 = rs.iter()
-                                .map(|&r| (r * r) % sketch_modulus)
+                                .map(|&r| mul_mod(r, r, sketch_modulus))
                                 .collect::<Vec<u128>>(); // ri^2
                             let rs3 = rs.iter().zip(rs2.iter())
-                                .map(|(&r, &r2)| (r * r2) % sketch_modulus)
+                                .map(|(&r, &r2)| mul_mod(r, r2, sketch_modulus))
                                 .collect::<Vec<u128>>(); // ri^3
                             let rs4 = rs2.iter()
-                                .map(|&r2| (r2 * r2) % sketch_modulus)
+                                .map(|&r2| mul_mod(r2, r2, sketch_modulus))
                                 .collect::<Vec<u128>>(); // ri^4
                             let rs6 = rs3.iter()
-                                .map(|&r3| (r3 * r3) % sketch_modulus)
+                                .map(|&r3| mul_mod(r3, r3, sketch_modulus))
                                 .collect::<Vec<u128>>(); // ri^6
                             // There are d dimensions
 
@@ -997,6 +999,7 @@ impl SharePhase {
         let mut noised_z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut noised_z3s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut noised_z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
+        let mut my_z5s = z5s.clone(); // Noising not needed for z5s
         
         thread_pool.install(|| {
             sketch_data.par_iter()
@@ -1015,9 +1018,6 @@ impl SharePhase {
                                 noised_z4_row[dimension] = (z4s[i][dimension] + b[dimension + self.config.d]) % sketch_modulus;
                             }
                         }
-                        _ => {
-                            panic!("Sketching failed: Expected IntervalFSS sketch data");
-                        }
                     }
                 });
         });
@@ -1027,37 +1027,49 @@ impl SharePhase {
         let mut plain_z2s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut plain_z3s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         let mut plain_z4s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
-        let chunk_size = (shared_ranges.len() + num_threads - 1) / num_threads;
+        let mut their_z5s = vec![vec![0u128; self.config.d]; shared_ranges.len()];
         if role {
             send_array(&mut other_server_channels[0], &noised_z1s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z2s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z3s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z4s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &my_z5s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z1s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z2s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z3s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z4s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut their_z5s, shared_ranges.len(), self.config.d)?;
         } else {
             recv_array(&mut other_server_channels[0], &mut plain_z1s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z2s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z3s, shared_ranges.len(), self.config.d)?;
             recv_array(&mut other_server_channels[0], &mut plain_z4s, shared_ranges.len(), self.config.d)?;
+            recv_array(&mut other_server_channels[0], &mut their_z5s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z1s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z2s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z3s, shared_ranges.len(), self.config.d)?;
             send_array(&mut other_server_channels[0], &noised_z4s, shared_ranges.len(), self.config.d)?;
+            send_array(&mut other_server_channels[0], &my_z5s, shared_ranges.len(), self.config.d)?;
         }
 
+        // The plaintexts obtained in this step are:
+        // z1 + a
+        // z2 + b
+        // z3 + a
+        // z4 + b
+        // z5 + 0
         thread_pool.install(|| {
             plain_z1s.par_iter_mut()
                 .zip(plain_z2s.par_iter_mut())
                 .zip(plain_z3s.par_iter_mut())
                 .zip(plain_z4s.par_iter_mut())
+                .zip(my_z5s.par_iter_mut())
                 .zip(z1s.par_iter())
                 .zip(z2s.par_iter())
                 .zip(z3s.par_iter())
                 .zip(z4s.par_iter())
-                .for_each(|(((((((plain_z1_row, plain_z2_row), plain_z3_row), plain_z4_row), z1_row), z2_row), z3_row), z4_row)| {
+                .zip(their_z5s.par_iter())
+                .for_each(|(((((((((plain_z1_row, plain_z2_row), plain_z3_row), plain_z4_row), my_z5_row), z1_row), z2_row), z3_row), z4_row), their_z5_row)| {
                     for dimension in 0..self.config.d {
                         if role {
                             // Server 1: subtract own share
@@ -1065,19 +1077,124 @@ impl SharePhase {
                             plain_z2_row[dimension] = (plain_z2_row[dimension] + sketch_modulus - z2_row[dimension]) % sketch_modulus;
                             plain_z3_row[dimension] = (plain_z3_row[dimension] + sketch_modulus - z3_row[dimension]) % sketch_modulus;
                             plain_z4_row[dimension] = (plain_z4_row[dimension] + sketch_modulus - z4_row[dimension]) % sketch_modulus;
+                            my_z5_row[dimension] = (my_z5_row[dimension] + sketch_modulus - their_z5_row[dimension]) % sketch_modulus;
                         } else {
                             // Server 0: subtract own share
                             plain_z1_row[dimension] = (z1_row[dimension] + sketch_modulus - plain_z1_row[dimension]) % sketch_modulus;
                             plain_z2_row[dimension] = (z2_row[dimension] + sketch_modulus - plain_z2_row[dimension]) % sketch_modulus;
                             plain_z3_row[dimension] = (z3_row[dimension] + sketch_modulus - plain_z3_row[dimension]) % sketch_modulus;
                             plain_z4_row[dimension] = (z4_row[dimension] + sketch_modulus - plain_z4_row[dimension]) % sketch_modulus;
+                            my_z5_row[dimension] = (their_z5_row[dimension] + sketch_modulus - my_z5_row[dimension]) % sketch_modulus;
                         }
                     }
                 });
         });
 
         // Now start doing local computation
-        // Try to do linear combination for everything to save communication.
+        // 1. z1^4 == z2^2
+        // z1^4 - z2^2 = (Z1-a)^4 - (Z2-b)^2 = Z1^4 - 4a Z1^3 + a2 Z1^2 + a3 Z1 + a4 - Z2^2 + 2b Z2
+        // Just store the computed result back to plain_z1s
+        thread_pool.install(|| { 
+            plain_z1s.par_iter_mut()
+                .zip(plain_z2s.par_iter())
+                .zip(sketch_data.par_iter())
+                .for_each(|((plain_z1_row, plain_z2_row), sketch)| {
+                    match sketch {
+                        SketchData::IntervalFSS { a, a2, a3, a4, b } => {
+                            for dimension in 0..self.config.d {
+                                let z1 = plain_z1_row[dimension];
+                                let z12 = mul_mod(z1, z1, sketch_modulus);
+                                let z13 = mul_mod(z12, z1, sketch_modulus);
+                                let z14 = mul_mod(z13, z1, sketch_modulus);
+                                let z2 = plain_z2_row[dimension];
+                                let z22 = mul_mod(z2, z2, sketch_modulus);
+
+                                let term1 = z14;
+                                let term2 = (sketch_modulus - mul_mod((4 * a[dimension]) % sketch_modulus, z13, sketch_modulus)) % sketch_modulus;
+                                let term3 = mul_mod(a2[dimension], z12, sketch_modulus);
+                                let term4 = mul_mod(a3[dimension], z1, sketch_modulus);
+                                let term5 = a4[dimension];
+                                let term6 = (sketch_modulus - z22) % sketch_modulus;
+                                let term7 = (2 * b[dimension]) % sketch_modulus;
+                                plain_z1_row[dimension] = (term1 + term2 + term3 + term4 + term5 + term6 + term7) % sketch_modulus;
+                            }
+                        }
+                    }
+                });
+        });
+
+        // 2. z3^4 == z4^2
+        // z3^4 - z4^2 = (Z3-a)^4 - (Z4-b)^2 = Z3^4 - 4a Z3^3 + a2 Z3^2 + a3 Z3 + a4 - Z4^2 + 2b Z4
+        // Just store the computed result back to plain_z3s
+        thread_pool.install(|| { 
+            plain_z3s.par_iter_mut()
+                .zip(plain_z4s.par_iter())
+                .zip(sketch_data.par_iter())
+                .for_each(|((plain_z3_row, plain_z4_row), sketch)| {
+                    match sketch {
+                        SketchData::IntervalFSS { a, a2, a3, a4, b } => {
+                            for dimension in 0..self.config.d {
+                                let z3 = plain_z3_row[dimension];
+                                let z32 = mul_mod(z3, z3, sketch_modulus);
+                                let z33 = mul_mod(z32, z3, sketch_modulus);
+                                let z34 = mul_mod(z33, z3, sketch_modulus);
+                                let z4 = plain_z4_row[dimension];
+                                let z42 = mul_mod(z4, z4, sketch_modulus);
+
+                                let term1 = z34;
+                                let term2 = (sketch_modulus - mul_mod((4 * a[dimension + self.config.d]) % sketch_modulus, z33, sketch_modulus)) % sketch_modulus;
+                                let term3 = mul_mod(a2[dimension + self.config.d], z32, sketch_modulus);
+                                let term4 = mul_mod(a3[dimension + self.config.d], z3, sketch_modulus);
+                                let term5 = a4[dimension + self.config.d];
+                                let term6 = (sketch_modulus - z42) % sketch_modulus;
+                                let term7 = (2 * b[dimension + self.config.d]) % sketch_modulus;
+                                plain_z3_row[dimension] = (term1 + term2 + term3 + term4 + term5 + term6 + term7) % sketch_modulus;
+                            }
+                        }
+                    }
+                });
+        });
+
+        let mut blocks = vec![[0u8; 16]; self.config.d * shared_ranges.len() * 3];
+        let mut prg = PRG::new(Some(&seed), 0u64);
+        prg.random_16byte_block(&mut blocks);
+
+        // Finally, put everything into one big linear combination and check
+        let mut combined = vec![0u128; shared_ranges.len()];
+        thread_pool.install(|| {
+            combined.par_iter_mut()
+                .zip(plain_z1s.par_iter())
+                .zip(plain_z3s.par_iter())
+                .zip(my_z5s.par_iter())
+                .enumerate()
+                .for_each(|(i, (((combined_elem, plain_z1_row), plain_z3_row), my_z5_row))| {
+                    for dimension in 0..self.config.d {
+                        let block_start = i * self.config.d * 3 + dimension * 3;
+                        let r1 = u128::from_le_bytes(blocks[block_start]);
+                        let r2 = u128::from_le_bytes(blocks[block_start + 1]);
+                        let r3 = u128::from_le_bytes(blocks[block_start + 2]);
+
+                        *combined_elem = (*combined_elem
+                            + mul_mod(plain_z1_row[dimension], r1, sketch_modulus)
+                            + mul_mod(plain_z3_row[dimension], r2, sketch_modulus)
+                            + mul_mod(my_z5_row[dimension], r3, sketch_modulus)
+                        ) % sketch_modulus;
+                    }
+                });
+        
+        let final_check: u128 = combined.iter().fold(0u128, |acc, &x| (acc + x) % sketch_modulus);
+        let other_check = if role {
+                let other_check = recv_u128(&mut other_server_channels[0]).expect("Failed to receive final check from other server");
+                send_u128(&mut other_server_channels[0], final_check).expect("Failed to send final check to other server");
+                other_check
+            } else {
+                send_u128(&mut other_server_channels[0], final_check).expect("Failed to send final check to other server");
+                recv_u128(&mut other_server_channels[0]).expect("Failed to receive final check from other server")
+            };
+        if final_check != other_check {
+            panic!("Sketching verification failed: final check values do not match");
+        }
+        });
 
         Ok(true)
     }
@@ -1088,6 +1205,23 @@ impl SharePhase {
     ) -> Result<bool, SharePhaseError> {
         unimplemented!()
     }
+}
+
+fn send_u128(
+    channel: &mut CommTrackingChannel,
+    value: u128,
+) -> Result<(), SharePhaseError> {
+    let buf = value.to_le_bytes();
+    channel.write_bytes(&buf).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to send u128: {}", e)))?;
+    Ok(())
+}
+
+fn recv_u128(
+    channel: &mut CommTrackingChannel,
+) -> Result<u128, SharePhaseError> {
+    let mut buf = [0u8; 16];
+    channel.read_bytes(&mut buf).map_err(|e| SharePhaseError::EvaluationError(format!("Failed to receive u128: {}", e)))?;
+    Ok(u128::from_le_bytes(buf))
 }
 
 fn send_array(

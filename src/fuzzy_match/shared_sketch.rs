@@ -21,7 +21,7 @@ pub fn generate_sketch_data(
     d: usize,
     sketch_modulus: u128,
     method: &SketchMethod,
-) -> Vec<SketchData> {
+) -> (Vec<SketchData>, Vec<SketchData>) {
     match method {
         SketchMethod::IntervalFSS => generate_interval_fss_sketch_data(num_clients, d, sketch_modulus),
         _ => unimplemented!("Sketch method not implemented yet"),
@@ -57,7 +57,7 @@ pub fn generate_interval_fss_sketch_data(
 
         a2.iter_mut().for_each(|x| *x = (6 * (*x)) % sketch_modulus);
         a3.iter_mut().for_each(|x| *x = (sketch_modulus - ((4 * (*x)) % sketch_modulus)) % sketch_modulus);
-        a4.iter_mut().zip(b2.iter()).for_each(|(x, &y)| *x = ((*x + sketch_modulus - y) % sketch_modulus));
+        a4.iter_mut().zip(b2.iter()).for_each(|(x, &y)| *x = (*x + sketch_modulus - y) % sketch_modulus);
 
         let a_0 = (0..2*d).map(|_| rand::random::<u128>() % sketch_modulus).collect::<Vec<u128>>();
         let a2_0 = (0..2*d).map(|_| rand::random::<u128>() % sketch_modulus).collect::<Vec<u128>>();
