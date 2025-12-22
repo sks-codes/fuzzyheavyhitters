@@ -1,6 +1,6 @@
 use mosaic::{
     channel::{connect_to, listen_to},
-    data_structures::modint::ModInt,
+    data_structures::mod2k::Mod2k,
     configs::property_test_config::BenchmarkConfig,
     fuzzy_match::{
         check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
@@ -13,11 +13,11 @@ use std::time::Instant;
 use rand::Rng;
 use clap::Parser;
 
-fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
-            ModInt::new(rng.random::<u128>(), modulus)
+            Mod2k::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
@@ -129,7 +129,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     }
 
     let keys = batch.keys;
-    let random_values = batch.random_values.iter().map(|r| ModInt::new(*r, 1u128 << config.h2 as u128)).collect::<Vec<_>>();
+    let random_values = batch.random_values.iter().map(|r| Mod2k::new(*r, 1u128 << config.h2 as u128)).collect::<Vec<_>>();
 
     let start_time = Instant::now();
     let _results = check_phase.batch_mu_bounded_testing_fss(

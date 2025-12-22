@@ -4,19 +4,19 @@ use scuttlebutt::Block;
 use crate::{Group, Share};
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
-pub struct ModInt {
+pub struct Mod2k {
     pub val: u128,
     modulus: u128,
     modulus_mask: u128, // Stores modulus - 1 for efficient bitwise modulo
 }
 
-impl ModInt {
+impl Mod2k {
     pub fn new(val: u128, modulus: u128) -> Self {
         if !modulus.is_power_of_two() || modulus == 0 {
             panic!("Modulus must be a power of two and non-zero.");
         }
         let modulus_mask = modulus - 1;
-        ModInt {
+        Mod2k {
             val: val & modulus_mask, // Apply modulus initially
             modulus,
             modulus_mask,
@@ -44,7 +44,7 @@ impl ModInt {
             panic!("Modulus must be a power of two and non-zero.");
         }
         let val = rand::random::<u128>() & (modulus - 1);
-        ModInt {
+        Mod2k {
             val,
             modulus,
             modulus_mask: modulus - 1,
@@ -71,7 +71,7 @@ impl ModInt {
         val_bytes[..num_bytes].copy_from_slice(&bytes[..num_bytes]);
         let val = u128::from_le_bytes(val_bytes) & modulus_mask;
         (
-            ModInt {
+            Mod2k {
                 val,
                 modulus,
                 modulus_mask,
@@ -81,12 +81,12 @@ impl ModInt {
     }
 }
 
-impl Add for ModInt {
+impl Add for Mod2k {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
         assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for addition");
-        ModInt {
+        Mod2k {
             val: (self.val + rhs.val) & self.modulus_mask,
             modulus: self.modulus,
             modulus_mask: self.modulus_mask,
@@ -94,12 +94,12 @@ impl Add for ModInt {
     }
 }
 
-impl Sub for ModInt {
+impl Sub for Mod2k {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
         assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for subtraction");
-        ModInt {
+        Mod2k {
             val: (self.val + self.modulus - rhs.val) & self.modulus_mask,
             modulus: self.modulus,
             modulus_mask: self.modulus_mask,
@@ -107,12 +107,12 @@ impl Sub for ModInt {
     }
 }
 
-impl Mul for ModInt {
+impl Mul for Mod2k {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
         assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for multiplication");
-        ModInt {
+        Mod2k {
             val: (self.val * rhs.val) & self.modulus_mask,
             modulus: self.modulus,
             modulus_mask: self.modulus_mask,
@@ -121,7 +121,7 @@ impl Mul for ModInt {
 }
 
 // Implement Group trait
-impl Group for ModInt {
+impl Group for Mod2k {
     fn zero() -> Self {
         // Default to common modulus for now - this should be configurable
         Self::new(0, 256)
@@ -174,7 +174,7 @@ impl Group for ModInt {
 }
 
 // Implement FromRng trait requirement for Share
-impl crate::data_structures::prg::FromRng for ModInt {
+impl crate::data_structures::prg::FromRng for Mod2k {
     fn from_rng(&mut self, stream: &mut (impl rand::Rng + rand_core::RngCore)) {
         self.val = stream.random::<u128>() & self.modulus_mask;
     }
@@ -185,17 +185,17 @@ impl crate::data_structures::prg::FromRng for ModInt {
 }
 
 // Implement Share trait
-impl Share for ModInt {}
+impl Share for Mod2k {}
 
 // Implement From<u32> for ModInt
-impl From<u32> for ModInt {
+impl From<u32> for Mod2k {
     fn from(val: u32) -> Self {
         Self::new(val as u128, 256) // Default modulus
     }
 }
 
 // Implement TryFrom<Block> for ModInt
-impl TryFrom<Block> for ModInt {
+impl TryFrom<Block> for Mod2k {
     type Error = &'static str;
     
     fn try_from(block: Block) -> Result<Self, Self::Error> {
@@ -206,14 +206,14 @@ impl TryFrom<Block> for ModInt {
 }
 
 // Implement Into<Block> for ModInt
-impl Into<Block> for ModInt {
+impl Into<Block> for Mod2k {
     fn into(self) -> Block {
         unsafe { std::mem::transmute(self.val) }
     }
 }
 
 /// Convert ModInt to bit width, ensuring it fits in less than 128 bits
-pub fn get_bit_width_from_modint(modint: &ModInt) -> usize {
+pub fn get_bit_width_from_modint(modint: &Mod2k) -> usize {
     let modulus = modint.modulus();
     let bit_width = (127 - modulus.leading_zeros()) as usize;
     assert!(bit_width < 128, "ModInt modulus requires {} bits, must be < 128", bit_width);

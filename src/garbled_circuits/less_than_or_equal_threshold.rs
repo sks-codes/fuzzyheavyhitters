@@ -1,4 +1,4 @@
-use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
+use crate::data_structures::mod2k::{Mod2k, get_bit_width_from_modint};
 use crate::util::u128_to_bits;
 
 use fancy_garbling::{
@@ -19,7 +19,7 @@ struct LessThanSSInputs<F> {
     item_count: usize,
 }
 
-fn garbler_preprocess_less_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<bool>>, Vec<Vec<bool>>, Vec<bool>) {
+fn garbler_preprocess_less_than_ss(ys: &[Mod2k], t: &Mod2k) -> (Vec<Vec<bool>>, Vec<Vec<bool>>, Vec<bool>) {
     let mut z1_values = Vec::new();
     let mut z2_values = Vec::new(); 
     let mut b_values = Vec::new();
@@ -29,7 +29,7 @@ fn garbler_preprocess_less_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<bool>>
         assert_eq!(y.modulus(), t.modulus(), "y and t must have same modulus");
         
         // z1 = modulus - 1 - (t - y) mod modulus
-        let z1_modint = *y - *t - ModInt::one(y.modulus());
+        let z1_modint = *y - *t - Mod2k::one(y.modulus());
         let z1 = z1_modint.val();
         let z1_bool = u128_to_bits(z1, item_length);
         
@@ -51,8 +51,8 @@ fn garbler_preprocess_less_than_ss(ys: &[ModInt], t: &ModInt) -> (Vec<Vec<bool>>
 pub fn multiple_gb_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs_y: &[ModInt], // Garbler's y values
-    input_t: &ModInt, // Garbler's t values (thresholds)
+    inputs_y: &[Mod2k], // Garbler's y values
+    input_t: &Mod2k, // Garbler's t values (thresholds)
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
@@ -117,7 +117,7 @@ where
 }
 
 /// Evaluator preprocessing: x
-fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<Vec<bool>> {
+fn evaluator_preprocess_less_than_ss(inputs_x: &[Mod2k]) -> Vec<Vec<bool>> {
     let item_length = get_bit_width_from_modint(&inputs_x[0]);
     inputs_x.iter().map(|x| {
         let z3 = u128_to_bits(x.val(), item_length);
@@ -128,7 +128,7 @@ fn evaluator_preprocess_less_than_ss(inputs_x: &[ModInt]) -> Vec<Vec<bool>> {
 pub fn multiple_ev_less_than_ss<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs_x: &[ModInt], // x
+    inputs_x: &[Mod2k], // x
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,

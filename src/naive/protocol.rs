@@ -3,7 +3,7 @@ use crate::{
     fss::dpf::DpfKey,
     fuzzy_match::share_phase::ShareConfig, 
     util::u128_to_bits_msb,
-    data_structures::modint::ModInt,
+    data_structures::mod2k::Mod2k,
     garbled_circuits::greater_than_or_equal_threshold::{
         multiple_gb_greater_than_ss,
         multiple_ev_greater_than_ss,
@@ -89,20 +89,20 @@ impl NaiveProtocol {
                 .zip(query_points_bits.par_chunks(chunk_size))
                 .zip(other_server_channels.par_iter_mut())
                 .for_each(|((server_bits_chunk, query_points_bits_chunk), other_channel)| {
-                    let mut count_shares: Vec<ModInt> = Vec::with_capacity(server_bits_chunk.len());
+                    let mut count_shares: Vec<Mod2k> = Vec::with_capacity(server_bits_chunk.len());
                     for (_server_bit, query_bits) in server_bits_chunk.iter_mut().zip(query_points_bits_chunk.iter()) {
                         let mut acc = 0u128;
                         for client_share in client_shares.iter() {
                             let eval = client_share.eval_dpf(query_bits, modulus);
                             acc = (acc + eval[0]) % modulus;
                         }
-                        let acc_modint = ModInt::new(acc, modulus);
+                        let acc_modint = Mod2k::new(acc, modulus);
                         count_shares.push(acc_modint);
                         println!("Computed count share: {}", acc);
                     }
 
                     let mut local_rng = AesRng::new();
-                    let threshold = ModInt::new(self.threshold, modulus);
+                    let threshold = Mod2k::new(self.threshold, modulus);
                     let comparison_result = if self.side {
                         multiple_gb_greater_than_ss(&mut local_rng, other_channel, &count_shares, &threshold)
                     } else {

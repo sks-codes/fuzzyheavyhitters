@@ -1,7 +1,7 @@
 // The interval in this file is different.
 // If a prefix is LESS THAN the prefix of beta, it will take the mid payload.
 
-use crate::data_structures::modint::ModInt;
+use crate::data_structures::mod2k::Mod2k;
 use crate::util::{xor, and_bit};
 use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
@@ -23,8 +23,8 @@ pub struct RIntervalFSSCW<const N: usize> {
                (Pair<bool>, Pair<bool>)),
     pub ys: ((RingVec<N>, RingVec<N>), 
              (RingVec<N>, RingVec<N>)),
-    pub y_bits: ((Pair<ModInt>, Pair<ModInt>),
-                 (Pair<ModInt>, Pair<ModInt>)),
+    pub y_bits: ((Pair<Mod2k>, Pair<Mod2k>),
+                 (Pair<Mod2k>, Pair<Mod2k>)),
 }
 
 impl<const N: usize> RIntervalFSSCW<N> {
@@ -114,11 +114,11 @@ impl<const N: usize> RIntervalFSSCW<N> {
         let (y_bits_ringvec, used_y_bits) = RingVec::<8>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
         offset += used_y_bits;
         let y_bits = ((
-            Pair::new(ModInt::new(y_bits_ringvec[0], modulus), ModInt::new(y_bits_ringvec[1], modulus)),
-            Pair::new(ModInt::new(y_bits_ringvec[2], modulus), ModInt::new(y_bits_ringvec[3], modulus))
+            Pair::new(Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus)),
+            Pair::new(Mod2k::new(y_bits_ringvec[2], modulus), Mod2k::new(y_bits_ringvec[3], modulus))
         ), (
-            Pair::new(ModInt::new(y_bits_ringvec[4], modulus), ModInt::new(y_bits_ringvec[5], modulus)),
-            Pair::new(ModInt::new(y_bits_ringvec[6], modulus), ModInt::new(y_bits_ringvec[7], modulus))
+            Pair::new(Mod2k::new(y_bits_ringvec[4], modulus), Mod2k::new(y_bits_ringvec[5], modulus)),
+            Pair::new(Mod2k::new(y_bits_ringvec[6], modulus), Mod2k::new(y_bits_ringvec[7], modulus))
         ));
         (
             RIntervalFSSCW {
@@ -137,7 +137,7 @@ pub struct RIntervalFSSData<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
     pub bits: (Pair<bool>, Pair<bool>),
     pub ys: (RingVec<N>, RingVec<N>),
-    pub y_bits: (Pair<ModInt>, Pair<ModInt>),
+    pub y_bits: (Pair<Mod2k>, Pair<Mod2k>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -194,7 +194,7 @@ pub struct RIntervalFSSEval<const N: usize> {
     seed: [u8; AES_BLOCK_SIZE],
     pub bit: Pair<bool>,
     pub y: RingVec<N>,
-    pub y_bit: Pair<ModInt>,
+    pub y_bit: Pair<Mod2k>,
 }
 
 fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> RIntervalFSSData<N> {
@@ -208,8 +208,8 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
             bits: (Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)),
             ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
             y_bits: (
-                Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::zero(modulus)), 
-                Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::zero(modulus))
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))
             ),
         };
 
@@ -230,14 +230,14 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
         for i in 0..N {
             out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) % modulus;
         }
-        out.y_bits.0.first = ModInt::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
-        out.y_bits.0.second = ModInt::new(bytes_to_u128(&payload_rnd[(N + 1) * num_payload_bytes..(N + 2) * num_payload_bytes]), modulus);
+        out.y_bits.0.first = Mod2k::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
+        out.y_bits.0.second = Mod2k::new(bytes_to_u128(&payload_rnd[(N + 1) * num_payload_bytes..(N + 2) * num_payload_bytes]), modulus);
 
         for i in 0..N {
             out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 2) * num_payload_bytes..(i + N + 3) * num_payload_bytes]) % modulus;
         }
-        out.y_bits.1.first = ModInt::new(bytes_to_u128(&payload_rnd[(2 * N + 2) * num_payload_bytes..(2 * N + 3) * num_payload_bytes]), modulus);
-        out.y_bits.1.second = ModInt::new(bytes_to_u128(&payload_rnd[(2 * N + 3) * num_payload_bytes..(2 * N + 4) * num_payload_bytes]), modulus);
+        out.y_bits.1.first = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 2) * num_payload_bytes..(2 * N + 3) * num_payload_bytes]), modulus);
+        out.y_bits.1.second = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 3) * num_payload_bytes..(2 * N + 4) * num_payload_bytes]), modulus);
 
         out
     })
@@ -297,15 +297,15 @@ fn gen_cor_word<const N: usize>(
         Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()));
     let ys1 = (RingVec::<N>::random(modulus), RingVec::<N>::random(modulus));
     let y_bits1 = (
-        Pair::<ModInt>::new(ModInt::random(modulus), ModInt::random(modulus)), 
-        Pair::<ModInt>::new(ModInt::random(modulus), ModInt::random(modulus)));
+        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)), 
+        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)));
     let mut cw = RIntervalFSSCW {
         seeds: ([0u8; 16], seed1),
         bits: ((Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)), bits1),
         ys: ((RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)), ys1),
         y_bits: (
-            (Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::zero(modulus)), 
-             Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::zero(modulus))), 
+            (Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
+             Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))), 
             y_bits1),
     };
 
@@ -313,9 +313,9 @@ fn gen_cor_word<const N: usize>(
     let bool01 = Pair::<bool>::new(false, true);
     let bool00 = Pair::<bool>::new(false, false);
 
-    let mint10 = Pair::<ModInt>::new(ModInt::one(modulus), ModInt::zero(modulus));
-    let mint01 = Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::one(modulus));
-    let mint00 = Pair::<ModInt>::new(ModInt::zero(modulus), ModInt::zero(modulus));
+    let mint10 = Pair::<Mod2k>::new(Mod2k::one(modulus), Mod2k::zero(modulus));
+    let mint01 = Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::one(modulus));
+    let mint00 = Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus));
 
     if data.len() == 1 {
         if alpha_bit && !beta_bit {
@@ -540,7 +540,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             seed: root_seeds.0,
             bit: Pair::new(true, false),
             y: RingVec::<N>::zero(modulus),
-            y_bit: Pair::new(ModInt::one(modulus), ModInt::zero(modulus)),
+            y_bit: Pair::new(Mod2k::one(modulus), Mod2k::zero(modulus)),
         };
 
         let eval1 = RIntervalFSSEval {
@@ -548,7 +548,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             seed: root_seeds.1,
             bit: Pair::new(false, false),
             y: RingVec::<N>::zero(modulus),
-            y_bit: Pair::new(ModInt::zero(modulus), ModInt::zero(modulus)),
+            y_bit: Pair::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
         };
 
         let mut eval = vec![(eval0.clone(), eval1.clone())];
@@ -641,16 +641,16 @@ impl<const N: usize> RIntervalFSSKey<N>
 
     pub fn eval_init(&self, modulus: u128) -> RIntervalFSSEval<N> {
         let y_bit_first = if self.key_idx {
-            ModInt::zero(modulus)
+            Mod2k::zero(modulus)
         } else {
-            ModInt::one(modulus)
+            Mod2k::one(modulus)
         };
         RIntervalFSSEval {
             level: 0,
             seed: self.root_seed.clone(),
             bit: Pair::new(!self.key_idx, false),
             y: RingVec::<N>::zero(modulus),
-            y_bit: Pair::new(y_bit_first, ModInt::zero(modulus)),
+            y_bit: Pair::new(y_bit_first, Mod2k::zero(modulus)),
         }
     }
 

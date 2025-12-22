@@ -4,7 +4,7 @@ use crate::garbled_circuits::{
     batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
     less_than_or_equal_threshold::{multiple_gb_less_than_ss, multiple_ev_less_than_ss},
 };
-use crate::data_structures::modint::ModInt;
+use crate::data_structures::mod2k::Mod2k;
 use crate::fss::{
     ldcf::LdcfKey,
     rdcf::RdcfKey,
@@ -97,7 +97,7 @@ impl CheckPhase {
         check_data_list: &[CheckData],
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         match &self.config.property {
             CheckProperty::Equality => {
                 let inputs = evals.iter().map(|eval| {
@@ -144,15 +144,15 @@ impl CheckPhase {
             }
             CheckProperty::MuBounded => {
                 let inputs = evals.iter().map(|eval| {
-                    let mut input = ModInt::zero(1u128 << self.config.h2);
+                    let mut input = Mod2k::zero(1u128 << self.config.h2);
                     eval.iter().for_each(|&val| {
-                        input = input + ModInt::new(val, 1u128 << self.config.h2);
+                        input = input + Mod2k::new(val, 1u128 << self.config.h2);
                     });
                     input
-                }).collect::<Vec<ModInt>>();
+                }).collect::<Vec<Mod2k>>();
                 match &self.config.method {
                     CheckMethod::GC => {
-                        let mut current_mu = ModInt::zero(1u128 << self.config.h2);
+                        let mut current_mu = Mod2k::zero(1u128 << self.config.h2);
                         for (i, check_data) in check_data_list.iter().enumerate() {
                             match check_data {
                                 CheckData::LpGarbledCircuits { mu } => {
@@ -163,7 +163,7 @@ impl CheckPhase {
                                             ));
                                         }
                                     } else {
-                                        current_mu = ModInt::new(*mu, 1u128 << self.config.h2);
+                                        current_mu = Mod2k::new(*mu, 1u128 << self.config.h2);
                                     }
                                 }
                                 _ => {
@@ -182,7 +182,7 @@ impl CheckPhase {
                             match check_data {
                                 CheckData::LpIntervalFSS { fss_key, random_value } => {
                                     fss_keys.push(fss_key.clone());
-                                    random_values.push(ModInt::new(*random_value, 1u128 << self.config.h2));
+                                    random_values.push(Mod2k::new(*random_value, 1u128 << self.config.h2));
                                 }
                                 _ => {
                                     return Err(CheckPhaseError::InvalidConfig(
@@ -203,7 +203,7 @@ impl CheckPhase {
         inputs: &[Vec<bool>],
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         let all_equality_results = if self.config.is_garbler_side {
             batch_gb_equality_test(rng, channel, &inputs)
         } else {
@@ -225,7 +225,7 @@ impl CheckPhase {
         fss_keys: &[DpfKey<1>],
         random_values: &[Vec<bool>],
         channel: &mut CommTrackingChannel,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         if inputs.len() != fss_keys.len() {
             return Err(CheckPhaseError::InputLengthMismatch(
                 format!("Number of inputs ({}) must match number of FSS keys ({})", inputs.len(), fss_keys.len()),
@@ -304,22 +304,22 @@ impl CheckPhase {
         let result = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_eval, fss_key)| {
             let fss_result = fss_key.eval_dpf(masked_eval, 1u128 << self.config.h3);
             if self.config.is_garbler_side {
-                ModInt::new((1u128 << self.config.h3) - fss_result[0], 1u128 << self.config.h3)
+                Mod2k::new((1u128 << self.config.h3) - fss_result[0], 1u128 << self.config.h3)
             } else {
-                ModInt::new(fss_result[0], 1u128 << self.config.h3)
+                Mod2k::new(fss_result[0], 1u128 << self.config.h3)
             }
-        }).collect::<Vec<ModInt>>();
+        }).collect::<Vec<Mod2k>>();
 
         Ok(result)
     }
 
     pub fn batch_mu_bounded_testing_gc(
         &self, 
-        inputs: &[ModInt],
-        mu: &ModInt,
+        inputs: &[Mod2k],
+        mu: &Mod2k,
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         let comparison_results = if self.config.is_garbler_side {
             multiple_gb_less_than_ss(rng, channel, inputs, mu)
         } else {
@@ -339,14 +339,14 @@ impl CheckPhase {
 
     pub fn batch_mu_bounded_testing_fss(
         &self,
-        inputs: &[ModInt],
+        inputs: &[Mod2k],
         fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
-        random_values: &[ModInt],
+        random_values: &[Mod2k],
         channel: &mut CommTrackingChannel,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         let masked_values = inputs.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
             input + random_value
-        }).collect::<Vec<ModInt>>();
+        }).collect::<Vec<Mod2k>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
             for masked_eval in masked_values.iter() {
@@ -365,7 +365,7 @@ impl CheckPhase {
                 channel
                     .read_bytes(&mut received_bytes)
                     .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
-                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                let other_masked_value = Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
                 out.push(masked_value + other_masked_value);
             }
             out
@@ -376,7 +376,7 @@ impl CheckPhase {
                 channel
                     .read_bytes(&mut received_bytes)
                     .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
-                let other_masked_value = ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                let other_masked_value = Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
                 combined_masked_values.push(masked_value + other_masked_value);
             }
 
@@ -398,11 +398,11 @@ impl CheckPhase {
             let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
 
             if self.config.is_garbler_side {
-                ModInt::new(out_modulus - fss_result[0], out_modulus)
+                Mod2k::new(out_modulus - fss_result[0], out_modulus)
             } else {
-                ModInt::new(fss_result[0], out_modulus)
+                Mod2k::new(fss_result[0], out_modulus)
             }
-        }).collect::<Vec<ModInt>>();
+        }).collect::<Vec<Mod2k>>();
 
         Ok(results)
     }
@@ -416,7 +416,7 @@ impl CheckPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
         is_garbler_side: bool,
-    ) -> Result<Vec<ModInt>, CheckPhaseError> {
+    ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         if boolean_shares.is_empty() {
             return Ok(Vec::new());
         }
@@ -427,9 +427,9 @@ impl CheckPhase {
             let mut ot_pairs = Vec::new();
             
             for &boolean_share in boolean_shares {
-                let ring_share = ModInt::random(modulus);
-                let r0 = ModInt::zero(modulus) - ring_share;
-                let r1 = ModInt::one(modulus) - ring_share;
+                let ring_share = Mod2k::random(modulus);
+                let r0 = Mod2k::zero(modulus) - ring_share;
+                let r1 = Mod2k::one(modulus) - ring_share;
                 
                 let r0_block: Block = r0.clone().try_into()
                     .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e)))?;
@@ -466,7 +466,7 @@ impl CheckPhase {
             let mut ring_shares = Vec::new();
             for block in out_blocks {
                 let raw_value: u128 = unsafe { std::mem::transmute(block) };
-                let ring_share = ModInt::new(raw_value, modulus);
+                let ring_share = Mod2k::new(raw_value, modulus);
                 ring_shares.push(ring_share);
             }
             

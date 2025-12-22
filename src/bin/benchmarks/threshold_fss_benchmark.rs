@@ -1,6 +1,6 @@
 use mosaic::{
     channel::{connect_to, listen_to},
-    data_structures::modint::ModInt,
+    data_structures::mod2k::Mod2k,
     fuzzy_match::{
         threshold_phase::{ThresholdMethod, ThresholdPhase, ThresholdConfig, ThresholdData},
         protocol::request_dealer_threshold,
@@ -13,11 +13,11 @@ use std::time::Instant;
 use rand::Rng;
 use clap::Parser;
 
-fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
-            ModInt::new(rng.random::<u128>(), modulus)
+            Mod2k::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
@@ -142,7 +142,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         match threshold_data {
             ThresholdData::IntervalFSS { fss_key, random_value } => {
                 fss_keys.push(fss_key.clone());
-                random_values.push(ModInt::new(random_value, 1u128 << config.h3));
+                random_values.push(Mod2k::new(random_value, 1u128 << config.h3));
             },
             _ => return Ok(())
         }

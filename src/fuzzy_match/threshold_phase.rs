@@ -1,7 +1,7 @@
 use crate::garbled_circuits::greater_than_or_equal_threshold::{
     multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
 use crate::data_structures::{
-    modint::ModInt,
+    mod2k::Mod2k,
 };
 use crate::fss::{
     ldcf::LdcfKey,
@@ -73,10 +73,10 @@ impl ThresholdPhase {
 
     pub fn aggregate_match_results(
         &self,
-        match_results: &[ModInt],
-    ) -> Result<ModInt, ThresholdPhaseError> {
+        match_results: &[Mod2k],
+    ) -> Result<Mod2k, ThresholdPhaseError> {
         let modulus = 1u128 << self.config.h3;
-        let mut aggregated_share = ModInt::new(0, modulus);
+        let mut aggregated_share = Mod2k::new(0, modulus);
         for result in match_results {
             aggregated_share = aggregated_share + *result;
         }
@@ -92,8 +92,8 @@ impl ThresholdPhase {
     /// 4. Returns whether matches exceed threshold
     pub fn compare_with_threshold_gc(
         &self,
-        match_results: &[ModInt],
-        threshold: ModInt,
+        match_results: &[Mod2k],
+        threshold: Mod2k,
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
@@ -119,14 +119,14 @@ impl ThresholdPhase {
     /// 5. Returns the FSS evaluation result (1 if count >= threshold, 0 otherwise)
     pub fn compare_with_threshold_intervalfss(
         &self,
-        match_results: &[ModInt],
-        random_values: &[ModInt],
+        match_results: &[Mod2k],
+        random_values: &[Mod2k],
         fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
         let masked_values = match_results.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
             input + random_value
-        }).collect::<Vec<ModInt>>();
+        }).collect::<Vec<Mod2k>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
             // Garbler: send all masked values, then read all counterpart masked values
@@ -147,7 +147,7 @@ impl ThresholdPhase {
                     .read_bytes(&mut received_bytes)
                     .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
                 let other_masked_value =
-                    ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                    Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
                 combined.push(masked_value + other_masked_value);
             }
             combined
@@ -160,7 +160,7 @@ impl ThresholdPhase {
                     .read_bytes(&mut received_bytes)
                     .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
                 let other_masked_value =
-                    ModInt::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
+                    Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
                 combined.push(masked_value + other_masked_value);
             }
 
@@ -192,14 +192,14 @@ impl ThresholdPhase {
     /// This function dispatches to either garbled circuits or IntervalFSS based on the config
     pub fn compare_with_threshold(
         &self,
-        aggregated_results: &[ModInt],
+        aggregated_results: &[Mod2k],
         threshold_data_list: &[ThresholdData],
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
         match self.config.method {
             ThresholdMethod::GC => {
-                let mut current_t = ModInt::zero(1u128<<self.config.h3);
+                let mut current_t = Mod2k::zero(1u128<<self.config.h3);
                 for (i, threshold_data) in threshold_data_list.iter().enumerate() {
                     match threshold_data {
                         ThresholdData::GarbledCircuits { t } => {
@@ -210,7 +210,7 @@ impl ThresholdPhase {
                                     ));
                                 }
                             } else {
-                                current_t = ModInt::new(*t, 1u128 << self.config.h3);
+                                current_t = Mod2k::new(*t, 1u128 << self.config.h3);
                             }
                         },
                         _ => return Err(ThresholdPhaseError::InvalidConfig(
@@ -227,7 +227,7 @@ impl ThresholdPhase {
                     match threshold_data {
                         ThresholdData::IntervalFSS { fss_key, random_value } => {
                             fss_keys.push(fss_key.clone());
-                            random_values.push(ModInt::new(*random_value, 1u128 << self.config.h3));
+                            random_values.push(Mod2k::new(*random_value, 1u128 << self.config.h3));
                         },
                         _ => return Err(ThresholdPhaseError::InvalidConfig(
                             "FSS method requires FSS data with FSS key and random value".to_string()

@@ -2,18 +2,18 @@ use mosaic::{
     channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
     fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod},
-    data_structures::modint::ModInt,
+    data_structures::mod2k::Mod2k,
 };
 use scuttlebutt::{AesRng, AbstractChannel};
 use std::time::Instant;
 use rand::Rng;
 use clap::Parser;
 
-fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
-            ModInt::new(rng.random::<u128>(), modulus)
+            Mod2k::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
@@ -57,7 +57,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     let start_time = Instant::now();
     let mut rng = AesRng::new();
-    let threshold = ModInt::new(config.threshold, 1u128 << config.h3);
+    let threshold = Mod2k::new(config.threshold, 1u128 << config.h3);
     let _results = threshold_phase.compare_with_threshold_gc(
         &inputs,
         threshold,

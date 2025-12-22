@@ -12,7 +12,7 @@ use crate::{
     },
     data_structures::{
         ringvec::RingVec,
-        bigmod::mul_mod,
+        modp::mul_mod,
     },
     util::u128_to_bits_msb,
     fuzzy_match::{

@@ -1,6 +1,6 @@
 use mosaic::{
     channel::{connect_to, listen_to},
-    data_structures::modint::ModInt,
+    data_structures::mod2k::Mod2k,
     fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
     configs::property_test_config::BenchmarkConfig,
 };
@@ -9,11 +9,11 @@ use scuttlebutt::{AesRng, AbstractChannel};
 use rand::Rng;
 use clap::Parser;
 
-fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<ModInt> {
+fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
         .map(|_| {
-            ModInt::new(rng.random::<u128>(), modulus)
+            Mod2k::new(rng.random::<u128>(), modulus)
         })
         .collect()
 }
@@ -59,7 +59,7 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     }
 
     let start_time = Instant::now();
-    let mu = ModInt::new(config.mu, 1u128 << config.h2 as u128);
+    let mu = Mod2k::new(config.mu, 1u128 << config.h2 as u128);
     let mut rng = AesRng::new();
     let _results = check_phase.batch_mu_bounded_testing_gc(
         &inputs,

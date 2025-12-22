@@ -428,4 +428,12 @@ impl Sketch {
     ) -> Result<bool, SharePhaseError> {
         unimplemented!()
     }
+
+    fn difference(
+        &self,
+        evals: &[u128],
+        target_length: usize,
+    ) -> Vec<u128> {
+
+    }
 }

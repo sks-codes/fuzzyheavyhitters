@@ -1,4 +1,4 @@
-use crate::data_structures::modint::ModInt;
+use crate::data_structures::mod2k::Mod2k;
 use crate::util::{xor, and_bit};
 use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
@@ -16,7 +16,7 @@ pub struct DpfCW<const N: usize> {
     pub seed: [u8; AES_BLOCK_SIZE], 
     pub seed_bit: (bool, bool),
     pub ys: (RingVec<N>, RingVec<N>), 
-    pub y_bits: (ModInt, ModInt),
+    pub y_bits: (Mod2k, Mod2k),
 }
 
 impl<const N: usize> DpfCW<N> {
@@ -61,7 +61,7 @@ impl<const N: usize> DpfCW<N> {
 
         let (y_bits_ringvec, used_y_bits) = RingVec::<2>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y_bits");
         offset += used_y_bits;
-        let y_bits = (ModInt::new(y_bits_ringvec[0], modulus), ModInt::new(y_bits_ringvec[1], modulus));
+        let y_bits = (Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus));
 
         (
             DpfCW {
@@ -80,7 +80,7 @@ pub struct DpfData<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
     pub bits: (bool, bool),
     pub ys: (RingVec<N>, RingVec<N>),
-    pub y_bits: (ModInt, ModInt),
+    pub y_bits: (Mod2k, Mod2k),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -136,7 +136,7 @@ pub struct DpfEval<const N: usize> {
     seed: [u8; AES_BLOCK_SIZE],
     pub bit: bool,
     pub y: RingVec<N>,
-    pub y_bit: ModInt,
+    pub y_bit: Mod2k,
 }
 
 impl<const N: usize> DpfEval<N> {
@@ -161,7 +161,7 @@ impl<const N: usize> DpfEval<N> {
         offset += 1;
         let (y, used_y) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
         offset += used_y;
-        let (y_bit, used_y_bit) = ModInt::from_bytes(&bytes[offset..], modulus);
+        let (y_bit, used_y_bit) = Mod2k::from_bytes(&bytes[offset..], modulus);
         offset += used_y_bit;
         (
             DpfEval {
@@ -191,7 +191,7 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> D
             seeds: ([0; AES_BLOCK_SIZE], [0; AES_BLOCK_SIZE]),
             bits: (false, false),
             ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
-            y_bits: (ModInt::zero(modulus), ModInt::zero(modulus)),
+            y_bits: (Mod2k::zero(modulus), Mod2k::zero(modulus)),
         };
 
         let mut payload_rnd = vec![0u8; num_payload_bytes * (N + 1) * 2 + AES_BLOCK_SIZE * 2];
@@ -208,12 +208,12 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> D
         for i in 0..N {
             out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) & modulus_mask;
         }
-        out.y_bits.0 = ModInt::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
+        out.y_bits.0 = Mod2k::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
 
         for i in 0..N {
             out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 1) * num_payload_bytes..(i + N + 2) * num_payload_bytes]) & modulus_mask;
         }
-        out.y_bits.1 = ModInt::new(bytes_to_u128(&payload_rnd[(2 * N + 1) * num_payload_bytes..(2 * N + 2) * num_payload_bytes]), modulus);
+        out.y_bits.1 = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 1) * num_payload_bytes..(2 * N + 2) * num_payload_bytes]), modulus);
         out
     })
 }
@@ -239,19 +239,19 @@ fn gen_cor_word<const N: usize>(
         seed: [0u8; 16],
         seed_bit: (false, false),
         ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
-        y_bits: (ModInt::zero(modulus), ModInt::zero(modulus)),
+        y_bits: (Mod2k::zero(modulus), Mod2k::zero(modulus)),
     };
 
     if !alpha_bit {
         cw.seed = delta_seed.1;
         cw.seed_bit = (delta_bits.0 ^ true, delta_bits.1 ^ false);
         cw.ys = (delta_ys.0 + left, delta_ys.1 + right);
-        cw.y_bits = (delta_y_bits.0 + ModInt::one(modulus), delta_y_bits.1 + ModInt::zero(modulus));
+        cw.y_bits = (delta_y_bits.0 + Mod2k::one(modulus), delta_y_bits.1 + Mod2k::zero(modulus));
     } else {
         cw.seed = delta_seed.0;
         cw.seed_bit = (delta_bits.0 ^ false, delta_bits.1 ^ true);
         cw.ys = (delta_ys.0 + right, delta_ys.1 + left);
-        cw.y_bits = (delta_y_bits.0 + ModInt::zero(modulus), delta_y_bits.1 + ModInt::one(modulus));
+        cw.y_bits = (delta_y_bits.0 + Mod2k::zero(modulus), delta_y_bits.1 + Mod2k::one(modulus));
     }
 
     let new_seed = if !alpha_bit {
@@ -274,14 +274,14 @@ fn gen_cor_word<const N: usize>(
                     seed: new_seed.0,
                     bit: new_bits.0,
                     y: RingVec::<N>::zero(modulus),
-                    y_bit: ModInt::zero(modulus),
+                    y_bit: Mod2k::zero(modulus),
                 },
                 DpfEval {
                     level: 0,
                     seed: new_seed.1,
                     bit: new_bits.1,
                     y: RingVec::<N>::zero(modulus),
-                    y_bit: ModInt::zero(modulus),
+                    y_bit: Mod2k::zero(modulus),
                 }
             );
 
@@ -309,7 +309,7 @@ impl<const N: usize> DpfKey<N>
             seed: root_seeds.0,
             bit: true,
             y: RingVec::<N>::zero(modulus),
-            y_bit: ModInt::one(modulus),
+            y_bit: Mod2k::one(modulus),
         };
 
         let eval1 = DpfEval{
@@ -317,7 +317,7 @@ impl<const N: usize> DpfKey<N>
             seed: root_seeds.1,
             bit: false,
             y: RingVec::<N>::zero(modulus),
-            y_bit: ModInt::zero(modulus),
+            y_bit: Mod2k::zero(modulus),
         };
 
         let mut eval = (eval0.clone(), eval1.clone());
@@ -433,7 +433,7 @@ impl<const N: usize> DpfKey<N>
                 seed: self.root_seed.clone(),
                 bit: true,
                 y: RingVec::<N>::zero(modulus),
-                y_bit: ModInt::one(modulus),
+                y_bit: Mod2k::one(modulus),
             }
         } else {
             DpfEval {
@@ -441,7 +441,7 @@ impl<const N: usize> DpfKey<N>
                 seed: self.root_seed.clone(),
                 bit: false,
                 y: RingVec::<N>::zero(modulus),
-                y_bit: ModInt::zero(modulus),
+                y_bit: Mod2k::zero(modulus),
             }
         }
     }

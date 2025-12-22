@@ -1,4 +1,4 @@
-use crate::data_structures::modint::{ModInt, get_bit_width_from_modint};
+use crate::data_structures::mod2k::{Mod2k, get_bit_width_from_modint};
 
 use fancy_garbling::{
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
@@ -20,14 +20,14 @@ struct EQInputs<F> {
     pub evaluator_wires: Vec<BinaryBundle<F>>,
 }
 
-pub fn garbler_preprocess_equality_test(input: &[ModInt]) -> Vec<u128> {
+pub fn garbler_preprocess_equality_test(input: &[Mod2k]) -> Vec<u128> {
     input.iter().map(|x| x.val).collect()
 }
 
 pub fn multiple_gb_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[ModInt]
+    inputs: &[Mod2k]
 ) -> bool
 where
     C: AbstractChannel + Clone,
@@ -71,14 +71,14 @@ where
     }
 }
 
-fn evaluator_preprocess_equality_test(input: &[ModInt]) -> Vec<u128> {
+fn evaluator_preprocess_equality_test(input: &[Mod2k]) -> Vec<u128> {
     input.iter().map(|x| x.val).collect()
 }
 
 pub fn multiple_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[ModInt]
+    inputs: &[Mod2k]
 ) -> bool
 where
     C: AbstractChannel + Clone,

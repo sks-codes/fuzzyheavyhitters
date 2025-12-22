@@ -5,10 +5,10 @@
 
 pub mod fastfield;
 pub mod field;
-pub mod modint;
+pub mod mod2k;
 pub mod pair;
 pub mod ringvec;
 pub mod prg;
 pub mod logexperiments;
 pub mod ringvec_new;
-pub mod bigmod;
+pub mod modp;
