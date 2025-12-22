@@ -207,3 +207,71 @@ pub struct Modp<'a> {
     ctx: &'a BarrettCtx,
     v: u128,
 }
+
+impl<'a> ModInt<'a> {
+    pub fn new(ctx: &'a BarrettCtx, x: u128) -> Self {
+        let m = ctx.m;
+        Self { ctx, v: x % m }
+    }
+    pub fn zero(ctx: &'a BarrettCtx) -> Self { Self { ctx, v: 0 } }
+    pub fn one(ctx: &'a BarrettCtx) -> Self { Self::new(ctx, 1) }
+
+    pub fn value(&self) -> u128 { self.v }
+    pub fn modulus(&self) -> u128 { self.ctx.m }
+
+    #[inline]
+    pub fn pow(mut self, mut e: u128) -> Self {
+        let mut acc = ModInt::one(self.ctx);
+        while e != 0 {
+            if (e & 1) == 1 { acc *= self; }
+            e >>= 1;
+            if e != 0 { self *= self; }
+        }
+        acc
+    }
+
+    /// Since m is a prime (your case): inv(a) = a^(m-2).
+    #[inline]
+    pub fn inv(self) -> Option<Self> {
+        if self.v == 0 { return None; }
+        Some(self.pow(self.ctx.m - 2))
+    }
+}
+
+impl<'a> Add for ModInt<'a> {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
+        Self { ctx: self.ctx, v: add_mod(self.v, rhs.v, self.ctx.m) }
+    }
+}
+impl<'a> AddAssign for ModInt<'a> { #[inline] fn add_assign(&mut self, rhs: Self) { *self = *self + rhs; } }
+
+impl<'a> Sub for ModInt<'a> {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
+        Self { ctx: self.ctx, v: sub_mod(self.v, rhs.v, self.ctx.m) }
+    }
+}
+impl<'a> SubAssign for ModInt<'a> { #[inline] fn sub_assign(&mut self, rhs: Self) { *self = *self - rhs; } }
+
+impl<'a> Neg for ModInt<'a> {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        if self.v == 0 { self } else { Self { ctx: self.ctx, v: self.ctx.m - self.v } }
+    }
+}
+
+impl<'a> Mul for ModInt<'a> {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
+        Self { ctx: self.ctx, v: self.ctx.mul_mod(self.v, rhs.v) }
+    }
+}
+impl<'a> MulAssign for ModInt<'a> { #[inline] fn mul_assign(&mut self, rhs: Self) { *self = *self * rhs; } }
