@@ -76,6 +76,14 @@ impl<const N: usize> IntervalFSSKey<N> {
         )
     }
 
+    pub fn ldcf_key(&self) -> &LdcfKey<N> {
+        &self.ldcf_key
+    }
+
+    pub fn rdcf_key(&self) -> &RdcfKey<N> {
+        &self.rdcf_key
+    }
+
     pub fn gen_interval_fss_key(
         alpha_bits: &[bool],
         beta_bits: &[bool],

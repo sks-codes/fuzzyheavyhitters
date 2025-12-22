@@ -1,7 +1,9 @@
+use crate::data_structures::modp::BarrettCtx;
+
 pub struct Sketch {
     h1: usize, // FSS phase input bit length
     h2: usize, // FSS phase output bit length
-    q: u128, // sketching modulo
+    q: u128, // sketching values will be in Zq
     delta: u128, // Distance threshold
     d: usize, // Number of dimensions
     method: ShareMethod, // The sharing method used. Only can sketch for FSS now
@@ -70,6 +72,39 @@ impl Sketch {
                 "Unknown shared range type for sketching".to_string()
             )),
         }
+    }
+
+    fn get_sketch_values_interval_fss_one_dimension(
+        &self,
+        key: IntervalFSSKey<1>,
+        role: bool,
+        seed: [u8; AES_KEY_SIZE],
+    ) -> Modp {
+        // We do not parallelize at this level. We only parallelize through multiple key pairs
+        let domain_range = 1u128 << self.h1;
+        let delta = self.delta;
+        let barrett_ctx = BarrettCtx::new(self.q);
+        
+        let ldcf_key = key.ldcf_key();
+        let rdcf_key = key.rdcf_key();
+
+        let ldcf_full_evals = ldcf_key.full_domain_incremental_eval();
+        let rdcf_full_evals = rdcf_key.full_domain_incremental_eval();
+
+        // Checking whether each level is dcf
+        for level in 0..self.h1 {
+            let z = self.get_sketch_value_dcf(&ldcf_full_evals[level], 1 << level);
+            let z = self.get_sketch_value_dcf(&rdcf_full_evals[level], 1 << level);
+        }
+
+        // Checking whether each two consecutive levels are consistent
+        for level in 0..(self.h1 - 1) {
+            let z = self.get_sketch_value_incremental_ldcf_consistency(&ldcf_full_evals[level], ldcf_full_evals[level+1], 1 << level);
+            let z = self.get_sketch_value_incremental_rdcf_consistency(&rdcf_full_evals[level], rdcf_full_evals[level+1], 1 << level);
+        }
+
+        // Checking whether last level of ldcf is shifted by 2*delta from last level of rdcf
+        let z = self.get_sketch_value_shift_dcf_consistency(&ldcf_full_evals[self.h1-1], &rdcf_full_evals[self.h1-1], delta as usize, domain_range as usize);
     }
 
     // This function is NOT READY to be used!!!

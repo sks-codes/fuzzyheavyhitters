@@ -9,6 +9,7 @@
 //! - Client: Client-side functionality for generating and distributing shares
 
 pub mod share_phase;
+mod share_phase_helper;
 pub mod shared_range;
 pub mod shared_sketch;
 pub mod check_phase;
@@ -19,3 +20,4 @@ pub mod dealer;
 pub mod client;
 mod share_types;
 mod sketch_phase;
+mod share_phase_helper;
