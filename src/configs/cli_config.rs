@@ -3,10 +3,12 @@
 //! This module defines configuration structures for the CLI application
 
 use serde::{Deserialize, Serialize};
-use crate::fuzzy_match::share_phase::{ShareConfig, ShareMethod, DictionaryType, DistanceMetric};
-use crate::fuzzy_match::check_phase::{CheckConfig, CheckMethod, CheckProperty};
-use crate::fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod};
-use crate::fuzzy_match::protocol::ProtocolConfig;
+use crate::fuzzy_match::{
+    share_types::{ShareConfig, ShareMethod, DictionaryType, DistanceMetric},
+    check_phase::{CheckConfig, CheckMethod, CheckProperty},
+    threshold_phase::{ThresholdConfig, ThresholdMethod},
+    protocol::ProtocolConfig,
+};
 
 /// CLI configuration that combines all protocol parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]

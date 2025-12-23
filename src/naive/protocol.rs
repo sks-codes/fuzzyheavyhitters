@@ -1,7 +1,7 @@
 use crate::{
     channel::CommTrackingChannel,
     fss::dpf::DpfKey,
-    fuzzy_match::share_phase::ShareConfig, 
+    fuzzy_match::share_types::ShareConfig, 
     util::u128_to_bits_msb,
     data_structures::mod2k::Mod2k,
     garbled_circuits::greater_than_or_equal_threshold::{

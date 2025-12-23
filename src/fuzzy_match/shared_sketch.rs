@@ -38,7 +38,7 @@ pub fn generate_interval_fss_sketch_data(
     for _ in 0..num_clients {
         let a = (0..2*d).map(|_| rand::random::<u128>() % sketch_modulus).collect::<Vec<u128>>();
 
-        let mut a2 = a.iter().map(|&x| ((x * x) % sketch_modulus)).collect::<Vec<u128>>();
+        let mut a2 = a.iter().map(|&x| (x * x) % sketch_modulus).collect::<Vec<u128>>();
 
         let mut a3 = a.iter()
             .zip(a2.iter())

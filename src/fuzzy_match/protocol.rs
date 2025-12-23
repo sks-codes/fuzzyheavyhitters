@@ -5,7 +5,8 @@
 
 use crate::{
     fuzzy_match::{
-        share_phase::{SharePhase, ShareConfig, DistanceMetric},
+        share_phase::SharePhase,
+        share_types::{ShareConfig, DistanceMetric},
         shared_range::{SharedRange, ShareData},
         check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty},
         threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},

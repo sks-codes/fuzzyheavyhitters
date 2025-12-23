@@ -1,6 +1,6 @@
 use crate::{
     fss::dpf::DpfKey,
-    fuzzy_match::share_phase::{ShareConfig, ShareMethod, DistanceMetric},
+    fuzzy_match::share_types::{ShareConfig, ShareMethod, DistanceMetric},
     data_structures::ringvec::RingVec,
     util::u128_to_bits_msb,
 };

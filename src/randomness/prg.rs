@@ -111,6 +111,14 @@ impl PRG {
         });
     }
 
+    pub fn random_u128s(&mut self, dst: &mut [u128]) {
+        let mut blocks = vec![[0u8; 16]; dst.len()];
+        self.random_16byte_block(&mut blocks);
+        for i in 0..dst.len() {
+            dst[i] = u128::from_le_bytes(blocks[i]);
+        }
+    }
+
     pub fn fill_bytes(&mut self, buffer: &mut [u8]) {
         let block_count = (buffer.len() + 15) / 16;
         let mut blocks = vec![[0u8; 16]; block_count];

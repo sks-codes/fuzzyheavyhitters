@@ -1,3 +1,5 @@
+use crate::configs::cli_config::ProtocolParameters;
+
 /// Enumeration of different distance metrics
 #[derive(Debug, Clone, PartialEq)]
 pub enum DistanceMetric {

@@ -1,6 +1,7 @@
 use crate::{
     channel::CommTrackingChannel,
-    fuzzy_match::share_phase::{SharePhase, ShareConfig},
+    fuzzy_match::share_phase::SharePhase,
+    fuzzy_match::share_types::ShareConfig,
     fuzzy_match::shared_range::SharedRange,
 };
 use scuttlebutt::AbstractChannel;

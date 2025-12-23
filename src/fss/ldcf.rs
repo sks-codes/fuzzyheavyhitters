@@ -494,7 +494,7 @@ impl<const N: usize> LdcfKey<N>
         let results = Vec::new();
         results.push(states[..1].to_vec());
         for level in 0..domain_size {
-            for i in (0..(1 << level).rev()) {
+            for i in (0..(1 << level)).rev() {
                 (states[i << 1], states[i << 1 | 1]) = self.expand_prefix(&states[i], modulus);
             }
             results.push(states[..(1 << (level + 1))].to_vec());
