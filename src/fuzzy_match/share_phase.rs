@@ -16,6 +16,7 @@ use crate::{
         shared_range::{SharedRange, ShareData},
     },
 };
+use scuttlebutt::AbstractChannel;
 
 use super::share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
 

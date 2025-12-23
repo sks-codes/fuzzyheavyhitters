@@ -486,13 +486,13 @@ impl<const N: usize> RdcfKey<N>
         domain_size: usize,
     ) -> Vec<Vec<RingVec<N>>> {
         let mut states = vec![self.eval_init(modulus); 1 << domain_size];
-        let results = Vec::new();
-        results.push(states[..1].to_vec());
+        let mut results = Vec::new();
+        results.push(states[..1].iter().map(|x| x.y).collect());
         for level in 0..domain_size {
             for i in (0..(1 << level)).rev() {
                 (states[i << 1], states[i << 1 | 1]) = self.expand_prefix(&states[i], modulus);
             }
-            results.push(states[..(1 << (level + 1))].to_vec());
+            results.push(states[..(1 << (level + 1))].iter().map(|x| x.y).collect());
         }
         states.clear();
         results

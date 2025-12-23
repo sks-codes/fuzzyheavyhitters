@@ -296,4 +296,20 @@ impl<const N: usize> DistanceFSSKey<N> {
             result: 0u128,
         }
     }
+
+    pub fn left_fss0(&self) -> &LdcfKey {
+        &self.left_fss.0
+    }
+
+    pub fn left_fss1(&self) -> &LdcfKey {
+        &self.left_fss.1
+    }
+
+    pub fn right_fss0(&self) -> &RdcfKey {
+        &self.right_fss.0
+    }
+
+    pub fn right_fss1(&self) -> &RdcfKey {
+        &self.right_fss.1
+    }
 }

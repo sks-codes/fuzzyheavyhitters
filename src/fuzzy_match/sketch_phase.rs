@@ -1,19 +1,12 @@
-
 use crate::{
-    aes::AES_KEY_SIZE, 
-    data_structures::{
+    aes::AES_KEY_SIZE, channel::CommTrackingChannel, data_structures::{
         modp::{BarrettCtx, Modp},
         ringvec::RingVec,
-    },
-    fuzzy_match::{
-        share_types::{DistanceMetric, ShareMethod, DictionaryType}, 
-        shared_range::SharedRange, shared_sketch::SketchData, sketch_helper::SketchHelper,
-        share_phase::SharePhaseError,
-    }, randomness::prg::PRG,
-    fss::interval::IntervalFSSKey,
-    channel::CommTrackingChannel,
+    }, fss::{distance::DistanceFSSKey, interval::IntervalFSSKey}, fuzzy_match::{
+        share_phase::SharePhaseError, share_types::{DictionaryType, DistanceMetric, ShareMethod}, shared_range::SharedRange, shared_sketch::SketchData, sketch_helper::SketchHelper
+    }, randomness::prg::PRG
 };
-
+use anyhow::{anyhow, ensure, Result};
 
 pub struct Sketch {
     h1: usize, // FSS phase input bit length
@@ -27,79 +20,18 @@ pub struct Sketch {
 }
 
 impl Sketch {
-    pub fn sketch(
-        &self,
-        shared_ranges: &[SharedRange],
-        sketch_data: &[SketchData],
-        other_server_channels: &mut [CommTrackingChannel],
-    ) -> Result<bool, SharePhaseError> {
-        // Check the type of all shared ranges
-        let first_type = match &shared_ranges[0] {
-            SharedRange::OKVS { .. } => "OKVS",
-            SharedRange::IntervalFSS { .. } => "IntervalFSS",
-            SharedRange::DistanceFSSL1 { .. } => "DistanceFSSL1",
-            SharedRange::DistanceFSSL2 { .. } => "DistanceFSSL2",
-            SharedRange::DistanceFSSL3 { .. } => "DistanceFSSL3",
-        };
-        for sr in shared_ranges.iter() {
-            let sr_type = match sr {
-                SharedRange::OKVS { .. } => "OKVS",
-                SharedRange::IntervalFSS { .. } => "IntervalFSS",
-                SharedRange::DistanceFSSL1 { .. } => "DistanceFSSL1",
-                SharedRange::DistanceFSSL2 { .. } => "DistanceFSSL2",
-                SharedRange::DistanceFSSL3 { .. } => "DistanceFSSL3",
-            };
-            if sr_type != first_type {
-                return Err(SharePhaseError::InvalidRange(
-                    "All shared ranges must be of the same type for sketching".to_string()
-                ));
-            }
-        }
-
-        let role = match &shared_ranges[0] {
-            SharedRange::OKVS { role, .. } => *role,
-            SharedRange::IntervalFSS { role, .. } => *role,
-            SharedRange::DistanceFSSL1 { role, .. } => *role,
-            SharedRange::DistanceFSSL2 { role, .. } => *role,
-            SharedRange::DistanceFSSL3 { role, .. } => *role,
-        };
-
-        let mut seed = [0u8; AES_KEY_SIZE];
-        if role {
-            seed = rand::rng().random::<[u8; AES_KEY_SIZE]>();
-            other_server_channels[0].write_bytes(&seed).expect("Failed to send seed to other server");
-        } else {
-            other_server_channels[0].read_bytes(&mut seed).expect("Failed to receive seed from other server");
-        }
-
-        // Now sketch based on the type
-        match first_type {
-            "OKVS" => {
-                println!("Sketching for OKVS not implemented yet, so we skip it.");
-                Ok(true)
-            },
-            "IntervalFSS" => self.sketch_interval_fss(shared_ranges, sketch_data, seed, other_server_channels),
-            "DistanceFSSL1" => self.sketch_distance_fss::<2>(shared_ranges),
-            "DistanceFSSL2" => self.sketch_distance_fss::<3>(shared_ranges),
-            "DistanceFSSL3" => self.sketch_distance_fss::<4>(shared_ranges),
-            _ => Err(SharePhaseError::InvalidRange(
-                "Unknown shared range type for sketching".to_string()
-            )),
-        }
-    }
-
     fn sketch_interval_fss(
         &self, 
         shared_ranges: &[SharedRange],
         sketch_data: &[SketchData],
         seed: [u8; AES_KEY_SIZE],
         other_server_channels: &mut [CommTrackingChannel],
-    ) -> Result<bool, SharePhaseError> {
-
+    ) -> Result<bool> {
+        Ok(true)
     }
 
     pub fn get_sketch_helper(&self) -> SketchHelper {
-
+        unimplemented!()
     }
 
     fn get_sketch_values_interval_fss_one_dimension(
@@ -108,7 +40,14 @@ impl Sketch {
         role: bool,
         sketch_helper: SketchHelper,
         prg: &mut PRG,
-    ) -> Vec<Modp> {
+    ) -> Result<Vec<Vec<Modp>>> {
+        let dpf_helper = match sketch_helper {
+            SketchHelper::Linf { dpf } => dpf,
+            _ => {
+                return Err(anyhow!("Sketch helper for interval fss must be Linf"));
+            },
+        };
+
         // We do not parallelize at this level. We only parallelize through multiple key pairs
         let domain_size = 1usize << self.h1;
         let modulus = 1u128 << self.h2;
@@ -123,29 +62,164 @@ impl Sketch {
 
         // Checking whether each level is dcf
         for level in 0..self.h1 {
-            let z = self.get_sketch_values_dcf(&ldcf_full_evals[level], 1 << level, sketch_helper.dpf()[level], prg);
-            let z = self.get_sketch_values_dcf(&rdcf_full_evals[level], 1 << level, sketch_helper.dpf()[level], prg);
+            let z_ldcf = 
+                self.get_sketch_values_dcf(&ldcf_full_evals[level], 1 << level, &dpf_helper[level], prg)
+                    .map_err(|e| anyhow!("Failed to get sketch values for LDCF at level {level}: {e}"))?;
+            ensure!(z_ldcf.len() == 4, "Sketching LDCF should return 4 values, got {}", z_ldcf.len());
+            let z_rdcf = 
+                self.get_sketch_values_dcf(&rdcf_full_evals[level], 1 << level, &dpf_helper[level], prg)
+                    .map_err(|e| anyhow!("Failed to get sketch values for RDCF at level {level}: {e}"))?;
+            ensure!(z_rdcf.len() == 4, "Sketching RDCF should return 4 values, got {}", z_rdcf.len());
         }
 
         // Checking whether each two consecutive levels are consistent
         for level in 0..(self.h1 - 1) {
-            let z = self.get_sketch_values_incremental_ldcf_consistency(&ldcf_full_evals[level], ldcf_full_evals[level+1], 1 << level, prg);
-            let z = self.get_sketch_values_incremental_rdcf_consistency(&rdcf_full_evals[level], rdcf_full_evals[level+1], 1 << level, prg);
+            let z_ldcf_inc = self.get_sketch_values_incremental_ldcf_consistency(
+                &ldcf_full_evals[level], 
+                &ldcf_full_evals[level+1], 
+                1 << level, 
+                prg)
+                .map_err(|e| anyhow!("Failed to get sketch values incremental LDCF consistency at level {level}: {e}"))?;
+            let z_rdcf_inc = self.get_sketch_values_incremental_rdcf_consistency(
+                &rdcf_full_evals[level], 
+                &rdcf_full_evals[level+1], 
+                1 << level, 
+                prg)
+                .map_err(|e| anyhow!("Failed to get sketch values incremental RDCF consistency at level {level}: {e}"))?;
         }
 
         // Checking whether last level of ldcf is shifted by 2*delta from last level of rdcf
-        let z = self.get_sketch_values_shift_dcf_consistency(&ldcf_full_evals[self.h1-1], &rdcf_full_evals[self.h1-1], 2 * delta as usize, domain_size, prg);
+        let z_shift_inc = self.get_sketch_values_shift_dcf_consistency(&ldcf_full_evals[self.h1-1], &rdcf_full_evals[self.h1-1], 2 * delta as usize, domain_size, prg);
+
+        Ok(vec![z_ldcf, z_rdcf, z_ldcf_inc, z_rdcf_inc, z_shift_inc])
+    }
+
+    fn get_sketch_values_distance_fss_l1_one_dimension(
+        &self, 
+        key: DistanceFSSKey<2>,
+        role: bool, 
+        sketch_helper: SketchHelper,
+        prg: &mut PRG,
+    ) -> Result<Vec<Modp>> {
+        let domain_size = 1usize << self.h1;
+        let modulus = 1u128 << self.h2;
+        let delta = self.delta;
+
+        let ldcf_key0 = key.left_fss0();       
+        let ldcf_key1 = key.left_fss1();
+        let rdcf_key0 = key.right_fss0();       
+        let rdcf_key1 = key.right_fss1();
+
+        
+    }
+
+    fn shifted_dcf_with_scale_to_unit_vector(
+        &self,
+        evals: &[Modp],
+        domain_size: usize,
+        shift: usize,
+        scale0: &[u128],
+        scale1: &[u128],
+    ) -> Result<Vec<Modp>> {
+        ensure!(evals.len() == domain_size, "length mismatch between dcf sketch vector and domain_size");
+        ensure!(scale0.len() == domain_size, "length mismatch between scale0 vector and domain_size");
+        ensure!(scale1.len() == domain_size, "length mismatch between scale1 vector and domain_size");
+        let evals_dpf: Vec<Modp> = (0..(domain_size-1)).map(
+            |i| evals[i] - evals[i+1]
+        ).collect();
+        self.shifted_dpf_with_scale_to_unit_vector(evals_dpf, domain_size, shift, scale0, scale1, prg)
+    }
+
+    fn shifted_dpf_with_scale_to_unit_vector(
+        &self,
+        evals: &[Modp],
+        domain_size: usize,
+        shift: usize,
+        scale0: &[u128],
+        scale1: &[u128],
+    ) -> Result<Vec<Modp>> {
+        let barrett_ctx = BarrettCtx::new(self.q);
+        let abs_shift = shift.abs() as usize;
+        let shifted_evals = if shift < 0 {
+            [&evals[abs_shift..], vec![Modp::zero(&barrett_ctx); abs_shift].as_slice()].concat()
+        } else {
+            [vec![Modp::zero(&barrett_ctx); abs_shift].as_slice(), &evals[..domain_size-abs_shift]].concat()
+        };
+        self.dpf_with_scale_to_unit_vector(shifted_evals, domain_size, scale0, scale1, prg)
+    }
+
+    fn dpf_with_scale_to_unit_vector(
+        &self,
+        evals: &[Modp],
+        domain_size: usize,
+        scale0: &[u128],
+        scale1: &[u128],
+    ) -> Result<(Vec<Modp>, Vec<Modp>)> {
+        let barrett_ctx = BarrettCtx::new(self.q);
+        let scale0_modp: Vec<Modp> = scale0.iter().map(|x| {
+            Modp::new(&barrett_ctx, x)
+        }).collect();
+        let scale1_modp: Vec<Modp> = scale1.iter().map(|x| {
+            Modp::new(&barrett_ctx, x)
+        }).collect();
+
+        (
+            element_wise_product_modp(&evals, &scale0_modp),
+            element_wise_product_modp(&evals, &scale1_modp),
+        )
+    }
+
+    fn dpf_to_unit_vector(
+        &self,
+        evals: &[Modp],
+        domain_size: usize,
+        dpf_helper: &[u128],
+    ) -> Result<(Vec<Modp>, Vec<Modp>)> {
+        let barrett_ctx = BarrettCtx::new(self.q);
+        let dpf_helper_modp: Vec<Modp> = dpf_helper.iter().map(|x| Modp::new(&barrett_ctx, x)).collect();
+
+        (
+            evals.clone(),
+            element_wise_product_modp(evals, dpf_helper_modp)
+        )
+    }
+
+    fn get_sketch_values_shift_dpf_with_scale(
+        &self,
+        evals: &[RingVec<1>],
+        domain_size: usize,
+        shift: i32,
+        scale0: &[u128],
+        scale1: &[u128],
+        prg: &mut PRG
+    ) -> Result<Vec<Modp>> {
+        ensure!(evals.len() == domain_size, "length mismatch between dpf sketch vector and domain_size");
+        ensure!(scale0.len() == domain_size, "length mismatch between scale0 vector and domain_size");
+        ensure!(scale1.len() == domain_size, "length mismatch between scale1 vector and domain_size");
+        // Shift the dpf vector correspondingly
+        let barrett_ctx = BarrettCtx::new(self.q);
+        let evals_modp: Vec<Modp> = evals.iter().map(|eval| {
+            Modp::new(&barrett_ctx, eval[0])
+        }).collect();
+        let abs_shift = shift.abs() as usize;
+        let shifted_evals_modp = if shift < 0 {
+            [&evals_modp[abs_shift..], vec![Modp::zero(&barrett_ctx); abs_shift].as_slice()].concat()
+        } else {
+            [vec![Modp::zero(&barrett_ctx); abs_shift].as_slice(), &evals_modp[..domain_size-abs_shift]].concat()
+        };
+
+        let scaled_shifted_evals_modp = 
     }
 
     fn get_sketch_values_dcf(
         &self,
         evals: &[RingVec<1>],
         domain_size: usize,
-        dpf_helper: &[Modp],
+        dpf_helper: &[u128],
         prg: &mut PRG,
-    ) -> Vec<Modp> {
-        assert!(evals.len() == domain_size);
-        assert!(dpf_helper.len() == domain_size);
+    ) -> Result<Vec<Modp>> {
+        ensure!(evals.len() == domain_size, "length mismatch between dcf sketch vector and domain_size");
+        ensure!(dpf_helper.len() == domain_size, "length mismatch between dpf_helper and domain_size");
         // Transform to DPF
         let evals_dpf: Vec<RingVec<1>> = (0..(domain_size-1)).map(
             |i| evals[i] - evals[i+1]
@@ -159,19 +233,20 @@ impl Sketch {
         &self,
         evals: &[RingVec<1>],
         domain_size: usize,
-        dpf_helper: &[Modp],
+        dpf_helper: &[u128],
         prg: &mut PRG,
-    ) -> (Modp, Modp, Modp, Modp) {
-        assert!(evals.len() == domain_size);
-        assert!(dpf_helper.len() == domain_size);
+    ) -> Result<Vec<Modp>> {
+        ensure!(evals.len() == domain_size, "length mismatch between dpf sketch vector and domain_size");
+        ensure!(dpf_helper.len() == domain_size, "length mismatch between dpf_helper and domain_size");
         // Prepare transforming to Zq
         let barrett_ctx = BarrettCtx::new(self.q);
         let case_1_evals: Vec<Modp> = evals.iter().map(|eval| {
             Modp::new(&barrett_ctx, eval[0]);
-        });
-        let case_2_evals = case_1_evals.iter().zip(dpf_helper.iter()).map(|(x, y)| {
+        }).collect();
+        let dpf_helper_modp: Vec<Modp> = dpf_helper.iter().map(|x| Modp::new(&barrett_ctx, x)).collect();
+        let case_2_evals = case_1_evals.iter().zip(dpf_helper_modp.iter()).map(|(x, y)| {
             x * y
-        });
+        }).collect();
 
         // Generate random r0, r1, ...
         let mut rs_u128: Vec<u128> = vec![0u128; domain_size];
@@ -189,7 +264,7 @@ impl Sketch {
         let rs6: Vec<Modp> = element_wise_product_modp(&rs3, &rs3); // r0^6, r1^6, ...
         let z_bullet_2 = dot_product_modp(&case_2_evals, &rs6); // r0^6 * case_2[0] + r1^6 * case_2[1] + ...
 
-        (z_ast, z_ast_2, z_bullet, z_bullet_2)
+        Ok(vec!([z_ast, z_ast_2, z_bullet, z_bullet_2]))
     }
 
     fn get_sketch_values_incremental_ldcf_consistency(
@@ -198,9 +273,9 @@ impl Sketch {
         evals1: &[RingVec<1>],
         domain_size: usize,
         prg: &mut PRG,
-    ) -> (Modp, Modp) {
-        assert!(evals0.len() == domain_size);
-        assert!(evals1.len() * 2 == domain_size);
+    ) -> Vec<Modp> {
+        ensure!(evals0.len() == domain_size, "Length mismatch in incremental ldcf consistency, length evals0 = {}", evals0.len());
+        ensure!(evals1.len() == domain_size * 2, "Length mismatch in increment LDCF consistency");
 
         // Prepare duplicating vector
         let barrett_ctx = BarrettCtx::new(self.q);
@@ -225,7 +300,7 @@ impl Sketch {
         let case2_dif = element_wise_subtract_modp(case2_evals, &duplicated_evals);
         let z_bullet= dot_product_modp(case2_dif, rs);
 
-        (z_ast, z_bullet)
+        Ok(vec!([z_ast, z_bullet]))
     }
 
     fn get_sketch_values_incremental_rdcf_consistency(
@@ -235,8 +310,8 @@ impl Sketch {
         domain_size: usize,
         prg: &mut PRG,
     ) -> (Modp, Modp) {
-        assert!(evals0.len() == domain_size);
-        assert!(evals1.len() * 2 == domain_size);
+        ensure!(evals0.len() == domain_size, "Length mismatch in incremental ldcf consistency, length evals0 = {}", evals0.len());
+        ensure!(evals1.len() == domain_size * 2, "Length mismatch in incremental ldcf consistency, length evals1 = {}", evals1.len());
 
         // Prepare duplicating vector
         let barrett_ctx = BarrettCtx::new(self.q);
@@ -273,14 +348,15 @@ impl Sketch {
         domain_size: usize,
         prg: &mut PRG,
     ) -> Modp {
-        assert!(evals0.len() == domain_size);
-        assert!(evals1.len() == domain_size);
+        ensure!(evals0.len() == domain_size, "Length mismatch in incremental rdcf consistency, length evals0 = {}", evals0.len());
+        ensure!(evals1.len() == domain_size * 2, "Length mismatch in incremental rdcf consistency, length evals1 = {}", evals1.len());
 
+        let barrett_ctx = BarrettCtx::new(self.q);
         // Shift evals1 to the left by shift_amount
-        let evals0_modp: Vec<Modp> = evals0.iter().map(|x| 
+        let evals0_modp: Vec<Modp> = evals0.iter().map(|eval| 
             Modp::new(&barrett_ctx, eval[0])
         ).collect();
-        let evals1_modp: Vec<Modp> = evals1.iter().map(|x| 
+        let evals1_modp: Vec<Modp> = evals1.iter().map(|eval| 
             Modp::new(&barrett_ctx, eval[0])
         ).collect();
         let evals1_modp_shifted = evals1_modp[shift..].to_vec().extend(vec![Modp::zero(&barrett_ctx); shift]);
