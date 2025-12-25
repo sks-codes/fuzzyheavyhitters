@@ -2,7 +2,7 @@ use crate::fss::ldcf::{LdcfKey, LdcfEval};
 use crate::fss::rdcf::{RdcfKey, RdcfEval};
 use crate::data_structures::ringvec::RingVec;
 
-const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
+pub(crate) const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
     [1, 0, 0, 0, 0, 0],
     [1, 1, 0, 0, 0, 0],
     [1, 2, 1, 0, 0, 0],

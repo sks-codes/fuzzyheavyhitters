@@ -5,25 +5,30 @@ use crate::{
         mod2k::Mod2k,
         ringvec::RingVec,
     }, 
-    fss::{distance::DistanceFSSKey, interval::IntervalFSSKey}, 
+    fss::{
+        distance::DistanceFSSKey,  
+        interval::IntervalFSSKey}, 
     fuzzy_match::{
-        share_phase::SharePhaseError, share_types::{DictionaryType, DistanceMetric, ShareMethod}, shared_range::SharedRange, shared_sketch::SketchData, sketch_helper::SketchHelper
+        share_phase::SharePhaseError, 
+        share_types::{DictionaryType, DistanceMetric, ShareMethod}, 
+        shared_range::SharedRange, shared_sketch::SketchData, 
+        sketch_helper::SketchHelper,
+        sketch_types::SketchConfig,
     }, randomness::prg::PRG,
 };
 use anyhow::{anyhow, ensure, Result};
 
 pub struct Sketch {
-    h1: usize, // FSS phase input bit length
-    h2: usize, // FSS phase output bit length
-    q: u128, // sketching values will be in Zq
-    delta: u128, // Distance threshold
-    d: usize, // Number of dimensions
-    method: ShareMethod, // The sharing method used. Only can sketch for FSS now
-    metric: DistanceMetric, // Distance metric. Can support sketching both Linf and Lp
-    dictionary_type: DictionaryType, // Known or Unknown
+    pub(super) config: SketchConfig, 
 }
 
 impl Sketch {
+    pub fn new<C: Into<SketchConfig>>(config: C) -> Self {
+        Self {
+            config: config.into(),
+        }
+    }
+
     fn sketch_interval_fss(
         &self, 
         shared_ranges: &[SharedRange],
@@ -41,35 +46,15 @@ impl Sketch {
         unimplemented!()
     }
 
-
     pub fn get_sketch_helper(&self) -> SketchHelper {
-        let barrett_ctx = BarrettCtx::new(self.q);
         match (&self.method, &self.metric) {
-            (ShareMethod::FSS, DistanceMetric::LInfinity) => SketchHelper::IntervalFSS {
-                sketch_helper_ldcf: Box::new(SketchHelper::Ldcf {
-                    barrett_ctx: barrett_ctx,
-                    inv_value: 1,
-                }),
-                sketch_helper_rdcf: Box::new(SketchHelper::Rdcf {
-                    barrett_ctx: barrett_ctx,
-                    inv_value: 1,
-                }),
+            (ShareMethod::FSS, DistanceMetric::LInfinity) => self.get_sketch_helper_linf(),
+            (ShareMethod::FSS, DistanceMetric::Lp { p }) => match p {
+                1 => self.get_sketch_helper_l1(),
+                2 => self.get_sketch_helper_l2(),
+                3 => self.get_sketch_helper_l3(),
+                _ => return Err(anyhow!("Currently only support sketching Lp with p = 1, 2, 3."))
             },
-            (ShareMethod::FSS, DistanceMetric::Lp { .. }) => {
-                // Placeholder rescale vectors; caller can override with concrete payload inverses.
-                let domain_size = 1usize << self.h1;
-                let rescale_full = vec![1u128; domain_size];
-                SketchHelper::DistanceFSSPayload {
-                    sketch_helper_ldcf_payload: Box::new(SketchHelper::DistanceLdcfPayload {
-                        barrett_ctx: barrett_ctx,
-                        rescale_full: rescale_full.clone(),
-                    }),
-                    sketch_helper_rdcf_payload: Box::new(SketchHelper::DistanceRdcfPayload {
-                        barrett_ctx: barrett_ctx,
-                        rescale_full,
-                    }),
-                }
-            }
             _ => {
                 panic!("Unsupported sketch helper configuration");
             }
@@ -83,13 +68,6 @@ impl Sketch {
         sketch_helper: SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<Vec<Modp>>> {
-        let dpf_helper = match sketch_helper {
-            SketchHelper::Linf { dpf } => dpf,
-            _ => {
-                return Err(anyhow!("Sketch helper for interval fss must be Linf"));
-            },
-        };
-
         // We do not parallelize at this level. We only parallelize through multiple key pairs
         let domain_size = 1usize << self.h1;
         let modulus = 1u128 << self.h2;
@@ -387,6 +365,112 @@ impl Sketch {
         let subtracted = element_wise_subtract_mod2k(&shifted_a, b);
 
         subtracted.iter().map(|x| Modp::new(ctx, x.val())).collect()
+    }
+}
+
+// This is the bulk of implmentations for get_sketch_helper
+impl Sketch {
+    fn get_sketch_helper_linf(&self) -> Result<SketchHelper> {
+        let barrett_ctx = BarrettCtx::new(self.config.q);
+        let modulus = 1u128 << self.config.h2;
+        let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
+        let case_2_const = case_2_const_inv.inv().unwrap();
+        SketchHelper::IntervalFSS {
+            sketch_helper_ldcf: Box::new(SketchHelper::Ldcf {
+                barrett_ctx: barrett_ctx,
+                inv_value: case_2_const.value(),
+            }),
+            sketch_helper_rdcf: Box::new(SketchHelper::Rdcf {
+                barrett_ctx: barrett_ctx,
+                inv_value: case_2_const.value(),
+            }),
+        }
+    }
+
+    pub(super) fn get_sketch_helper_l1(&self) -> SketchHelper {
+        let barrett_ctx = BarrettCtx::new(self.config.q);
+        let modulus = 1u128 << self.config.h2;
+        let domain_size = 1usize << self.config.h1;
+        let delta = self.config.delta;
+
+        // Base vectors for degree-1 (p = 1) polynomial payloads.
+        let vec0: Vec<Mod2k> = (0..domain_size)
+            .map(|_| Mod2k::new(1, modulus))
+            .collect();
+        let vec1: Vec<Mod2k> = (0..domain_size)
+            .map(|x| -Mod2k::new(x as u128, modulus))
+            .collect();
+
+        // zero_payload corresponds to constant 1.
+        let zero_payload0 = vec0.clone();
+        let zero_payload1 = vec0.clone();
+
+        // right_payload corresponds to (1, -x).
+        let right_payload0 = vec0.clone();
+        let right_payload1 = vec1.clone();
+
+        // left_payload is the negation of right_payload.
+        let left_payload0: Vec<Mod2k> = vec0.iter().map(|x| -x).collect();
+        let left_payload1: Vec<Mod2k> = vec1.iter().map(|x| -x).collect();
+
+        // out_payload carries the threshold term on the second coordinate.
+        let out_payload0: Vec<Mod2k> = vec0.clone();
+        let out_payload1: Vec<Mod2k> = (0..domain_size)
+            .map(|_| Mod2k::new(delta + 1, modulus))
+            .collect();
+
+        // Helper vectors for ldcf0: (out_payload - left_payload) - zero_payload.
+        let ldcf_0_helper0 =
+            element_wise_subtract_mod2k(&element_wise_subtract_mod2k(&out_payload0, &left_payload0), &zero_payload0);
+        let ldcf_0_helper1 =
+            element_wise_subtract_mod2k(&element_wise_subtract_mod2k(&out_payload1, &left_payload1), &zero_payload1);
+
+        // Helper vectors for ldcf1: left_payload - zero_payload.
+        let ldcf_1_helper0 = element_wise_subtract_mod2k(&left_payload0, &zero_payload0);
+        let ldcf_1_helper1 = element_wise_subtract_mod2k(&left_payload1, &zero_payload1);
+
+        // Helper vectors for rdcf0: zero_payload - right_payload.
+        let rdcf_0_helper0 = element_wise_subtract_mod2k(&zero_payload0, &right_payload0);
+        let rdcf_0_helper1 = element_wise_subtract_mod2k(&zero_payload1, &right_payload1);
+
+        // Helper vectors for rdcf1: zero_payload - (out_payload - right_payload).
+        let rdcf_1_helper0 =
+            element_wise_subtract_mod2k(&zero_payload0, &element_wise_subtract_mod2k(&out_payload0, &right_payload0));
+        let rdcf_1_helper1 =
+            element_wise_subtract_mod2k(&zero_payload1, &element_wise_subtract_mod2k(&out_payload1, &right_payload1));
+
+        let to_u128 = |v: &[Mod2k]| v.iter().map(|x| x.val()).collect::<Vec<u128>>();
+
+        SketchHelper::DistanceFSSPayload {
+            sketch_helper_ldcf0: Box::new(SketchHelper::LdcfPayload {
+                barrett_ctx: BarrettCtx::new(self.config.q),
+                case0_full: to_u128(&ldcf_0_helper0),
+                case1_full: to_u128(&ldcf_0_helper1),
+            }),
+            sketch_helper_ldcf1: Box::new(SketchHelper::LdcfPayload {
+                barrett_ctx: BarrettCtx::new(self.config.q),
+                case0_full: to_u128(&ldcf_1_helper0),
+                case1_full: to_u128(&ldcf_1_helper1),
+            }),
+            sketch_helper_rdcf0: Box::new(SketchHelper::RdcfPayload {
+                barrett_ctx: BarrettCtx::new(self.config.q),
+                case0_full: to_u128(&rdcf_0_helper0),
+                case1_full: to_u128(&rdcf_0_helper1),
+            }),
+            sketch_helper_rdcf1: Box::new(SketchHelper::RdcfPayload {
+                barrett_ctx: BarrettCtx::new(self.config.q),
+                case0_full: to_u128(&rdcf_1_helper0),
+                case1_full: to_u128(&rdcf_1_helper1),
+            }),
+        }
+    }
+
+    pub(super) fn get_sketch_helper_l2(&self) -> SketchHelper {
+
+    }
+
+    pub(super) fn get_sketch_helper_l3(&self) -> SketchHelper {
+
     }
 }
 
