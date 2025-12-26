@@ -254,6 +254,7 @@ impl SharePhase {
     }
 }
 
+#[allow(dead_code)]
 fn send_u128(
     channel: &mut CommTrackingChannel,
     value: u128,
@@ -263,6 +264,7 @@ fn send_u128(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn recv_u128(
     channel: &mut CommTrackingChannel,
 ) -> Result<u128, SharePhaseError> {
@@ -271,6 +273,7 @@ fn recv_u128(
     Ok(u128::from_le_bytes(buf))
 }
 
+#[allow(dead_code)]
 fn send_array(
     channel: &mut CommTrackingChannel,
     array: &Vec<Vec<u128>>,
@@ -290,6 +293,7 @@ fn send_array(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn recv_array(
     channel: &mut CommTrackingChannel,
     array: &mut Vec<Vec<u128>>,

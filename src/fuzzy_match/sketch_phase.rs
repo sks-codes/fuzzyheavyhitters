@@ -19,6 +19,7 @@ use anyhow::{anyhow, ensure, Result};
 
 pub struct Sketch {
     pub(super) config: SketchConfig,
+    #[allow(dead_code)]
     barrett_ctx: BarrettCtx,
 }
 
@@ -29,6 +30,7 @@ impl Sketch {
         Self { config, barrett_ctx }
     }
 
+    #[allow(dead_code)]
     fn sketch_interval_fss(
         &self, 
         _shared_ranges: &[SharedRange],
@@ -39,6 +41,7 @@ impl Sketch {
         Ok(true)
     }
 
+    #[allow(dead_code)]
     fn sketch_distance_fss<const N: usize>(
         &self,
         _shared_ranges: &[SharedRange],
@@ -59,13 +62,14 @@ impl Sketch {
         }
     }
 
+    #[allow(dead_code)]
     fn sketch_interval_fss_one_dimension(
         &self,
         key: IntervalFSSKey<1>,
         _role: bool,
         sketch_helper: SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<Vec<Modp>>> {
+    ) -> Result<Vec<Vec<Modp<'_>>>> {
         // We do not parallelize at this level. We only parallelize through multiple key pairs
         let domain_size = 1usize << self.config.h1;
         let modulus = 1u128 << self.config.h2;
@@ -117,17 +121,19 @@ impl Sketch {
         ])
     }
 
+    #[allow(dead_code)]
     fn sketch_distance_fss_l1_one_dimension(
         &self, 
         key: DistanceFSSKey<2>,
         role: bool, 
         sketch_helper: SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<Modp>> {
+    ) -> Result<Vec<Modp<'_>>> {
         let _ = (key, role, sketch_helper, prg);
         Ok(Vec::new())
     }
 
+    #[allow(dead_code)]
     fn shifted_dcf_to_dpf(
         &self,
         evals: &[Mod2k],
@@ -148,6 +154,7 @@ impl Sketch {
         self.shifted_dpf_to_dpf(&evals_dpf, domain_size, shift)
     }
 
+    #[allow(dead_code)]
     fn shifted_dpf_to_dpf(
         &self,
         evals: &[Mod2k],
@@ -164,6 +171,7 @@ impl Sketch {
         Ok(shifted)
     }
 
+    #[allow(dead_code)]
     fn dpf_to_unit_vector<'a>(
         &self,
         evals: &[Mod2k],
@@ -186,6 +194,7 @@ impl Sketch {
         ))
     }
 
+    #[allow(dead_code)]
     fn incremental_dcf_to_incremental_dpf (
         &self, 
         incremental_evals: &[Vec<Mod2k>],
@@ -207,13 +216,14 @@ impl Sketch {
         Ok(incremental_evals_dpf)
     }
 
+    #[allow(dead_code)]
     fn sketch_incremental_ldcf(
         &self,
         incremental_evals: &[Vec<Mod2k>],
         height: usize,
         sketch_helper: SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<(Modp, Modp)>> {
+    ) -> Result<Vec<(Modp<'_>, Modp<'_>)>> {
         ensure!(incremental_evals.len() == height, "Height mismatch, expected {height}, get {incremental_evals.len()}");
 
         let incremental_evals_dpf = self.incremental_dcf_to_incremental_dpf(
@@ -264,13 +274,14 @@ impl Sketch {
         Ok(sketches)
     }
 
+    #[allow(dead_code)]
     fn sketch_incremental_rdcf(
         &self,
         incremental_evals: &[Vec<Mod2k>],
         height: usize,
         sketch_helper: SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<(Modp, Modp)>> {
+    ) -> Result<Vec<(Modp<'_>, Modp<'_>)>> {
         ensure!(incremental_evals.len() == height, "Height mismatch, expected {height}, get {incremental_evals.len()}");
 
         let incremental_evals_dpf = self.incremental_dcf_to_incremental_dpf(
@@ -317,6 +328,7 @@ impl Sketch {
         Ok(sketches)
     }
 
+    #[allow(dead_code)]
     fn sketch_shift_consistency(
         &self,
         a: &[Mod2k],
@@ -324,7 +336,7 @@ impl Sketch {
         shift: usize,
         domain_size: usize,
         prg: &mut PRG,
-    ) -> Result<Modp> {
+    ) -> Result<Modp<'_>> {
         ensure!(
             a.len() == domain_size && b.len() == domain_size,
             "length mismatch for shift consistency sketch"
@@ -339,6 +351,7 @@ impl Sketch {
         Ok(dot_product_modp(barrett_ctx, &rs, &subtracted))
     }
 
+    #[allow(dead_code)]
     fn subtract_shifted_mod2k_to_modp<'a>(&self, a: &[Mod2k], b: &[Mod2k], shift: usize, ctx: &'a BarrettCtx) -> Vec<Modp<'a>> {
         // Only shift left!!!
         let modulus = 1u128 << self.config.h2;
@@ -381,6 +394,7 @@ impl Sketch {
         let modulus = 1u128 << self.config.h2;
         let domain_size = 1usize << self.config.h1;
         let delta = self.config.delta;
+        let barrett_ctx = BarrettCtx::new(self.config.q);
 
         // Base vectors for degree-1 (p = 1) polynomial payloads.
         let vec0: Vec<Mod2k> = (0..domain_size)
@@ -434,28 +448,32 @@ impl Sketch {
         let rdcf_1_helper1 =
             element_wise_subtract_mod2k(&zero_payload1, &element_wise_subtract_mod2k(&out_payload1, &right_payload1));
 
-        let to_pairs_single = |v: &[Mod2k]| v.iter().map(|x| (x.val(), 0u128)).collect::<Vec<(u128, u128)>>();
+        let to_components_single = |v: &[Mod2k]| -> Vec<Vec<u128>> {
+            let values: Vec<u128> = v.iter().map(|x| x.val()).collect();
+            let zeros = vec![0u128; v.len()];
+            vec![values, zeros]
+        };
 
         SketchHelper::DistanceFSSPayload {
-            sketch_helper_ldcf0: Box::new(SketchHelper::LdcfPayloadL1 {
-                barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_pairs_single(&ldcf_0_helper0),
-                case1_full: to_pairs_single(&ldcf_0_helper1),
+            sketch_helper_ldcf0: Box::new(SketchHelper::LdcfPayload {
+                barrett_ctx,
+                cases0_full: to_components_single(&ldcf_0_helper0),
+                cases1_full: to_components_single(&ldcf_0_helper1),
             }),
-            sketch_helper_ldcf1: Box::new(SketchHelper::LdcfPayloadL1 {
-                barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_pairs_single(&ldcf_1_helper0),
-                case1_full: to_pairs_single(&ldcf_1_helper1),
+            sketch_helper_ldcf1: Box::new(SketchHelper::LdcfPayload {
+                barrett_ctx,
+                cases0_full: to_components_single(&ldcf_1_helper0),
+                cases1_full: to_components_single(&ldcf_1_helper1),
             }),
-            sketch_helper_rdcf0: Box::new(SketchHelper::RdcfPayloadL1 {
-                barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_pairs_single(&rdcf_0_helper0),
-                case1_full: to_pairs_single(&rdcf_0_helper1),
+            sketch_helper_rdcf0: Box::new(SketchHelper::RdcfPayload {
+                barrett_ctx,
+                cases0_full: to_components_single(&rdcf_0_helper0),
+                cases1_full: to_components_single(&rdcf_0_helper1),
             }),
-            sketch_helper_rdcf1: Box::new(SketchHelper::RdcfPayloadL1 {
-                barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_pairs_single(&rdcf_1_helper0),
-                case1_full: to_pairs_single(&rdcf_1_helper1),
+            sketch_helper_rdcf1: Box::new(SketchHelper::RdcfPayload {
+                barrett_ctx,
+                cases0_full: to_components_single(&rdcf_1_helper0),
+                cases1_full: to_components_single(&rdcf_1_helper1),
             }),
         }
     }
@@ -471,6 +489,7 @@ impl Sketch {
     }
 }
 
+#[allow(dead_code)]
 fn dot_product_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>], b: &[Modp<'a>]) -> Modp<'a> {
     assert!(a.len() == b.len());
     a.iter()
@@ -478,11 +497,13 @@ fn dot_product_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>], b: &[Modp<'a>]) -> 
         .fold(Modp::zero(ctx), |acc, (x, y)| acc + (*x * *y))
 }
 
+#[allow(dead_code)]
 fn element_wise_product_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Vec<Modp<'a>> {
     assert!(a.len() == b.len());
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).collect()
 }
 
+#[allow(dead_code)]
 fn element_wise_subtract_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Vec<Modp<'a>> {
     assert!(a.len() == b.len());
     a.iter().zip(b.iter()).map(|(x, y)| *x - *y).collect()
@@ -493,6 +514,7 @@ fn element_wise_subtract_mod2k(a: &[Mod2k], b: &[Mod2k]) -> Vec<Mod2k> {
     a.iter().zip(b.iter()).map(|(x, y)| x.clone() - y.clone()).collect()
 }
 
+#[allow(dead_code)]
 fn duplicate_vector_mod2k(a: &[Mod2k]) -> Vec<Mod2k> {
     a.iter().flat_map(|x| [x.clone(), x.clone()]).collect()
 }

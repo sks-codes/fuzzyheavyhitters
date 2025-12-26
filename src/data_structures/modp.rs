@@ -19,6 +19,7 @@ impl U256 {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn add(self, other: U256) -> U256 {
         // Compute the sum mod 2^256. So if there is overflowing, it wraps around.
         // Should be fine for this particular interest of u128 modulo
@@ -27,6 +28,7 @@ impl U256 {
         U256 {hi, lo}
     }
 
+    #[allow(dead_code)]
     fn add_u128(self, other: u128) -> U256 {
         let (lo, c0) = self.lo.overflowing_add(other);
         let hi = self.hi.wrapping_add(c0 as u128);

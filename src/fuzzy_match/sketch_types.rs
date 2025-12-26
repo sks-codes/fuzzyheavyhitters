@@ -15,7 +15,7 @@ pub struct SketchConfig {
 }
 
 impl From<ProtocolParameters> for SketchConfig {
-    fn from(config: ProtocolParameters) -> Self {
+    fn from(_config: ProtocolParameters) -> Self {
         unimplemented!()
     }
 }
