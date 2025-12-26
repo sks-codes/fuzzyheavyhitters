@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul};
+use std::ops::{Add, AddAssign, Sub, Mul, MulAssign};
 use std::convert::TryFrom;
 use scuttlebutt::Block;
 use crate::{Group, Share};
@@ -79,6 +79,21 @@ impl Mod2k {
             num_bytes
         )
     }
+
+    pub fn pow(self, mut exponent: u128) -> Self {
+        let mut acc = Mod2k::one(self.modulus);
+        let mut base = self;
+        while exponent != 0 {
+            if (exponent & 1) == 1 {
+                acc = acc * base;
+            }
+            exponent >>= 1;
+            if exponent != 0 {
+                base = base * base;
+            }
+        }
+        acc
+    }
 }
 
 impl Add for Mod2k {
@@ -91,6 +106,32 @@ impl Add for Mod2k {
             modulus: self.modulus,
             modulus_mask: self.modulus_mask,
         }
+    }
+}
+
+impl Add<u128> for Mod2k {
+    type Output = Self;
+
+    fn add(self, rhs: u128) -> Self::Output {
+        Mod2k {
+            val: (self.val + (rhs & self.modulus_mask)) & self.modulus_mask,
+            modulus: self.modulus,
+            modulus_mask: self.modulus_mask,
+        }
+    }
+}
+
+impl AddAssign<u128> for Mod2k {
+    fn add_assign(&mut self, rhs: u128) {
+        self.val = (self.val + (rhs & self.modulus_mask)) & self.modulus_mask;
+    }
+}
+
+impl Add<Mod2k> for u128 {
+    type Output = Mod2k;
+
+    fn add(self, rhs: Mod2k) -> Self::Output {
+        rhs + self
     }
 }
 
@@ -117,6 +158,32 @@ impl Mul for Mod2k {
             modulus: self.modulus,
             modulus_mask: self.modulus_mask,
         }
+    }
+}
+
+impl Mul<u128> for Mod2k {
+    type Output = Self;
+
+    fn mul(self, rhs: u128) -> Self::Output {
+        Mod2k {
+            val: (self.val * (rhs & self.modulus_mask)) & self.modulus_mask,
+            modulus: self.modulus,
+            modulus_mask: self.modulus_mask,
+        }
+    }
+}
+
+impl MulAssign<u128> for Mod2k {
+    fn mul_assign(&mut self, rhs: u128) {
+        self.val = (self.val * (rhs & self.modulus_mask)) & self.modulus_mask;
+    }
+}
+
+impl Mul<Mod2k> for u128 {
+    type Output = Mod2k;
+
+    fn mul(self, rhs: Mod2k) -> Self::Output {
+        rhs * self
     }
 }
 

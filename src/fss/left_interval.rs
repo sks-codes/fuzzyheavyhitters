@@ -685,6 +685,7 @@ impl<const N: usize> LIntervalFSSKey<N>
         state.y
     }
 
+
     pub fn domain_size(&self) -> usize {
         self.cor_words.len()
     }

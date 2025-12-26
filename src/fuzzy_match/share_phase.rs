@@ -13,12 +13,14 @@ use crate::{
             UnknownLInfinityStrategy, 
             UnknownLpStrategy,
         },
-        shared_range::{SharedRange, ShareData},
+        shared_range::SharedRange,
     },
 };
 use scuttlebutt::AbstractChannel;
 
-use super::share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
+// Re-export legacy names for external callers/tests.
+pub use super::share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
+pub use super::shared_range::ShareData;
 
 use std::convert::TryInto;
 

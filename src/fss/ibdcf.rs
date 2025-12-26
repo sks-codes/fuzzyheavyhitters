@@ -232,6 +232,7 @@ impl IbDCFKey
         state.y_bit ^ state.bit
     }
 
+
     pub fn domain_size(&self) -> usize {
         self.cor_words.len()
     }

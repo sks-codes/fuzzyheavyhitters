@@ -361,6 +361,7 @@ impl<const N: usize> DpfKey<N>
         )
     }
 
+
     pub fn eval_bit(&self, state: &DpfEval<N>, modulus: u128, dir: bool) -> DpfEval<N> {
         let data: DpfData<N> = gen_layer_data(state.seed, modulus);
         let cw = self.cor_words[state.level].clone();

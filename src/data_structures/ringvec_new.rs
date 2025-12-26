@@ -220,7 +220,9 @@ mod tests {
         for bits in [1usize, 5, 8, 9, 15, 16, 17, 31, 32] { // exercise each width tier
             let modulus = 1u128 << bits; let len = 7;
             let a = DynRingVec::random(len, modulus); let b = DynRingVec::random(len, modulus);
-            let c_add = a.add(&b); let c_sub = a.sub(&b); let c_mul = a.mul(&b);
+            let c_add = a.clone() + b.clone();
+            let c_sub = a.clone() - b.clone();
+            let c_mul = a.clone() * b.clone();
             assert_eq!(c_add.len(), len); assert_eq!(c_sub.len(), len); assert_eq!(c_mul.len(), len);
             // Spot-check bit width containment
             for i in 0..len { assert!(c_add.get(i) < modulus); }
