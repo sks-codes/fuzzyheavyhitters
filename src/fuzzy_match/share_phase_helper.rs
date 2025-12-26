@@ -151,9 +151,9 @@ impl SharePhase {
 
         let modulus = 1u128 << self.config.h2;
 
-        let left_payload = RingVec::<1>::new([1], modulus);
-        let mid_payload = RingVec::<1>::new([0], modulus);
-        let right_payload = RingVec::<1>::new([1], modulus);
+        let left_payload = RingVec::new(vec![1], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
+        let mid_payload = RingVec::new(vec![0], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
+        let right_payload = RingVec::new(vec![1], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
 
         for (&alpha, &beta) in left_bound.iter().zip(right_bound.iter()) {
             if alpha > beta {

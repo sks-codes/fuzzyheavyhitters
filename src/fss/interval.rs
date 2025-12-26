@@ -40,7 +40,7 @@ impl<const N: usize> IntervalFSSEval<N> {
         &self.rdcf_eval 
     }
 
-    pub fn result(&self) -> RingVec<N> {
+    pub fn result(&self) -> RingVec {
         // Return by value to avoid borrowing a temporary
         self.ldcf_eval.y() - self.rdcf_eval.y()
     }
@@ -87,15 +87,20 @@ impl<const N: usize> IntervalFSSKey<N> {
     pub fn gen_interval_fss_key(
         alpha_bits: &[bool],
         beta_bits: &[bool],
-        a: &RingVec<N>,
-        b: &RingVec<N>,
-        c: &RingVec<N>,
+        a: &RingVec,
+        b: &RingVec,
+        c: &RingVec,
         modulus: u128,
     ) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
         let right_left_payload = c.clone() - b.clone();
         let left_left_payload = a.clone() + right_left_payload.clone();
         let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(alpha_bits, &left_left_payload, c, modulus);
-        let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(beta_bits, &right_left_payload, &RingVec::zero(modulus), modulus);
+        let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(
+            beta_bits,
+            &right_left_payload,
+            &RingVec::zero_with_len(right_left_payload.len(), modulus).expect("Failed to create zero ringvec"),
+            modulus,
+        );
         (
             IntervalFSSKey {
                 ldcf_key: ldcf_key0,
@@ -158,7 +163,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         &self,
         prefix: &[bool],
         modulus: u128,
-    ) -> RingVec<N> {
+    ) -> RingVec {
         let ldcf_eval = self.ldcf_key.eval_ldcf(prefix, modulus);
         let rdcf_eval = self.rdcf_key.eval_rdcf(prefix, modulus);
         let result = ldcf_eval - rdcf_eval;
@@ -169,7 +174,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         &self,
         modulus: u128,
         domain_size: usize,
-    ) -> Vec<RingVec<N>> {
+    ) -> Vec<RingVec> {
         let ldcf_full_domain_eval = self.ldcf_key.full_domain_eval(modulus, domain_size);
         let rdcf_full_domain_eval = self.rdcf_key.full_domain_eval(modulus, domain_size);
         ldcf_full_domain_eval.iter().zip(rdcf_full_domain_eval.iter()).map(|(ldcf, rdcf)| ldcf - rdcf).collect()
@@ -179,7 +184,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         &self,
         modulus: u128,
         domain_size: usize,
-    ) -> Vec<RingVec<N>> {
+    ) -> Vec<RingVec> {
         self.ldcf_key.full_domain_eval(modulus, domain_size)
     }
 
@@ -187,7 +192,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         &self,
         modulus: u128,
         domain_size: usize,
-    ) -> Vec<RingVec<N>> {
+    ) -> Vec<RingVec> {
         self.rdcf_key.full_domain_eval(modulus, domain_size)
     }
 }

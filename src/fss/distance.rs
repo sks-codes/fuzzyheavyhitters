@@ -113,13 +113,13 @@ impl<const N: usize> DistanceFSSKey<N> {
         for i in 0..N {
             x_powers[i] = (x_powers[i] * BINOMIAL_COEFFICIENTS[N-1][i]) % modulus;
         }
-        let zero_payload = RingVec::<N>::new([0; N], modulus);
+        let zero_payload = RingVec::zero_with_len(N, modulus).expect("Failed to create zero payload");
         for i in 0..N {
             if (i & 1) == 1 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
         }
-        let right_payload = RingVec::<N>::new(x_powers, modulus);
+        let right_payload = RingVec::new(x_powers.to_vec(), modulus).expect("Failed to create right payload");
         for i in 0..N {
             if (i & 1) == 1 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
@@ -128,13 +128,14 @@ impl<const N: usize> DistanceFSSKey<N> {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
         }
-        let left_payload = RingVec::<N>::new(x_powers, modulus);
-        let mut out_payload = RingVec::<N>::zero(modulus);
+        let left_payload = RingVec::new(x_powers.to_vec(), modulus).expect("Failed to create left payload");
+        let mut out_payload = RingVec::zero_with_len(N, modulus).expect("Failed to create output payload");
         out_payload[N-1] = max_distance;
 
+        let out_minus_left = out_payload.clone() - left_payload.clone();
         let (key00, key10) = LdcfKey::gen_ldcf_key(
             &left_bits,
-            &(out_payload - left_payload),
+            &out_minus_left,
             &zero_payload,
             modulus,
         );
@@ -153,10 +154,11 @@ impl<const N: usize> DistanceFSSKey<N> {
             modulus,
         );
 
+        let out_minus_right = out_payload.clone() - right_payload.clone();
         let (key03, key13) = RdcfKey::gen_rdcf_key(
             &right_bits,
             &zero_payload,
-            &(out_payload - right_payload),
+            &out_minus_right,
             modulus,
         );
 
@@ -297,19 +299,19 @@ impl<const N: usize> DistanceFSSKey<N> {
         }
     }
 
-    pub fn left_fss0(&self) -> &LdcfKey {
+    pub fn left_fss0(&self) -> &LdcfKey<N> {
         &self.left_fss.0
     }
 
-    pub fn left_fss1(&self) -> &LdcfKey {
+    pub fn left_fss1(&self) -> &LdcfKey<N> {
         &self.left_fss.1
     }
 
-    pub fn right_fss0(&self) -> &RdcfKey {
+    pub fn right_fss0(&self) -> &RdcfKey<N> {
         &self.right_fss.0
     }
 
-    pub fn right_fss1(&self) -> &RdcfKey {
+    pub fn right_fss1(&self) -> &RdcfKey<N> {
         &self.right_fss.1
     }
 }

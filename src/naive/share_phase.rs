@@ -30,8 +30,8 @@ impl SharePhaseNaive {
         let mut keys1 = Vec::new();
         let in_modulus = 1 << self.share_config.h1; 
         let out_modulus = 1 << self.share_config.h2;
-        let a = RingVec::<1>::zero(out_modulus);
-        let b = RingVec::<1>::new([1u128], out_modulus);
+        let a = RingVec::zero_with_len(1, out_modulus)?;
+        let b = RingVec::new(vec![1u128], out_modulus)?;
         for point in points {
             let positive_point = point.iter()
                 .zip(x.iter())

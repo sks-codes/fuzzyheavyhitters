@@ -11,11 +11,11 @@ use std::convert::TryInto;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DpfCW<const N: usize> {
     pub seed: [u8; AES_BLOCK_SIZE], 
     pub seed_bit: (bool, bool),
-    pub ys: (RingVec<N>, RingVec<N>), 
+    pub ys: (RingVec, RingVec), 
     pub y_bits: (Mod2k, Mod2k),
 }
 
@@ -24,8 +24,8 @@ impl<const N: usize> DpfCW<N> {
         let mut size = 0;
         size += AES_BLOCK_SIZE;
         size += 1; // for seed_bit
-        size += 2 * RingVec::<N>::byte_size_for_modulus(modulus);
-        size += RingVec::<2>::byte_size_for_modulus(modulus);
+        size += 2 * RingVec::byte_size_for_modulus_len(N, modulus);
+        size += RingVec::byte_size_for_modulus_len(2, modulus);
         size
     }
 
@@ -38,7 +38,8 @@ impl<const N: usize> DpfCW<N> {
         out.push(bits_byte);
         out.extend_from_slice(&self.ys.0.to_bytes());
         out.extend_from_slice(&self.ys.1.to_bytes());
-        let y_bits_ringvec = RingVec::<2>::from_vec(vec![self.y_bits.0.val, self.y_bits.1.val], self.ys.0.modulus()).expect("Failed to create RingVec from y_bits");
+        let y_bits_ringvec = RingVec::new(vec![self.y_bits.0.val, self.y_bits.1.val], self.ys.0.modulus())
+            .expect("Failed to create RingVec from y_bits");
         out.extend_from_slice(&y_bits_ringvec.to_bytes());
         out
     }
@@ -53,14 +54,17 @@ impl<const N: usize> DpfCW<N> {
         offset += 1;
         let seed_bits = (bits_byte & 0x1 != 0, bits_byte & 0x2 != 0);
 
-        let (ys0, used0) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys0");
+        let (ys0, used0) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys0");
         offset += used0;
 
-        let (ys1, used1) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys1");
+        let (ys1, used1) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys1");
         offset += used1;
 
-        let (y_bits_ringvec, used_y_bits) = RingVec::<2>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y_bits");
+        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y_bits");
         offset += used_y_bits;
+        assert_eq!(ys0.len(), N, "Unexpected ys0 length");
+        assert_eq!(ys1.len(), N, "Unexpected ys1 length");
+        assert_eq!(y_bits_ringvec.len(), 2, "Unexpected y_bits length");
         let y_bits = (Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus));
 
         (
@@ -75,11 +79,11 @@ impl<const N: usize> DpfCW<N> {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct DpfData<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
     pub bits: (bool, bool),
-    pub ys: (RingVec<N>, RingVec<N>),
+    pub ys: (RingVec, RingVec),
     pub y_bits: (Mod2k, Mod2k),
 }
 
@@ -130,12 +134,12 @@ impl<const N: usize> DpfKey<N> {
 }
 
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct DpfEval<const N: usize> {
     level: usize,
     seed: [u8; AES_BLOCK_SIZE],
     pub bit: bool,
-    pub y: RingVec<N>,
+    pub y: RingVec,
     pub y_bit: Mod2k,
 }
 
@@ -159,8 +163,9 @@ impl<const N: usize> DpfEval<N> {
         offset += AES_BLOCK_SIZE;
         let bit = bytes[offset] != 0;
         offset += 1;
-        let (y, used_y) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
+        let (y, used_y) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
         offset += used_y;
+        assert_eq!(y.len(), N, "Unexpected y length");
         let (y_bit, used_y_bit) = Mod2k::from_bytes(&bytes[offset..], modulus);
         offset += used_y_bit;
         (
@@ -175,7 +180,7 @@ impl<const N: usize> DpfEval<N> {
         )
     }
 
-    pub fn result(&self) -> RingVec<N> {
+    pub fn result(&self) -> RingVec {
         self.y.clone()
     }
 }
@@ -190,7 +195,10 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> D
         let mut out = DpfData {
             seeds: ([0; AES_BLOCK_SIZE], [0; AES_BLOCK_SIZE]),
             bits: (false, false),
-            ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
+            ys: (
+                RingVec::zero_with_len(N, modulus).expect("Failed to create left ringvec"),
+                RingVec::zero_with_len(N, modulus).expect("Failed to create right ringvec"),
+            ),
             y_bits: (Mod2k::zero(modulus), Mod2k::zero(modulus)),
         };
 
@@ -220,15 +228,15 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> D
 
 fn gen_cor_word<const N: usize>(
     alpha_bit: bool,
-    left: RingVec<N>,
-    right: RingVec<N>,
+    left: RingVec,
+    right: RingVec,
     modulus: u128,
     eval: &mut (DpfEval<N>, DpfEval<N>),
 ) -> DpfCW<N>
 {
     let data = (
-            gen_layer_data(eval.0.seed, modulus),
-            gen_layer_data(eval.1.seed, modulus)
+            gen_layer_data::<N>(eval.0.seed, modulus),
+            gen_layer_data::<N>(eval.1.seed, modulus)
         );
     let delta_seed = (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0), xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1));
     let delta_bits = (data.0.bits.0 ^ data.1.bits.0, data.0.bits.1 ^ data.1.bits.1);
@@ -238,7 +246,10 @@ fn gen_cor_word<const N: usize>(
     let mut cw = DpfCW {
         seed: [0u8; 16],
         seed_bit: (false, false),
-        ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
+        ys: (
+            RingVec::zero_with_len(N, modulus).expect("Failed to create left ringvec"),
+            RingVec::zero_with_len(N, modulus).expect("Failed to create right ringvec"),
+        ),
         y_bits: (Mod2k::zero(modulus), Mod2k::zero(modulus)),
     };
 
@@ -273,14 +284,14 @@ fn gen_cor_word<const N: usize>(
                     level: 0,
                     seed: new_seed.0,
                     bit: new_bits.0,
-                    y: RingVec::<N>::zero(modulus),
+                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create y left ringvec"),
                     y_bit: Mod2k::zero(modulus),
                 },
                 DpfEval {
                     level: 0,
                     seed: new_seed.1,
                     bit: new_bits.1,
-                    y: RingVec::<N>::zero(modulus),
+                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create y right ringvec"),
                     y_bit: Mod2k::zero(modulus),
                 }
             );
@@ -293,11 +304,12 @@ impl<const N: usize> DpfKey<N>
 {
 
     // Need alpha < beta
-    pub fn gen_dpf_key(alpha_bits: &[bool], a: &RingVec<N>, b: &RingVec<N>, modulus: u128) -> (DpfKey<N>, DpfKey<N>) {
+    pub fn gen_dpf_key(alpha_bits: &[bool], a: &RingVec, b: &RingVec, modulus: u128) -> (DpfKey<N>, DpfKey<N>) {
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
         let u = alpha_bits.len();
-        let mut payload_left = vec![RingVec::<N>::zero(modulus); u];
+        let zero = RingVec::zero_with_len(N, modulus).expect("Failed to create zero ringvec");
+        let mut payload_left = vec![zero.clone(); u];
         payload_left[0] = a.clone();
         let mut payload_right = vec![b.clone() - a.clone(); u];
         payload_right[0] = b.clone();
@@ -308,7 +320,7 @@ impl<const N: usize> DpfKey<N>
             level: 0,
             seed: root_seeds.0,
             bit: true,
-            y: RingVec::<N>::zero(modulus),
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create eval0 y"),
             y_bit: Mod2k::one(modulus),
         };
 
@@ -316,7 +328,7 @@ impl<const N: usize> DpfKey<N>
             level: 0,
             seed: root_seeds.1,
             bit: false,
-            y: RingVec::<N>::zero(modulus),
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create eval1 y"),
             y_bit: Mod2k::zero(modulus),
         };
 
@@ -327,8 +339,8 @@ impl<const N: usize> DpfKey<N>
         for (i, &alpha_bit) in alpha_bits.iter().enumerate() {
             let cw = gen_cor_word(
                 alpha_bit, 
-                payload_left[i],
-                payload_right[i], 
+                payload_left[i].clone(),
+                payload_right[i].clone(), 
                 modulus,
                 &mut eval
             );
@@ -350,8 +362,8 @@ impl<const N: usize> DpfKey<N>
     }
 
     pub fn eval_bit(&self, state: &DpfEval<N>, modulus: u128, dir: bool) -> DpfEval<N> {
-        let data = gen_layer_data(state.seed, modulus);
-        let cw = self.cor_words[state.level];
+        let data: DpfData<N> = gen_layer_data(state.seed, modulus);
+        let cw = self.cor_words[state.level].clone();
 
         let seed = if !dir {
             xor::<16>(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit))
@@ -374,7 +386,7 @@ impl<const N: usize> DpfKey<N>
             data.y_bits.1 + (cw.y_bits.1 * state.y_bit)
         };
 
-        new_y = new_y + state.y;
+        new_y = new_y + state.y.clone();
 
         DpfEval {
             level: state.level + 1,
@@ -386,8 +398,8 @@ impl<const N: usize> DpfKey<N>
     }
 
     pub fn expand_prefix(&self, state: &DpfEval<N>, modulus: u128) -> (DpfEval<N>, DpfEval<N>) {
-        let data = gen_layer_data(state.seed, modulus);
-        let cw = self.cor_words[state.level];
+        let data: DpfData<N> = gen_layer_data(state.seed, modulus);
+        let cw = self.cor_words[state.level].clone();
         
         let seeds = (
             xor::<16>(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
@@ -401,8 +413,8 @@ impl<const N: usize> DpfKey<N>
             data.ys.0 + (cw.ys.0 * state.y_bit.val),
             data.ys.1 + (cw.ys.1 * state.y_bit.val)
         );
-        new_ys.0 = new_ys.0 + state.y;
-        new_ys.1 = new_ys.1 + state.y;
+        new_ys.0 = new_ys.0 + state.y.clone();
+        new_ys.1 = new_ys.1 + state.y.clone();
         let new_y_bit = (
             data.y_bits.0 + (cw.y_bits.0 * state.y_bit),
             data.y_bits.1 + (cw.y_bits.1 * state.y_bit)
@@ -432,7 +444,7 @@ impl<const N: usize> DpfKey<N>
                 level: 0,
                 seed: self.root_seed.clone(),
                 bit: true,
-                y: RingVec::<N>::zero(modulus),
+                y: RingVec::zero_with_len(N, modulus).expect("Failed to create init y"),
                 y_bit: Mod2k::one(modulus),
             }
         } else {
@@ -440,13 +452,13 @@ impl<const N: usize> DpfKey<N>
                 level: 0,
                 seed: self.root_seed.clone(),
                 bit: false,
-                y: RingVec::<N>::zero(modulus),
+                y: RingVec::zero_with_len(N, modulus).expect("Failed to create init y"),
                 y_bit: Mod2k::zero(modulus),
             }
         }
     }
 
-    pub fn eval_dpf(&self, idx: &[bool], modulus: u128) -> RingVec<N> {
+    pub fn eval_dpf(&self, idx: &[bool], modulus: u128) -> RingVec {
         assert!(idx.len() <= self.domain_size());
         assert!(!idx.is_empty());
         let mut state = self.init_eval(modulus);

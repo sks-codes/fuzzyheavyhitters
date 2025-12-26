@@ -24,10 +24,10 @@ fn main() {
 
     // Hardcode the modulus and payload for benchmarking
     let modulus = 1u128 << 20;
-    let a = RingVec::<2>::from_vec(vec![5u128; 2], modulus).expect("Failed to create RingVec");
-    let b = RingVec::<2>::from_vec(vec![3u128; 2], modulus).expect("Failed to create RingVec");
+    let a = RingVec::new(vec![5u128; 2], modulus).expect("Failed to create RingVec");
+    let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = LdcfKey::gen_ldcf_key(
+    let (key0, key1) = LdcfKey::<2>::gen_ldcf_key(
         &alpha_bits,
         &a,
         &b,
@@ -42,6 +42,6 @@ fn main() {
     println!("Full domain evaluation took: {:?}", duration);
 
     // Verify correctness
-    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec<2>>>();
+    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec>>();
     println!("Full evaluation: {:?}", eval_both);
 }

@@ -19,9 +19,9 @@ fn test_intervalfss_basic_functionality() {
     println!("Alpha bits: {:?}, Beta bits: {:?}", alpha_bits, beta_bits);
 
     // Create payloads for left, middle, and right regions
-    let payload_left = RingVec::<N>::new([1], modulus);   // x < alpha
-    let payload_mid = RingVec::<N>::new([42], modulus);   // alpha <= x <= beta
-    let payload_right = RingVec::<N>::new([99], modulus); // x > beta
+    let payload_left = RingVec::new(vec![1], modulus).unwrap();   // x < alpha
+    let payload_mid = RingVec::new(vec![42], modulus).unwrap();   // alpha <= x <= beta
+    let payload_right = RingVec::new(vec![99], modulus).unwrap(); // x > beta
 
     // Generate FSS keys
     let (key0, key1) = IntervalFSSKey::gen_IntervalFSSKey(

@@ -13,16 +13,20 @@ fn bench_compare<const N: usize>(iterations: usize, modulus_bits: usize) {
     let modulus: u128 = 1u128 << modulus_bits;
 
     // Pre-build random vectors
-    let vecs_a_static: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
-    let vecs_b_static: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
+    let vecs_a_static: Vec<RingVec> = (0..iterations)
+        .map(|_| RingVec::random_with_len(N, modulus).expect("Failed to generate vecs_a_static"))
+        .collect();
+    let vecs_b_static: Vec<RingVec> = (0..iterations)
+        .map(|_| RingVec::random_with_len(N, modulus).expect("Failed to generate vecs_b_static"))
+        .collect();
 
     let vecs_a_dyn: Vec<DynRingVec> = (0..iterations).map(|_| DynRingVec::random(N, modulus)).collect();
     let vecs_b_dyn: Vec<DynRingVec> = (0..iterations).map(|_| DynRingVec::random(N, modulus)).collect();
 
     // --- Static RingVec ---
-    let start_add = Instant::now(); let mut acc_add = RingVec::<N>::zero(modulus); for i in 0..iterations { acc_add = vecs_a_static[i] + vecs_b_static[i]; } let dur_add = start_add.elapsed(); black_box(&acc_add);
-    let start_sub = Instant::now(); let mut acc_sub = RingVec::<N>::zero(modulus); for i in 0..iterations { acc_sub = vecs_a_static[i] - vecs_b_static[i]; } let dur_sub = start_sub.elapsed(); black_box(&acc_sub);
-    let start_mul = Instant::now(); let mut acc_mul = RingVec::<N>::zero(modulus); for i in 0..iterations { acc_mul = vecs_a_static[i] * vecs_b_static[i]; } let dur_mul = start_mul.elapsed(); black_box(&acc_mul);
+    let start_add = Instant::now(); let mut acc_add = RingVec::zero_with_len(N, modulus).expect("Failed to create add accumulator"); for i in 0..iterations { acc_add = &vecs_a_static[i] + &vecs_b_static[i]; } let dur_add = start_add.elapsed(); black_box(&acc_add);
+    let start_sub = Instant::now(); let mut acc_sub = RingVec::zero_with_len(N, modulus).expect("Failed to create sub accumulator"); for i in 0..iterations { acc_sub = &vecs_a_static[i] - &vecs_b_static[i]; } let dur_sub = start_sub.elapsed(); black_box(&acc_sub);
+    let start_mul = Instant::now(); let mut acc_mul = RingVec::zero_with_len(N, modulus).expect("Failed to create mul accumulator"); for i in 0..iterations { acc_mul = &vecs_a_static[i] * &vecs_b_static[i]; } let dur_mul = start_mul.elapsed(); black_box(&acc_mul);
 
     // --- Dynamic DynRingVec ---
     let start_add_d = Instant::now(); let mut acc_add_d = DynRingVec::zero(N, modulus); for i in 0..iterations { acc_add_d = vecs_a_dyn[i].add(&vecs_b_dyn[i]); } let dur_add_d = start_add_d.elapsed(); black_box(&acc_add_d);

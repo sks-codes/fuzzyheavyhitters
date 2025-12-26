@@ -399,10 +399,12 @@ impl FssDealer {
                 let sum_bits = r0.iter().zip(r1.iter())
                     .map(|(&b0, &b1)| b0 ^ b1)
                     .collect::<Vec<_>>();
+                let one = RingVec::new(vec![1], out_modulus).expect("Failed to build one payload");
+                let zero = RingVec::new(vec![0], out_modulus).expect("Failed to build zero payload");
                 let (key0, key1) = DpfKey::<1>::gen_dpf_key(
                     &sum_bits,
-                    &RingVec::<1>::new([1], out_modulus),
-                    &RingVec::<1>::new([0], out_modulus),
+                    &one,
+                    &zero,
                     out_modulus
                 ); // 1 if equal, 0 if not
                 (key0, key1)
@@ -436,8 +438,8 @@ impl FssDealer {
                 // Check if distance_threshold + r0 + r1 would wrap around
                 let sum = self.distance_threshold + (r0 + r1) % in_modulus;
                 let wraps_around = sum >= in_modulus;
-                let zero_payload = RingVec::<1>::new([0], out_modulus);
-                let one_payload = RingVec::<1>::new([1], out_modulus);
+                let zero_payload = RingVec::new(vec![0], out_modulus).expect("Failed to create zero payload");
+                let one_payload = RingVec::new(vec![1], out_modulus).expect("Failed to create one payload");
                 if wraps_around {
                     // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
                     // Return 0 in the middle, 1 on left and right
@@ -481,7 +483,7 @@ impl FssDealer {
                     let (key01, key11) = RdcfKey::<1>::gen_rdcf_key(
                         &beta_bits,
                         &zero_payload,
-                        &(zero_payload - one_payload),
+                        &(zero_payload.clone() - one_payload.clone()),
                         out_modulus
                     );
 
@@ -506,8 +508,8 @@ impl FssDealer {
         let r1 = std_rng.random_range(0..modulus);
         random_pairs.push((r0, r1));
 
-        let zero_payload = RingVec::<1>::new([0], 2); 
-        let one_payload = RingVec::<1>::new([1], 2);
+        let zero_payload = RingVec::new(vec![0], 2).expect("Failed to create zero payload");
+        let one_payload = RingVec::new(vec![1], 2).expect("Failed to create one payload");
 
         // Check if count_threshold + r0 + r1 would wrap around
         let sum = self.count_threshold + (r0 + r1) % modulus;
@@ -530,7 +532,7 @@ impl FssDealer {
             let (key01, key11) = RdcfKey::<1>::gen_rdcf_key(
                 &beta_bits,
                 &zero_payload,
-                &(zero_payload - one_payload),
+                &(zero_payload.clone() - one_payload.clone()),
                 2,
             );
 

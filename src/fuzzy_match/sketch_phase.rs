@@ -3,14 +3,13 @@ use crate::{
     data_structures::{
         modp::{BarrettCtx, Modp},
         mod2k::Mod2k,
-        ringvec::RingVec,
     }, 
     fss::{
         distance::DistanceFSSKey,  
         interval::IntervalFSSKey}, 
     fuzzy_match::{
         share_phase::SharePhaseError, 
-        share_types::{DictionaryType, DistanceMetric, ShareMethod}, 
+        share_types::{DistanceMetric, ShareMethod}, 
         shared_range::SharedRange, shared_sketch::SketchData, 
         sketch_helper::SketchHelper,
         sketch_types::SketchConfig,
@@ -19,22 +18,23 @@ use crate::{
 use anyhow::{anyhow, ensure, Result};
 
 pub struct Sketch {
-    pub(super) config: SketchConfig, 
+    pub(super) config: SketchConfig,
+    barrett_ctx: BarrettCtx,
 }
 
 impl Sketch {
     pub fn new<C: Into<SketchConfig>>(config: C) -> Self {
-        Self {
-            config: config.into(),
-        }
+        let config = config.into();
+        let barrett_ctx = BarrettCtx::new(config.q);
+        Self { config, barrett_ctx }
     }
 
     fn sketch_interval_fss(
         &self, 
-        shared_ranges: &[SharedRange],
-        sketch_data: &[SketchData],
-        seed: [u8; AES_KEY_SIZE],
-        other_server_channels: &mut [CommTrackingChannel],
+        _shared_ranges: &[SharedRange],
+        _sketch_data: &[SketchData],
+        _seed: [u8; AES_KEY_SIZE],
+        _other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<bool> {
         Ok(true)
     }
@@ -46,33 +46,30 @@ impl Sketch {
         unimplemented!()
     }
 
-    pub fn get_sketch_helper(&self) -> SketchHelper {
-        match (&self.method, &self.metric) {
+    pub fn get_sketch_helper(&self) -> Result<SketchHelper> {
+        match (&self.config.method, &self.config.metric) {
             (ShareMethod::FSS, DistanceMetric::LInfinity) => self.get_sketch_helper_linf(),
             (ShareMethod::FSS, DistanceMetric::Lp { p }) => match p {
-                1 => self.get_sketch_helper_l1(),
-                2 => self.get_sketch_helper_l2(),
-                3 => self.get_sketch_helper_l3(),
-                _ => return Err(anyhow!("Currently only support sketching Lp with p = 1, 2, 3."))
+                1 => Ok(self.get_sketch_helper_l1()),
+                2 => Ok(self.get_sketch_helper_l2()),
+                3 => Ok(self.get_sketch_helper_l3()),
+                _ => Err(anyhow!("Currently only support sketching Lp with p = 1, 2, 3."))
             },
-            _ => {
-                panic!("Unsupported sketch helper configuration");
-            }
+            _ => Err(anyhow!("Unsupported sketch helper configuration")),
         }
     }
 
     fn sketch_interval_fss_one_dimension(
         &self,
         key: IntervalFSSKey<1>,
-        role: bool,
+        _role: bool,
         sketch_helper: SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<Vec<Modp>>> {
         // We do not parallelize at this level. We only parallelize through multiple key pairs
-        let domain_size = 1usize << self.h1;
-        let modulus = 1u128 << self.h2;
-        let delta = self.delta;
-        let barrett_ctx = BarrettCtx::new(self.q);
+        let domain_size = 1usize << self.config.h1;
+        let modulus = 1u128 << self.config.h2;
+        let delta = self.config.delta;
         
         let ldcf_key = key.ldcf_key();
         let rdcf_key = key.rdcf_key();
@@ -96,13 +93,28 @@ impl Sketch {
                 return Err(anyhow!("Sketch helper for interval fss type mismatch!"));
             }
         };
-        let z0 = self.sketch_incremental_ldcf(&ldcf_incremental_evals_mod2k, self.h1, sketch_helper_ldcf, prg);
-        let z1 = self.sketch_incremental_rdcf(&rdcf_incremental_evals_mod2k, self.h1, sketch_helper_rdcf, prg);
+        let z_ldcf = self.sketch_incremental_ldcf(&ldcf_incremental_evals_mod2k, self.config.h1, *sketch_helper_ldcf, prg)?;
+        let z_rdcf = self.sketch_incremental_rdcf(&rdcf_incremental_evals_mod2k, self.config.h1, *sketch_helper_rdcf, prg)?;
 
         // Checking whether last level of ldcf is shifted by 2*delta from last level of rdcf
-        let z_shift_inc = self.sketch_shift_consistency(&ldcf_incremental_evals_mod2k[self.h1-1], &rdcf_incremental_evals_mod2k[self.h1-1], 2 * delta as usize, domain_size, prg);
+        let z_shift_inc = self.sketch_shift_consistency(&ldcf_incremental_evals_mod2k[self.config.h1-1], &rdcf_incremental_evals_mod2k[self.config.h1-1], 2 * delta as usize, domain_size, prg)?;
 
-        Ok(vec![z_ldcf, z_rdcf, z_ldcf_inc, z_rdcf_inc, z_shift_inc])
+        let ctx = &self.barrett_ctx;
+        let flatten_pairs = |vals: &[(Modp, Modp)]| -> Vec<Modp> {
+            vals.iter()
+                .flat_map(|(a, b)| {
+                    [
+                        Modp::new(ctx, a.value()),
+                        Modp::new(ctx, b.value()),
+                    ]
+                })
+                .collect()
+        };
+        Ok(vec![
+            flatten_pairs(&z_ldcf),
+            flatten_pairs(&z_rdcf),
+            vec![z_shift_inc],
+        ])
     }
 
     fn sketch_distance_fss_l1_one_dimension(
@@ -112,37 +124,8 @@ impl Sketch {
         sketch_helper: SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<Modp>> {
-        let domain_size = 1usize << self.h1;
-        let modulus = 1u128 << self.h2;
-        let delta = self.delta;
-
-        let ldcf_key0 = key.left_fss0();       
-        let ldcf_key1 = key.left_fss1();
-        let rdcf_key0 = key.right_fss0();       
-        let rdcf_key1 = key.right_fss1();
-        
-        let ldcf0_full_evals = ldcf_key0.full_domain_incremental_eval(modulus, domain_size);
-        let ldcf1_full_evals = ldcf_key1.full_domain_incremental_eval(modulus, domain_size);
-        let rdcf0_full_evals = rdcf_key0.full_domain_incremental_eval(modulus, domain_size);
-        let rdcf1_full_evals = rdcf_key1.full_domain_incremental_eval(modulus, domain_size);
-
-
-        let ldcf0_incremental_evals_mod2k: Vec<Mod2k> = ldcf0_full_evals.iter().map(|evals| {
-            evals.iter().map(|x| Mod2k::new(x[0], modulus))
-        }).collect();
-        let ldcf1_incremental_evals_mod2k: Vec<Mod2k> = rdcf1_full_evals.iter().map(|evals| {
-            evals.iter().map(|x| Mod2k::new(x[0], modulus))
-        }).collect();
-        let rdcf0_incremental_evals_mod2k: Vec<Mod2k> = rdcf0_full_evals.iter().map(|evals| {
-            evals.iter().map(|x| Mod2k::new(x[0], modulus))
-        }).collect();
-        let rdcf1_incremental_evals_mod2k: Vec<Mod2k> = rdcf1_full_evals.iter().map(|evals| {
-            evals.iter().map(|x| Mod2k::new(x[0], modulus))
-        }).collect();
-
-        // Sketch each dpf
-
-        // Sketch last layer consistency between dpfs (shifted by delta, equal, ...)
+        let _ = (key, role, sketch_helper, prg);
+        Ok(Vec::new())
     }
 
     fn shifted_dcf_to_dpf(
@@ -156,13 +139,13 @@ impl Sketch {
         // Where the index of the entry being a-b is equal to the index of the last entry being a in the original vector
         // Push 0 in the end to keep the same length as the original vector
         ensure!(evals.len() == domain_size, "length mismatch between dcf sketch vector and domain_size");
-        let mut evals_dpf: Vec<Mod2k> = (0..(domain_size-1)).map(
-            |i| evals[i] - evals[i+1]
-        ).collect();
+        let mut evals_dpf: Vec<Mod2k> = (0..(domain_size-1))
+            .map(|i| evals[i] - evals[i+1])
+            .collect();
 
-        let modulus = 1u128 << self.h2;
+        let modulus = 1u128 << self.config.h2;
         evals_dpf.push(Mod2k::zero(modulus));
-        self.shifted_dpf_to_dpf(evals_dpf, domain_size, shift)
+        self.shifted_dpf_to_dpf(&evals_dpf, domain_size, shift)
     }
 
     fn shifted_dpf_to_dpf(
@@ -171,39 +154,36 @@ impl Sketch {
         domain_size: usize,
         shift: usize,
     ) -> Result<Vec<Mod2k>> {
-        let modulus = 1u128 << self.h2;
-        let shifted_evals = if shift < 0 {
-            [&evals[abs_shift..], vec![Mod2k::zero(modulus); abs_shift].as_slice()].concat()
-        } else {
-            [vec![Mod2k::zero(modulus); abs_shift].as_slice(), &evals[..domain_size-abs_shift]].concat()
-        };
-        shifted_evals
+        ensure!(evals.len() == domain_size, "length mismatch between dpf sketch vector and domain_size");
+        let modulus = 1u128 << self.config.h2;
+        let shift = shift.min(domain_size);
+        let mut shifted = vec![Mod2k::zero(modulus); domain_size];
+        if shift < domain_size {
+            shifted[shift..].clone_from_slice(&evals[..domain_size - shift]);
+        }
+        Ok(shifted)
     }
 
-    fn dpf_to_unit_vector(
+    fn dpf_to_unit_vector<'a>(
         &self,
         evals: &[Mod2k],
         domain_size: usize,
-        scale0: &[u128],
-        scale1: &[u128],
-    ) -> Result<(Vec<Modp>, Vec<Modp>)> {
+        scale0: &[Modp<'a>],
+        scale1: &[Modp<'a>],
+        barrett_ctx: &'a BarrettCtx,
+    ) -> Result<(Vec<Modp<'a>>, Vec<Modp<'a>>)> {
         // From a dpf in Z2k, there would always be two cases of payload in the non-zero entry
         // Either the entries differ by payload, or the entries differ by payload - 2^k.
-        let barrett_ctx = BarrettCtx::new(self.q);
-        let evals_modp: Vec<Modp> = evals.iter().map(|x| {
-            Modp::new(&barrett_ctx, x.val())
-        }).collect();
-        let scale0_modp: Vec<Modp> = scale0.iter().map(|x| {
-            Modp::new(&barrett_ctx, x)
-        }).collect();
-        let scale1_modp: Vec<Modp> = scale1.iter().map(|x| {
-            Modp::new(&barrett_ctx, x)
-        }).collect();
+        ensure!(scale0.len() == domain_size && scale1.len() == domain_size, "helper vector length mismatch");
+        let evals_modp: Vec<Modp<'a>> = evals
+            .iter()
+            .map(|x| Modp::new(barrett_ctx, x.val()))
+            .collect();
 
-        (
-            element_wise_product_modp(&evals, &scale0_modp),
-            element_wise_product_modp(&evals, &scale1_modp),
-        )
+        Ok((
+            element_wise_product_modp(&evals_modp, scale0),
+            element_wise_product_modp(&evals_modp, scale1),
+        ))
     }
 
     fn incremental_dcf_to_incremental_dpf (
@@ -220,7 +200,7 @@ impl Sketch {
             let domain_size = 1usize << level;
             let evals_dpf = self
                 .shifted_dcf_to_dpf(evals, domain_size, 0)
-                .map_err(|e| anyhow!("Failed to transform dcf at level {level} of ldcf into dpf: {e}"))?;
+                .map_err(|e| anyhow!("Failed to transform dcf at level {} of ldcf into dpf: {}", level, e))?;
             incremental_evals_dpf.push(evals_dpf);
         }
 
@@ -244,16 +224,21 @@ impl Sketch {
         let mut sketches: Vec<(Modp, Modp)> = Vec::new();
         // Sketch each level dpf
         for level in 0..height {
-            let (scale0, scale1) = sketch_helper.get_helper_vector(level);
+            let helper_vector = sketch_helper.get_helper_vector(level);
+            let (scale0_raw, scale1_raw) = helper_vector.component(0);
+            let barrett_ctx = &self.barrett_ctx;
+            let scale0: Vec<Modp> = scale0_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
+            let scale1: Vec<Modp> = scale1_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
             let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
                 &incremental_evals_dpf[level],
                 1 << level,
-                scale0,
-                scale1,
+                &scale0,
+                &scale1,
+                barrett_ctx,
             )?;
 
-            let z0 = dot_product_modp(&evals_unit_vector0, &evals_unit_vector0);
-            let z1 = dot_product_modp(&evals_unit_vector1, &evals_unit_vector1);
+            let z0 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector0, &evals_unit_vector0);
+            let z1 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector1, &evals_unit_vector1);
             sketches.push((z0, z1));
 
         }
@@ -261,7 +246,7 @@ impl Sketch {
         // Sketch consistency between levels 
         for level in 0..height-1 {
             let evals_i_duplicated = duplicate_vector_mod2k(&incremental_evals_dpf[level]);
-            let barrett_ctx = sketch_helper.barrett_ctx();
+            let barrett_ctx = &self.barrett_ctx;
             let evals_subtracted_case0 = self.subtract_shifted_mod2k_to_modp(&evals_i_duplicated, &incremental_evals_dpf[level+1], 0, barrett_ctx); // Recheck later
             let evals_subtracted_case1 = self.subtract_shifted_mod2k_to_modp(&evals_i_duplicated, &incremental_evals_dpf[level+1], 1, barrett_ctx); // Recheck later
 
@@ -269,10 +254,10 @@ impl Sketch {
             let domain_size = 1 << level;
             let mut rs_u128: Vec<u128> = vec![0u128; domain_size * 2];
             prg.random_u128s(&mut rs_u128);
-            let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(barrett_ctx, x)).collect();
+            let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(barrett_ctx, *x)).collect();
             
-            let z_ast = dot_product_modp(&rs, &evals_subtracted_case0);
-            let z_bullet = dot_product_modp(&rs, &evals_subtracted_case1);
+            let z_ast = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case0);
+            let z_bullet = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case1);
             sketches.push((z_ast, z_bullet));
         }
 
@@ -295,32 +280,37 @@ impl Sketch {
 
         let mut sketches: Vec<(Modp, Modp)> = Vec::new();
         for level in 0..height {
-            let (scale0, scale1) = sketch_helper.get_helper_vector(level);
+            let helper_vector = sketch_helper.get_helper_vector(level);
+            let (scale0_raw, scale1_raw) = helper_vector.component(0);
+            let barrett_ctx = &self.barrett_ctx;
+            let scale0: Vec<Modp> = scale0_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
+            let scale1: Vec<Modp> = scale1_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
             let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
                 &incremental_evals_dpf[level],
                 1 << level,
-                scale0,
-                scale1,
+                &scale0,
+                &scale1,
+                barrett_ctx,
             )?;
 
-            let z0 = dot_product_modp(&evals_unit_vector0, &evals_unit_vector0);
-            let z1 = dot_product_modp(&evals_unit_vector1, &evals_unit_vector1);
+            let z0 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector0, &evals_unit_vector0);
+            let z1 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector1, &evals_unit_vector1);
             sketches.push((z0, z1));
         }
 
         for level in 0..height-1 {
             let evals_i_duplicated = duplicate_vector_mod2k(&incremental_evals_dpf[level]);
-            let barrett_ctx = sketch_helper.barrett_ctx();
+            let barrett_ctx = &self.barrett_ctx;
             let evals_subtracted_case0 = self.subtract_shifted_mod2k_to_modp(&evals_i_duplicated, &incremental_evals_dpf[level+1], 0, barrett_ctx); // Recheck later
             let evals_subtracted_case1 = self.subtract_shifted_mod2k_to_modp(&evals_i_duplicated, &incremental_evals_dpf[level+1], 1, barrett_ctx); // Recheck later
 
             let domain_size = 1 << level;
             let mut rs_u128: Vec<u128> = vec![0u128; domain_size * 2];
             prg.random_u128s(&mut rs_u128);
-            let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(barrett_ctx, x)).collect();
+            let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(barrett_ctx, *x)).collect();
 
-            let z_ast = dot_product_modp(&rs, &evals_subtracted_case0);
-            let z_bullet = dot_product_modp(&rs, &evals_subtracted_case1);
+            let z_ast = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case0);
+            let z_bullet = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case1);
             sketches.push((z_ast, z_bullet));
         }
 
@@ -339,19 +329,19 @@ impl Sketch {
             a.len() == domain_size && b.len() == domain_size,
             "length mismatch for shift consistency sketch"
         );
-        let barrett_ctx = BarrettCtx::new(self.q);
-        let subtracted = self.subtract_shifted_mod2k_to_modp(a, b, shift, &barrett_ctx);
+        let barrett_ctx = &self.barrett_ctx;
+        let subtracted = self.subtract_shifted_mod2k_to_modp(a, b, shift, barrett_ctx);
 
         let mut rs_u128: Vec<u128> = vec![0u128; domain_size];
         prg.random_u128s(&mut rs_u128);
-        let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(&barrett_ctx, x)).collect();
+        let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(barrett_ctx, *x)).collect();
 
-        Ok(dot_product_modp(&rs, &subtracted))
+        Ok(dot_product_modp(barrett_ctx, &rs, &subtracted))
     }
 
     fn subtract_shifted_mod2k_to_modp<'a>(&self, a: &[Mod2k], b: &[Mod2k], shift: usize, ctx: &'a BarrettCtx) -> Vec<Modp<'a>> {
         // Only shift left!!!
-        let modulus = 1u128 << self.h2;
+        let modulus = 1u128 << self.config.h2;
         let shifted_a: Vec<Mod2k> = if shift > 0 { // Shift to the left
             [
                 a[..a.len() - shift].to_vec(),
@@ -375,7 +365,7 @@ impl Sketch {
         let modulus = 1u128 << self.config.h2;
         let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
         let case_2_const = case_2_const_inv.inv().unwrap();
-        SketchHelper::IntervalFSS {
+        Ok(SketchHelper::IntervalFSS {
             sketch_helper_ldcf: Box::new(SketchHelper::Ldcf {
                 barrett_ctx: barrett_ctx,
                 inv_value: case_2_const.value(),
@@ -384,11 +374,10 @@ impl Sketch {
                 barrett_ctx: barrett_ctx,
                 inv_value: case_2_const.value(),
             }),
-        }
+        })
     }
 
     pub(super) fn get_sketch_helper_l1(&self) -> SketchHelper {
-        let barrett_ctx = BarrettCtx::new(self.config.q);
         let modulus = 1u128 << self.config.h2;
         let domain_size = 1usize << self.config.h1;
         let delta = self.config.delta;
@@ -398,7 +387,7 @@ impl Sketch {
             .map(|_| Mod2k::new(1, modulus))
             .collect();
         let vec1: Vec<Mod2k> = (0..domain_size)
-            .map(|x| -Mod2k::new(x as u128, modulus))
+            .map(|x| Mod2k::zero(modulus) - Mod2k::new(x as u128, modulus))
             .collect();
 
         // zero_payload corresponds to constant 1.
@@ -410,8 +399,14 @@ impl Sketch {
         let right_payload1 = vec1.clone();
 
         // left_payload is the negation of right_payload.
-        let left_payload0: Vec<Mod2k> = vec0.iter().map(|x| -x).collect();
-        let left_payload1: Vec<Mod2k> = vec1.iter().map(|x| -x).collect();
+        let left_payload0: Vec<Mod2k> = vec0
+            .iter()
+            .map(|x| Mod2k::zero(modulus) - x.clone())
+            .collect();
+        let left_payload1: Vec<Mod2k> = vec1
+            .iter()
+            .map(|x| Mod2k::zero(modulus) - x.clone())
+            .collect();
 
         // out_payload carries the threshold term on the second coordinate.
         let out_payload0: Vec<Mod2k> = vec0.clone();
@@ -439,61 +434,65 @@ impl Sketch {
         let rdcf_1_helper1 =
             element_wise_subtract_mod2k(&zero_payload1, &element_wise_subtract_mod2k(&out_payload1, &right_payload1));
 
-        let to_u128 = |v: &[Mod2k]| v.iter().map(|x| x.val()).collect::<Vec<u128>>();
+        let to_pairs_single = |v: &[Mod2k]| v.iter().map(|x| (x.val(), 0u128)).collect::<Vec<(u128, u128)>>();
 
         SketchHelper::DistanceFSSPayload {
-            sketch_helper_ldcf0: Box::new(SketchHelper::LdcfPayload {
+            sketch_helper_ldcf0: Box::new(SketchHelper::LdcfPayloadL1 {
                 barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_u128(&ldcf_0_helper0),
-                case1_full: to_u128(&ldcf_0_helper1),
+                case0_full: to_pairs_single(&ldcf_0_helper0),
+                case1_full: to_pairs_single(&ldcf_0_helper1),
             }),
-            sketch_helper_ldcf1: Box::new(SketchHelper::LdcfPayload {
+            sketch_helper_ldcf1: Box::new(SketchHelper::LdcfPayloadL1 {
                 barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_u128(&ldcf_1_helper0),
-                case1_full: to_u128(&ldcf_1_helper1),
+                case0_full: to_pairs_single(&ldcf_1_helper0),
+                case1_full: to_pairs_single(&ldcf_1_helper1),
             }),
-            sketch_helper_rdcf0: Box::new(SketchHelper::RdcfPayload {
+            sketch_helper_rdcf0: Box::new(SketchHelper::RdcfPayloadL1 {
                 barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_u128(&rdcf_0_helper0),
-                case1_full: to_u128(&rdcf_0_helper1),
+                case0_full: to_pairs_single(&rdcf_0_helper0),
+                case1_full: to_pairs_single(&rdcf_0_helper1),
             }),
-            sketch_helper_rdcf1: Box::new(SketchHelper::RdcfPayload {
+            sketch_helper_rdcf1: Box::new(SketchHelper::RdcfPayloadL1 {
                 barrett_ctx: BarrettCtx::new(self.config.q),
-                case0_full: to_u128(&rdcf_1_helper0),
-                case1_full: to_u128(&rdcf_1_helper1),
+                case0_full: to_pairs_single(&rdcf_1_helper0),
+                case1_full: to_pairs_single(&rdcf_1_helper1),
             }),
         }
     }
 
     pub(super) fn get_sketch_helper_l2(&self) -> SketchHelper {
-
+        // Placeholder: reuse L1 helper structure until specialized helpers are implemented.
+        self.get_sketch_helper_l1()
     }
 
     pub(super) fn get_sketch_helper_l3(&self) -> SketchHelper {
-
+        // Placeholder: reuse L1 helper structure until specialized helpers are implemented.
+        self.get_sketch_helper_l1()
     }
 }
 
-fn dot_product_modp<'a>(a: &[Modp], b: &[Modp]) -> Modp<'a> {
+fn dot_product_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>], b: &[Modp<'a>]) -> Modp<'a> {
     assert!(a.len() == b.len());
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    a.iter()
+        .zip(b.iter())
+        .fold(Modp::zero(ctx), |acc, (x, y)| acc + (*x * *y))
 }
 
-fn element_wise_product_modp<'a>(a: &[Modp], b: &[Modp]) -> Vec<Modp<'a>> {
+fn element_wise_product_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Vec<Modp<'a>> {
     assert!(a.len() == b.len());
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).collect();
+    a.iter().zip(b.iter()).map(|(x, y)| *x * *y).collect()
 }
 
-fn element_wise_subtract_modp<'a>(a: &[Modp], b: &[Modp]) -> Vec<Modp<'a>> {
+fn element_wise_subtract_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Vec<Modp<'a>> {
     assert!(a.len() == b.len());
-    a.iter().zip(b.iter()).map(|x, y| x - y).collect();
+    a.iter().zip(b.iter()).map(|(x, y)| *x - *y).collect()
 }
 
 fn element_wise_subtract_mod2k(a: &[Mod2k], b: &[Mod2k]) -> Vec<Mod2k> {
     assert!(a.len() == b.len());
-    a.iter().zip(b.iter()).map(|x, y| x - y).collect();
+    a.iter().zip(b.iter()).map(|(x, y)| x.clone() - y.clone()).collect()
 }
 
 fn duplicate_vector_mod2k(a: &[Mod2k]) -> Vec<Mod2k> {
-    a.iter().flat_map(|x| [x, x]).collect()
+    a.iter().flat_map(|x| [x.clone(), x.clone()]).collect()
 }

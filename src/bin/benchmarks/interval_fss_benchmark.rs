@@ -28,11 +28,11 @@ fn main() {
 
     // Hardcode the modulus and payload for benchmarking
     let modulus = 1u128 << 20;
-    let a = RingVec::<2>::from_vec(vec![5u128; 2], modulus).expect("Failed to create RingVec");
-    let b = RingVec::<2>::from_vec(vec![3u128; 2], modulus).expect("Failed to create RingVec");
-    let c = RingVec::<2>::from_vec(vec![10u128; 2], modulus).expect("Failed to create RingVec");
+    let a = RingVec::new(vec![5u128; 2], modulus).expect("Failed to create RingVec");
+    let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
+    let c = RingVec::new(vec![10u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = IntervalFSSKey::gen_interval_fss_key(
+    let (key0, key1) = IntervalFSSKey::<2>::gen_interval_fss_key(
         &alpha_bits,
         &beta_bits,
         &a,
@@ -49,7 +49,7 @@ fn main() {
     println!("Full domain evaluation took: {:?}", duration);
 
     // Verify correctness
-    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec<2>>>();
+    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec>>();
     for i in 0..(1 << domain_size) {
         if i < alpha {
             assert_eq!(eval_both[i as usize], a);

@@ -1,7 +1,7 @@
 use mosaic::{
     fuzzy_match::client::Client,
     fuzzy_match::{
-        share_phase::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+        share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
     },
 };
 use std::time::Instant;

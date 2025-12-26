@@ -17,8 +17,8 @@ fn bench<const N: usize>(iterations: usize, depth: usize, modulus_bits: usize) {
     // Random alpha prefix bits
     let alpha_bits: Vec<bool> = (0..depth).map(|_| rand::random::<bool>()).collect();
     // Random payload vectors a, b
-    let a = RingVec::<N>::random(modulus);
-    let b = RingVec::<N>::random(modulus);
+    let a = RingVec::random_with_len(N, modulus).expect("Failed to generate payload a");
+    let b = RingVec::random_with_len(N, modulus).expect("Failed to generate payload b");
 
     let (k0, _k1) = LdcfKey::<N>::gen_ldcf_key(&alpha_bits, &a, &b, modulus);
     // We'll just benchmark key 0.

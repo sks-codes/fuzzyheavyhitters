@@ -1,9 +1,4 @@
-use crate::{
-    data_structures::modp::{BarrettCtx, Modp},
-    fuzzy_match::{
-        sketch_phase::Sketch,
-    },
-};
+use crate::data_structures::modp::{BarrettCtx, Modp};
 
 
 // Precompute some transformations for vectors, such as scaling matrices.
@@ -64,14 +59,17 @@ pub enum SketchHelper {
 }
 
 #[derive(Clone)]
-pub enum HelperVector {
-    Scalar(Vec<Modp>, Vec<Modp>),
-    Pair(Vec<(Modp, Modp)>, Vec<(Modp, Modp)>),
-    Triple(Vec<(Modp, Modp, Modp)>, Vec<(Modp, Modp, Modp)>),
-    Quad(Vec<(Modp, Modp, Modp, Modp)>, Vec<(Modp, Modp, Modp, Modp)>),
+pub enum HelperVector<'a> {
+    Scalar(Vec<Modp<'a>>, Vec<Modp<'a>>),
+    Pair(Vec<(Modp<'a>, Modp<'a>)>, Vec<(Modp<'a>, Modp<'a>)>),
+    Triple(Vec<(Modp<'a>, Modp<'a>, Modp<'a>)>, Vec<(Modp<'a>, Modp<'a>, Modp<'a>)>),
+    Quad(
+        Vec<(Modp<'a>, Modp<'a>, Modp<'a>, Modp<'a>)>,
+        Vec<(Modp<'a>, Modp<'a>, Modp<'a>, Modp<'a>)>,
+    ),
 }
 
-impl HelperVector {
+impl<'a> HelperVector<'a> {
     pub fn component_count(&self) -> usize {
         match self {
             HelperVector::Scalar(..) => 1,
@@ -81,7 +79,7 @@ impl HelperVector {
         }
     }
 
-    pub fn component(&self, idx: usize) -> (Vec<Modp>, Vec<Modp>) {
+    pub fn component(&self, idx: usize) -> (Vec<Modp<'a>>, Vec<Modp<'a>>) {
         match self {
             HelperVector::Scalar(case0, case1) => {
                 assert!(idx == 0);
@@ -130,7 +128,7 @@ impl SketchHelper {
         }
     }
 
-    pub fn get_helper_vector(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector(&self, level: usize) -> HelperVector<'_> {
         match self {
             SketchHelper::Ldcf { .. } | SketchHelper::Rdcf { .. } => {
                 self.get_helper_vector_dcf(level)
@@ -155,7 +153,7 @@ impl SketchHelper {
         }
     }
 
-    fn get_helper_vector_dcf(&self, level: usize) -> HelperVector {
+    fn get_helper_vector_dcf(&self, level: usize) -> HelperVector<'_> {
         let inv_value = self.inv_value();
         let domain_size = 1usize << level;
         let barrett_ctx = self.barrett_ctx();
@@ -166,22 +164,22 @@ impl SketchHelper {
     }
 }
 
-fn helper_vector_from_cases(
-    barrett_ctx: &BarrettCtx,
-    case0_full: &[u128],
-    case1_full: &[u128],
+fn helper_vector_from_cases<'a>(
+    barrett_ctx: &'a BarrettCtx,
+    case0_full: &'a [u128],
+    case1_full: &'a [u128],
     level: usize,
-) -> (Vec<Modp>, Vec<Modp>) {
+) -> (Vec<Modp<'a>>, Vec<Modp<'a>>) {
     let domain_size = 1usize << level;
     let slice_end0 = case0_full.len().min(domain_size);
     let slice_end1 = case1_full.len().min(domain_size);
-    let mut case0: Vec<Modp> = case0_full[..slice_end0]
+    let mut case0: Vec<Modp<'a>> = case0_full[..slice_end0]
         .iter()
-        .map(|x| Modp::new(barrett_ctx, x))
+        .map(|x| Modp::new(barrett_ctx, *x))
         .collect();
-    let mut case1: Vec<Modp> = case1_full[..slice_end1]
+    let mut case1: Vec<Modp<'a>> = case1_full[..slice_end1]
         .iter()
-        .map(|x| Modp::new(barrett_ctx, x))
+        .map(|x| Modp::new(barrett_ctx, *x))
         .collect();
     case0.resize(domain_size, Modp::zero(barrett_ctx));
     case1.resize(domain_size, Modp::zero(barrett_ctx));
@@ -189,7 +187,7 @@ fn helper_vector_from_cases(
 }
 
 impl SketchHelper {
-    pub fn get_helper_vector_ldcf_payload_l1(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_ldcf_payload_l1(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::LdcfPayloadL1 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)
@@ -210,7 +208,7 @@ impl SketchHelper {
         HelperVector::Pair(case0, case1)
     }
 
-    pub fn get_helper_vector_rdcf_payload_l1(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_rdcf_payload_l1(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::RdcfPayloadL1 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)
@@ -231,7 +229,7 @@ impl SketchHelper {
         HelperVector::Pair(case0, case1)
     }
 
-    pub fn get_helper_vector_ldcf_payload_l2(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_ldcf_payload_l2(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::LdcfPayloadL2 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)
@@ -252,7 +250,7 @@ impl SketchHelper {
         HelperVector::Triple(case0, case1)
     }
 
-    pub fn get_helper_vector_rdcf_payload_l2(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_rdcf_payload_l2(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::RdcfPayloadL2 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)
@@ -273,7 +271,7 @@ impl SketchHelper {
         HelperVector::Triple(case0, case1)
     }
 
-    pub fn get_helper_vector_ldcf_payload_l3(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_ldcf_payload_l3(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::LdcfPayloadL3 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)
@@ -294,7 +292,7 @@ impl SketchHelper {
         HelperVector::Quad(case0, case1)
     }
 
-    pub fn get_helper_vector_rdcf_payload_l3(&self, level: usize) -> HelperVector {
+    pub fn get_helper_vector_rdcf_payload_l3(&self, level: usize) -> HelperVector<'_> {
         let (barrett_ctx, case0_full, case1_full) = match self {
             SketchHelper::RdcfPayloadL3 { barrett_ctx, case0_full, case1_full } => {
                 (barrett_ctx, case0_full, case1_full)

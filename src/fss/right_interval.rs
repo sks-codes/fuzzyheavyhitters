@@ -15,14 +15,14 @@ use std::convert::TryInto;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RIntervalFSSCW<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], 
                 [u8; AES_BLOCK_SIZE]),
     pub bits: ((Pair<bool>, Pair<bool>),
                (Pair<bool>, Pair<bool>)),
-    pub ys: ((RingVec<N>, RingVec<N>), 
-             (RingVec<N>, RingVec<N>)),
+    pub ys: ((RingVec, RingVec), 
+             (RingVec, RingVec)),
     pub y_bits: ((Pair<Mod2k>, Pair<Mod2k>),
                  (Pair<Mod2k>, Pair<Mod2k>)),
 }
@@ -39,11 +39,11 @@ impl<const N: usize> RIntervalFSSCW<N> {
         size += 1;
         
         // ys: 4 RingVec<N>
-        let ringvec_bytes_size = RingVec::<N>::byte_size_for_modulus(modulus);
+        let ringvec_bytes_size = RingVec::byte_size_for_modulus_len(N, modulus);
         size += 4 * ringvec_bytes_size;
         
         // y_bits: 1 RingVec<8> (8 ModInt values)
-        let y_bits_bytes_size = RingVec::<8>::byte_size_for_modulus(modulus);
+        let y_bits_bytes_size = RingVec::byte_size_for_modulus_len(8, modulus);
         size += y_bits_bytes_size;
         
         size
@@ -77,7 +77,8 @@ impl<const N: usize> RIntervalFSSCW<N> {
         y_bits_list.push(self.y_bits.1.0.second.val());
         y_bits_list.push(self.y_bits.1.1.first.val());
         y_bits_list.push(self.y_bits.1.1.second.val());
-        let y_bits_ringvec = RingVec::<8>::from_vec(y_bits_list, self.ys.0.0.modulus()).expect("Failed to create RingVec from y_bits");
+        let y_bits_ringvec = RingVec::new(y_bits_list, self.ys.0.0.modulus())
+            .expect("Failed to create RingVec from y_bits");
         out.extend(y_bits_ringvec.to_bytes());
         out
     }
@@ -102,17 +103,22 @@ impl<const N: usize> RIntervalFSSCW<N> {
         );
 
         // ys
-        let (ys00, used00) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
+        let (ys00, used00) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
         offset += used00;
-        let (ys01, used01) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
+        let (ys01, used01) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
         offset += used01;
-        let (ys10, used10) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
+        let (ys10, used10) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
         offset += used10;
-        let (ys11, used11) = RingVec::<N>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
+        let (ys11, used11) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
         offset += used11;
         // y_bits
-        let (y_bits_ringvec, used_y_bits) = RingVec::<8>::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
+        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
         offset += used_y_bits;
+        assert_eq!(ys00.len(), N, "Unexpected ys00 length");
+        assert_eq!(ys01.len(), N, "Unexpected ys01 length");
+        assert_eq!(ys10.len(), N, "Unexpected ys10 length");
+        assert_eq!(ys11.len(), N, "Unexpected ys11 length");
+        assert_eq!(y_bits_ringvec.len(), 8, "Unexpected y_bits length");
         let y_bits = ((
             Pair::new(Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus)),
             Pair::new(Mod2k::new(y_bits_ringvec[2], modulus), Mod2k::new(y_bits_ringvec[3], modulus))
@@ -132,11 +138,11 @@ impl<const N: usize> RIntervalFSSCW<N> {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct RIntervalFSSData<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
     pub bits: (Pair<bool>, Pair<bool>),
-    pub ys: (RingVec<N>, RingVec<N>),
+    pub ys: (RingVec, RingVec),
     pub y_bits: (Pair<Mod2k>, Pair<Mod2k>),
 }
 
@@ -188,12 +194,12 @@ impl<const N: usize> RIntervalFSSKey<N> {
 }
 
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct RIntervalFSSEval<const N: usize> {
     level: usize,
     seed: [u8; AES_BLOCK_SIZE],
     pub bit: Pair<bool>,
-    pub y: RingVec<N>,
+    pub y: RingVec,
     pub y_bit: Pair<Mod2k>,
 }
 
@@ -206,7 +212,10 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
         let mut out = RIntervalFSSData {
             seeds: ([0; AES_BLOCK_SIZE], [0; AES_BLOCK_SIZE]),
             bits: (Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)),
-            ys: (RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)),
+            ys: (
+                RingVec::zero_with_len(N, modulus).expect("Failed to create left ringvec"),
+                RingVec::zero_with_len(N, modulus).expect("Failed to create right ringvec"),
+            ),
             y_bits: (
                 Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
                 Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))
@@ -246,11 +255,11 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
 fn gen_cor_word<const N: usize>(
     alpha_bit: bool,
     beta_bit: bool,
-    left: RingVec<N>,
-    mid0: RingVec<N>,
-    mid1: RingVec<N>,
-    right0: RingVec<N>,
-    right1: RingVec<N>,
+    left: RingVec,
+    mid0: RingVec,
+    mid1: RingVec,
+    right0: RingVec,
+    right1: RingVec,
     modulus: u128,
     eval: &mut Vec<(RIntervalFSSEval<N>, RIntervalFSSEval<N>)>,
 ) -> RIntervalFSSCW<N>
@@ -278,8 +287,8 @@ fn gen_cor_word<const N: usize>(
             d1.bits.1 ^ d0.bits.1
         ));
         delta_ys.push((
-            d1.ys.0 - d0.ys.0, 
-            d1.ys.1 - d0.ys.1
+            d1.ys.0.clone() - d0.ys.0.clone(), 
+            d1.ys.1.clone() - d0.ys.1.clone()
         ));
         delta_y_bits.push((
             d1.y_bits.0 - d0.y_bits.0,
@@ -295,14 +304,23 @@ fn gen_cor_word<const N: usize>(
     let bits1 = (
         Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()), 
         Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()));
-    let ys1 = (RingVec::<N>::random(modulus), RingVec::<N>::random(modulus));
+    let ys1 = (
+        RingVec::random_with_len(N, modulus).expect("Failed to create ys1.0"),
+        RingVec::random_with_len(N, modulus).expect("Failed to create ys1.1"),
+    );
     let y_bits1 = (
         Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)), 
         Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)));
     let mut cw = RIntervalFSSCW {
         seeds: ([0u8; 16], seed1),
         bits: ((Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)), bits1),
-        ys: ((RingVec::<N>::zero(modulus), RingVec::<N>::zero(modulus)), ys1),
+        ys: (
+            (
+                RingVec::zero_with_len(N, modulus).expect("Failed to create left ys0.0"),
+                RingVec::zero_with_len(N, modulus).expect("Failed to create left ys0.1"),
+            ),
+            ys1,
+        ),
         y_bits: (
             (Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
              Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))), 
@@ -324,19 +342,19 @@ fn gen_cor_word<const N: usize>(
         if !alpha_bit && beta_bit {
             cw.seeds.0 = rand::rng().random::<[u8; 16]>();
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool01 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + left, delta_ys[0].1 + mid0);
+            cw.ys.0 = (delta_ys[0].0.clone() + left.clone(), delta_ys[0].1.clone() + mid0.clone());
             cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
                            delta_y_bits[0].1 + mint01);
         } else if !alpha_bit {
             cw.seeds.0 = delta_seed[0].1;
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool00 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + left, delta_ys[0].1 + right0);
+            cw.ys.0 = (delta_ys[0].0.clone() + left.clone(), delta_ys[0].1.clone() + right0.clone());
             cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
                            delta_y_bits[0].1 + mint00);
         } else if alpha_bit {
             cw.seeds.0 = delta_seed[0].0;
             cw.bits.0 = (bool00 ^ delta_bits[0].0, bool10 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + left, delta_ys[0].1 + left);
+            cw.ys.0 = (delta_ys[0].0.clone() + left.clone(), delta_ys[0].1.clone() + left.clone());
             cw.y_bits.0 = (delta_y_bits[0].0 + mint00, 
                            delta_y_bits[0].1 + mint10);
         }
@@ -344,13 +362,13 @@ fn gen_cor_word<const N: usize>(
         if !alpha_bit {
             cw.seeds.0 = delta_seed[0].1;
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool00 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + left, delta_ys[0].1 + mid0);
+            cw.ys.0 = (delta_ys[0].0.clone() + left.clone(), delta_ys[0].1.clone() + mid0.clone());
             cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
                            delta_y_bits[0].1 + mint00);
         } else {
             cw.seeds.0 = delta_seed[0].0;
             cw.bits.0 = (bool00 ^ delta_bits[0].0, bool10 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0 + left, delta_ys[0].1 + left);
+            cw.ys.0 = (delta_ys[0].0.clone() + left.clone(), delta_ys[0].1.clone() + left.clone());
             cw.y_bits.0 = (delta_y_bits[0].0 + mint00, 
                            delta_y_bits[0].1 + mint10);
         }
@@ -358,13 +376,13 @@ fn gen_cor_word<const N: usize>(
         if !beta_bit {
             cw.seeds.1 = delta_seed[1].1;
             cw.bits.1 = (bool01 ^ delta_bits[1].0, bool00 ^ delta_bits[1].1);
-            cw.ys.1 = (delta_ys[1].0 + mid1, delta_ys[1].1 + right1);
+            cw.ys.1 = (delta_ys[1].0.clone() + mid1.clone(), delta_ys[1].1.clone() + right1.clone());
             cw.y_bits.1 = (delta_y_bits[1].0 + mint01, 
                            delta_y_bits[1].1 + mint00);
         } else {
             cw.seeds.1 = delta_seed[1].0;
             cw.bits.1 = (bool00 ^ delta_bits[1].0, bool01 ^ delta_bits[1].1);
-            cw.ys.1 = (delta_ys[1].0 + mid1, delta_ys[1].1 + mid1);
+            cw.ys.1 = (delta_ys[1].0.clone() + mid1.clone(), delta_ys[1].1.clone() + mid1.clone());
             cw.y_bits.1 = (delta_y_bits[1].0 + mint00, 
                            delta_y_bits[1].1 + mint01);
         }
@@ -375,10 +393,9 @@ fn gen_cor_word<const N: usize>(
     let mut new_y_bits = vec![];
 
     if data.len() == 1 {
-        let d0 = data[0].0;
-        let d1 = data[0].1;
-        let eval0 = eval[0].0;
-        let eval1 = eval[0].1;
+        let (d0, d1): (RIntervalFSSData<N>, RIntervalFSSData<N>) = data[0].clone();
+        let eval0 = eval[0].0.clone();
+        let eval1 = eval[0].1.clone();
         if !alpha_bit {
             new_seeds.push((
                 xor::<16>(&d0.seeds.0, 
@@ -412,10 +429,10 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
         }    
     } else {
-        let d0 = data[0].0;
-        let d1 = data[0].1;
-        let eval0 = eval[0].0;
-        let eval1 = eval[0].1;
+        let d0 = data[0].0.clone();
+        let d1 = data[0].1.clone();
+        let eval0 = eval[0].0.clone();
+        let eval1 = eval[0].1.clone();
         if !alpha_bit {
             new_seeds.push((
                 xor::<16>(&d0.seeds.0, 
@@ -448,10 +465,9 @@ fn gen_cor_word<const N: usize>(
                              d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
         }
 
-        let d0 = data[1].0;
-        let d1 = data[1].1;
-        let eval0 = eval[1].0;
-        let eval1 = eval[1].1;
+        let (d0, d1): (RIntervalFSSData<N>, RIntervalFSSData<N>) = data[1].clone();
+        let eval0 = eval[1].0.clone();
+        let eval1 = eval[1].1.clone();
 
         if !beta_bit {
             new_seeds.push((
@@ -493,14 +509,14 @@ fn gen_cor_word<const N: usize>(
                     level: 0,
                     seed: seed.0,
                     bit: bits.0,
-                    y: RingVec::<N>::zero(modulus),
+                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create left eval y"),
                     y_bit: y_bits.0.clone(),
                 },
                 RIntervalFSSEval {
                     level: 0,
                     seed: seed.1,
                     bit: bits.1,
-                    y: RingVec::<N>::zero(modulus),
+                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create right eval y"),
                     y_bit: y_bits.1.clone(),
                 }
             )
@@ -517,16 +533,17 @@ impl<const N: usize> RIntervalFSSKey<N>
 {
 
     // Need alpha < beta
-    pub fn gen_rinterval_fss_key(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec<N>, b: RingVec<N>, c: RingVec<N>, modulus: u128) -> (RIntervalFSSKey<N>, RIntervalFSSKey<N>) {
+    pub fn gen_rinterval_fss_key(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec, b: RingVec, c: RingVec, modulus: u128) -> (RIntervalFSSKey<N>, RIntervalFSSKey<N>) {
         assert!(alpha_bits.len() == beta_bits.len());
         assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
 
         let u = alpha_bits.len();
-        let mut payload_left = vec![RingVec::<N>::zero(modulus); u];
+        let zero = RingVec::zero_with_len(N, modulus).expect("Failed to create zero ringvec");
+        let mut payload_left = vec![zero.clone(); u];
         payload_left[0] = a.clone();
         let mut payload_mid0 = vec![b.clone() - a.clone(); u];
         payload_mid0[0] = b.clone();
-        let mut payload_mid1 = vec![RingVec::<N>::zero(modulus); u];
+        let mut payload_mid1 = vec![zero.clone(); u];
         payload_mid1[0] = b.clone();
         let mut payload_right0 = vec![c.clone() - a.clone(); u];
         payload_right0[0] = c.clone();   
@@ -539,7 +556,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             level: 0,
             seed: root_seeds.0,
             bit: Pair::new(true, false),
-            y: RingVec::<N>::zero(modulus),
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create eval0 y"),
             y_bit: Pair::new(Mod2k::one(modulus), Mod2k::zero(modulus)),
         };
 
@@ -547,7 +564,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             level: 0,
             seed: root_seeds.1,
             bit: Pair::new(false, false),
-            y: RingVec::<N>::zero(modulus),
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create eval1 y"),
             y_bit: Pair::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
         };
 
@@ -559,11 +576,11 @@ impl<const N: usize> RIntervalFSSKey<N>
             let cw = gen_cor_word(
                 alpha_bit, 
                 beta_bit, 
-                payload_left[i],
-                payload_mid0[i], 
-                payload_mid1[i],
-                payload_right0[i], 
-                payload_right1[i],
+                payload_left[i].clone(),
+                payload_mid0[i].clone(), 
+                payload_mid1[i].clone(),
+                payload_right0[i].clone(), 
+                payload_right1[i].clone(),
                 modulus,
                 &mut eval
             );
@@ -585,7 +602,7 @@ impl<const N: usize> RIntervalFSSKey<N>
     }
 
     pub fn eval_bit(&self, state: &RIntervalFSSEval<N>, modulus: u128, dir: bool) -> RIntervalFSSEval<N> {
-        let data = gen_layer_data(state.seed, modulus);
+        let data: RIntervalFSSData<N> = gen_layer_data(state.seed, modulus);
         let mut seed = if !dir {
             data.seeds.0.clone()
         } else {
@@ -607,7 +624,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             data.y_bits.1.clone()
         };
 
-        let cw = self.cor_words[state.level];
+        let cw = self.cor_words[state.level].clone();
 
         seed = xor::<16>(&seed,
                         &xor::<16>(&and_bit::<16>(cw.seeds.0, state.bit.first),
@@ -628,7 +645,7 @@ impl<const N: usize> RIntervalFSSKey<N>
             new_y_bit + (cw.y_bits.0.1 * state.y_bit.first) + (cw.y_bits.1.1 * state.y_bit.second)
         };
 
-        new_y = new_y + state.y;
+        new_y = new_y + state.y.clone();
 
         RIntervalFSSEval {
             level: state.level + 1,
@@ -649,12 +666,12 @@ impl<const N: usize> RIntervalFSSKey<N>
             level: 0,
             seed: self.root_seed.clone(),
             bit: Pair::new(!self.key_idx, false),
-            y: RingVec::<N>::zero(modulus),
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create init y"),
             y_bit: Pair::new(y_bit_first, Mod2k::zero(modulus)),
         }
     }
 
-    pub fn eval_rinterval_fss(&self, idx: &[bool], modulus: u128) -> RingVec<N> {
+    pub fn eval_rinterval_fss(&self, idx: &[bool], modulus: u128) -> RingVec {
         debug_assert!(idx.len() <= self.domain_size());
         debug_assert!(!idx.is_empty());
         let mut state = self.eval_init(modulus);

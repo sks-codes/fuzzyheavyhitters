@@ -14,8 +14,8 @@ fn test_rdcf_basic_functionality() {
     alpha_bits.reverse(); // Reverse bits for correct order
 
     // Create payloads for left, middle, and right regions
-    let payload_left = RingVec::<N>::new([1], modulus);   // x < alpha
-    let payload_right = RingVec::<N>::new([99], modulus); // x > beta
+    let payload_left = RingVec::new(vec![1], modulus).unwrap();   // x < alpha
+    let payload_right = RingVec::new(vec![99], modulus).unwrap(); // x > beta
 
     // Generate FSS keys
     let (key0, key1) = RdcfKey::gen_RdcfKey(

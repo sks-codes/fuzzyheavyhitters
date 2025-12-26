@@ -12,27 +12,31 @@ fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize) {
     let modulus: u128 = 1u128 << modulus_bits;
 
     // Pre-generate vectors to avoid timing RNG for every op inside tight loops.
-    let vecs_a: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
-    let vecs_b: Vec<RingVec<N>> = (0..iterations).map(|_| RingVec::<N>::random(modulus)).collect();
+    let vecs_a: Vec<RingVec> = (0..iterations)
+        .map(|_| RingVec::random_with_len(N, modulus).expect("Failed to generate vecs_a"))
+        .collect();
+    let vecs_b: Vec<RingVec> = (0..iterations)
+        .map(|_| RingVec::random_with_len(N, modulus).expect("Failed to generate vecs_b"))
+        .collect();
 
     // Addition
     let start_add = Instant::now();
-    let mut acc_add = RingVec::<N>::zero(modulus);
-    for i in 0..iterations { acc_add = vecs_a[i] + vecs_b[i]; }
+    let mut acc_add = RingVec::zero_with_len(N, modulus).expect("Failed to create add accumulator");
+    for i in 0..iterations { acc_add = &vecs_a[i] + &vecs_b[i]; }
     let dur_add = start_add.elapsed();
     black_box(&acc_add);
 
     // Subtraction
     let start_sub = Instant::now();
-    let mut acc_sub = RingVec::<N>::zero(modulus);
-    for i in 0..iterations { acc_sub = vecs_a[i] - vecs_b[i]; }
+    let mut acc_sub = RingVec::zero_with_len(N, modulus).expect("Failed to create sub accumulator");
+    for i in 0..iterations { acc_sub = &vecs_a[i] - &vecs_b[i]; }
     let dur_sub = start_sub.elapsed();
     black_box(&acc_sub);
 
     // Multiplication
     let start_mul = Instant::now();
-    let mut acc_mul = RingVec::<N>::zero(modulus);
-    for i in 0..iterations { acc_mul = vecs_a[i] * vecs_b[i]; }
+    let mut acc_mul = RingVec::zero_with_len(N, modulus).expect("Failed to create mul accumulator");
+    for i in 0..iterations { acc_mul = &vecs_a[i] * &vecs_b[i]; }
     let dur_mul = start_mul.elapsed();
     black_box(&acc_mul);
 
@@ -46,7 +50,7 @@ fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize) {
     let bytes_example = vecs_a[0].to_bytes();
     let start_de = Instant::now();
     let mut de_count = 0usize;
-    for _ in 0..iterations { let (_v, _used) = RingVec::<N>::from_bytes(&bytes_example, modulus).unwrap(); de_count += 1; }
+    for _ in 0..iterations { let (_v, _used) = RingVec::from_bytes(&bytes_example, modulus).unwrap(); de_count += 1; }
     let dur_de = start_de.elapsed();
     black_box(de_count);
 
