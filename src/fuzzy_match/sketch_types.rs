@@ -19,3 +19,29 @@ impl From<ProtocolParameters> for SketchConfig {
         unimplemented!()
     }
 }
+
+pub enum SketchValues<'a> {
+    Dcf {
+        last_layer: (Modp<'a>, Modp<'a>),
+        consistency: Vec<(Modp<'a>, Modp<'a>)>,
+    },
+    Linf {
+        ldcf: Box<SketchHelper>, // SketchHelper::Dcf for LDCF
+        rdcf: Box<SketchHelper>, // SketchHelper::Dcf for RDCF
+        consistency: Modp<'a>,
+    },
+    DcfPayload {
+        length: usize,
+        last_layer: Vec<(Modp<'a>, Modp<'a>)>,
+        last_layer_consistency: Vec<Modp<'a>>, // TRICKY!!! Currently only work if one of the payload is constant.
+        consistency: Vec<Vec<(Modp<'a>, Modp<'a>)>>,
+    },
+    Lp {
+        p: usize,
+        ldcf0: Box<SketchHelper>, // SketchHelper::DcfPayload for LDCF
+        ldcf1: Box<SketchHelper>, // SketchHelper::DcfPayload for LDCF
+        rdcf0: Box<SketchHelper>, // SketchHelper::DcfPayload for RDCF
+        rdcf1: Box<SketchHelper>, // SketchHelper::DcfPayload for RDCF
+        consistency: Modp<'a>,
+    },
+}
