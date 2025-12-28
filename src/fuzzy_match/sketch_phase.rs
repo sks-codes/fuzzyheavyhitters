@@ -397,74 +397,6 @@ impl Sketch {
     }
 
     #[allow(dead_code)]
-    fn sketch_incremental_ldcf_shift_payload(
-        &self,
-        incremental_evals: &[Vec<Vec<Mod2k>>],
-        height: usize,
-        shift: isize,
-        rescale: &[u128],
-        sketch_helper: SketchHelper,
-        prg: &mut PRG,
-    ) -> Result<Vec<Vec<(Modp<'_>, Modp<'_>)>>> {
-        let modulus = 1u128 << self.config.h2;
-        let component_count = incremental_evals
-            .get(0)
-            .and_then(|level0| level0.get(0))
-            .map(|payload| payload.len())
-            .ok_or_else(|| anyhow!("incremental evals payload is empty"))?;
-        ensure!(component_count > 0, "payload component count must be positive");
-
-        let incremental_evals_dpf = self.sketch_incremental_payload_common(incremental_evals, height, component_count)?;
-
-        let mut sketches: Vec<Vec<(Modp, Modp)>> = vec![Vec::new(); component_count];
-        if height > 0 {
-            let last_level = height - 1;
-            let helper_vector = sketch_helper.get_helper_vector(last_level);
-            ensure!(
-                helper_vector.component_count() == component_count,
-                "helper component count mismatch at level {last_level}: expected {component_count}, got {count}",
-                count = helper_vector.component_count()
-            );
-            let barrett_ctx = &self.barrett_ctx;
-            let domain_size = 1 << last_level;
-            ensure!(
-                rescale.len() == domain_size,
-                "rescale length mismatch: expected {domain_size}, got {len}",
-                len = rescale.len()
-            );
-            let rescale_modp: Vec<Modp> = rescale.iter().map(|v| Modp::new(barrett_ctx, *v)).collect();
-
-            for component_idx in 0..component_count {
-                let (scale0_raw, scale1_raw) = helper_vector.component(component_idx);
-                let scale0: Vec<Modp> =
-                    scale0_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
-                let scale1: Vec<Modp> =
-                    scale1_raw.iter().map(|m| Modp::new(barrett_ctx, m.value())).collect();
-
-                let shifted = Self::shift_mod2k_vec(&incremental_evals_dpf[component_idx][last_level], shift, modulus);
-                let (mut evals_unit_vector0, mut evals_unit_vector1) = self.dpf_to_unit_vector(
-                    &shifted,
-                    domain_size,
-                    &scale0,
-                    &scale1,
-                    barrett_ctx,
-                )?;
-
-                evals_unit_vector0 = element_wise_product_modp(&evals_unit_vector0, &rescale_modp);
-                evals_unit_vector1 = element_wise_product_modp(&evals_unit_vector1, &rescale_modp);
-
-                let z0 = dot_product_modp(barrett_ctx, &evals_unit_vector0, &evals_unit_vector0);
-                let z1 = dot_product_modp(barrett_ctx, &evals_unit_vector1, &evals_unit_vector1);
-                sketches[component_idx].push((z0, z1));
-            }
-        }
-
-        self.push_consistency_sketches_payload(&incremental_evals_dpf, height, prg, &mut sketches);
-        Ok(sketches)
-    }
-
-
-    #[allow(dead_code)]
     fn sketch_shift_consistency(
         &self,
         a: &[Mod2k],
@@ -505,47 +437,6 @@ impl Sketch {
 
         subtracted.iter().map(|x| Modp::new(ctx, x.val())).collect()
     }
-
-    fn push_consistency_sketches_payload<'a>(
-        &'a self,
-        incremental_evals_dpf: &[Vec<Vec<Mod2k>>],
-        height: usize,
-        prg: &mut PRG,
-        sketches: &mut Vec<Vec<(Modp<'a>, Modp<'a>)>>,
-    ) {
-        for level in 0..height.saturating_sub(1) {
-            let barrett_ctx = &self.barrett_ctx;
-            let domain_size = 1 << level;
-            let mut rs_u128: Vec<u128> = vec![0u128; domain_size * 2];
-            prg.random_u128s(&mut rs_u128);
-            let rs: Vec<Modp> = rs_u128
-                .iter()
-                .map(|x| Modp::new(barrett_ctx, *x))
-                .collect();
-
-            for (component_idx, sketches_component) in sketches.iter_mut().enumerate() {
-                let evals_i_duplicated =
-                    duplicate_vector_mod2k(&incremental_evals_dpf[component_idx][level]);
-                let evals_subtracted_case0 = self.subtract_shifted_mod2k_to_modp(
-                    &evals_i_duplicated,
-                    &incremental_evals_dpf[component_idx][level + 1],
-                    0,
-                    barrett_ctx,
-                );
-                let evals_subtracted_case1 = self.subtract_shifted_mod2k_to_modp(
-                    &evals_i_duplicated,
-                    &incremental_evals_dpf[component_idx][level + 1],
-                    1,
-                    barrett_ctx,
-                );
-
-                let z_ast = dot_product_modp(barrett_ctx, &rs, &evals_subtracted_case0);
-                let z_bullet = dot_product_modp(barrett_ctx, &rs, &evals_subtracted_case1);
-                sketches_component.push((z_ast, z_bullet));
-            }
-        }
-    }
-
 }
 
 impl Sketch {
