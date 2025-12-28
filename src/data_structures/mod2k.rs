@@ -1,7 +1,7 @@
-use std::ops::{Add, AddAssign, Sub, Mul, MulAssign};
-use std::convert::TryFrom;
-use scuttlebutt::Block;
 use crate::{Group, Share};
+use scuttlebutt::Block;
+use std::convert::TryFrom;
+use std::ops::{Add, AddAssign, Mul, MulAssign, Sub};
 
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub struct Mod2k {
@@ -76,7 +76,7 @@ impl Mod2k {
                 modulus,
                 modulus_mask,
             },
-            num_bytes
+            num_bytes,
         )
     }
 
@@ -100,7 +100,10 @@ impl Add for Mod2k {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for addition");
+        assert_eq!(
+            self.modulus, rhs.modulus,
+            "Moduli must be equal for addition"
+        );
         Mod2k {
             val: (self.val + rhs.val) & self.modulus_mask,
             modulus: self.modulus,
@@ -139,7 +142,10 @@ impl Sub for Mod2k {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for subtraction");
+        assert_eq!(
+            self.modulus, rhs.modulus,
+            "Moduli must be equal for subtraction"
+        );
         Mod2k {
             val: (self.val + self.modulus - rhs.val) & self.modulus_mask,
             modulus: self.modulus,
@@ -152,7 +158,10 @@ impl Mul for Mod2k {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        assert_eq!(self.modulus, rhs.modulus, "Moduli must be equal for multiplication");
+        assert_eq!(
+            self.modulus, rhs.modulus,
+            "Moduli must be equal for multiplication"
+        );
         Mod2k {
             val: (self.val * rhs.val) & self.modulus_mask,
             modulus: self.modulus,
@@ -193,11 +202,11 @@ impl Group for Mod2k {
         // Default to common modulus for now - this should be configurable
         Self::new(0, 256)
     }
-    
+
     fn one() -> Self {
         Self::new(1, 256)
     }
-    
+
     fn negate(&mut self) {
         if self.val == 0 {
             self.val = 0;
@@ -205,31 +214,31 @@ impl Group for Mod2k {
             self.val = self.modulus - self.val;
         }
     }
-    
+
     fn reduce(&mut self) {
         self.val = self.val & self.modulus_mask;
     }
-    
+
     fn add(&mut self, other: &Self) {
         assert_eq!(self.modulus, other.modulus, "Moduli must be equal");
         self.val = (self.val + other.val) & self.modulus_mask;
     }
-    
+
     fn add_lazy(&mut self, other: &Self) {
         assert_eq!(self.modulus, other.modulus, "Moduli must be equal");
         self.val = self.val + other.val; // No reduction for lazy
     }
-    
+
     fn mul(&mut self, other: &Self) {
         assert_eq!(self.modulus, other.modulus, "Moduli must be equal");
         self.val = (self.val * other.val) & self.modulus_mask;
     }
-    
+
     fn mul_lazy(&mut self, other: &Self) {
         assert_eq!(self.modulus, other.modulus, "Moduli must be equal");
         self.val = self.val * other.val; // No reduction for lazy
     }
-    
+
     fn sub(&mut self, other: &Self) {
         assert_eq!(self.modulus, other.modulus, "Moduli must be equal");
         if self.val >= other.val {
@@ -264,7 +273,7 @@ impl From<u32> for Mod2k {
 // Implement TryFrom<Block> for ModInt
 impl TryFrom<Block> for Mod2k {
     type Error = &'static str;
-    
+
     fn try_from(block: Block) -> Result<Self, Self::Error> {
         // Convert block to u128
         let val: u128 = unsafe { std::mem::transmute(block) };
@@ -283,6 +292,10 @@ impl Into<Block> for Mod2k {
 pub fn get_bit_width_from_modint(modint: &Mod2k) -> usize {
     let modulus = modint.modulus();
     let bit_width = (127 - modulus.leading_zeros()) as usize;
-    assert!(bit_width < 128, "ModInt modulus requires {} bits, must be < 128", bit_width);
+    assert!(
+        bit_width < 128,
+        "ModInt modulus requires {} bits, must be < 128",
+        bit_width
+    );
     bit_width
 }

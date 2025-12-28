@@ -1,20 +1,18 @@
+use clap::Parser;
 use mosaic::{
     channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
-    fuzzy_match::threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod},
     data_structures::mod2k::Mod2k,
+    fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod, ThresholdPhase},
 };
-use scuttlebutt::{AesRng, AbstractChannel};
-use std::time::Instant;
 use rand::Rng;
-use clap::Parser;
+use scuttlebutt::{AbstractChannel, AesRng};
+use std::time::Instant;
 
 fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
-        .map(|_| {
-            Mod2k::new(rng.random::<u128>(), modulus)
-        })
+        .map(|_| Mod2k::new(rng.random::<u128>(), modulus))
         .collect()
 }
 
@@ -28,9 +26,15 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     // Create channels
     let mut other_server_channel = if server {
-        connect_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        connect_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     } else {
-        listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        listen_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     };
 
     let threshold_config = ThresholdConfig {
@@ -42,7 +46,10 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     let threshold_phase = ThresholdPhase::new(threshold_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h3);
+    println!(
+        "Generating {} test inputs with bit length {}",
+        config.num_clients, config.h3
+    );
     let inputs = generate_test_inputs(config.num_clients, 1u128 << config.h3 as u128);
 
     println!("Starting server benchmark...");
@@ -58,15 +65,12 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     let start_time = Instant::now();
     let mut rng = AesRng::new();
     let threshold = Mod2k::new(config.threshold, 1u128 << config.h3);
-    let _results = threshold_phase.compare_with_threshold_gc(
-        &inputs,
-        threshold,
-        &mut other_server_channel,
-        &mut rng,
-    ).map_err(|e| format!("ThresholdPhase error: {:?}", e))?;
-    
+    let _results = threshold_phase
+        .compare_with_threshold_gc(&inputs, threshold, &mut other_server_channel, &mut rng)
+        .map_err(|e| format!("ThresholdPhase error: {:?}", e))?;
+
     let elapsed = start_time.elapsed();
-    
+
     // Print results
     println!("\n=== Server Benchmark Results ===");
     println!("Server time: {:?}", elapsed);

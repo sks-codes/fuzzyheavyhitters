@@ -1,5 +1,5 @@
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use aes::Aes128;
-use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
 use rand::Rng;
 
 pub struct PRG {
@@ -54,7 +54,7 @@ impl PRG {
     pub fn random_16byte_block(&mut self, blocks: &mut [[u8; 16]]) {
         // Create an array of AES blocks for encryption
         let mut aes_blocks: Vec<_> = (0..blocks.len())
-                .map(|_| {
+            .map(|_| {
                 let mut block = [0u8; 16];
                 block[8..].copy_from_slice(&self.counter.to_le_bytes());
                 self.counter += 1; // Increment counter for each block
@@ -72,8 +72,7 @@ impl PRG {
 
     pub fn random_32byte_block(&mut self, blocks: &mut [[u8; 32]]) {
         // Preallocate space for AES blocks (2 AES blocks per 32-byte block)
-        let mut aes_blocks: Vec<_> =
-            vec![GenericArray::default(); blocks.len() * 2];
+        let mut aes_blocks: Vec<_> = vec![GenericArray::default(); blocks.len() * 2];
 
         for (i, block) in blocks.iter_mut().enumerate() {
             // Embed the counter in the last 8 bytes of the 32-byte block

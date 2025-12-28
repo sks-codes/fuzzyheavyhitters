@@ -6,18 +6,18 @@ use rand::Rng;
 
 /// Runtime-length ring vector stored on the heap.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RingVecDyn {
+pub struct RingVec {
     vals: Vec<u128>,
     modulus_mask: u128, // Stores modulus - 1 for efficient bitwise modulo
 }
 
-/// Primary RingVec type (runtime length).
-pub type RingVec = RingVecDyn;
-
-impl RingVecDyn {
+impl RingVec {
     /// Create a new ring vector from a Vec, masking all inputs by the modulus.
     pub fn new(vals: Vec<u128>, modulus: u128) -> Result<Self> {
-        ensure!(modulus.is_power_of_two(), "Modulus must be a power of 2 and greater than 0");
+        ensure!(
+            modulus.is_power_of_two(),
+            "Modulus must be a power of 2 and greater than 0"
+        );
         let modulus_mask = modulus - 1;
         Ok(Self {
             vals: vals.into_iter().map(|v| v & modulus_mask).collect(),
@@ -32,7 +32,10 @@ impl RingVecDyn {
 
     /// Create a zero-initialized ring vector of the given length.
     pub fn zero_with_len(len: usize, modulus: u128) -> Result<Self> {
-        ensure!(modulus.is_power_of_two(), "Modulus must be a power of 2 and greater than 0");
+        ensure!(
+            modulus.is_power_of_two(),
+            "Modulus must be a power of 2 and greater than 0"
+        );
         Ok(Self {
             vals: vec![0; len],
             modulus_mask: modulus - 1,
@@ -41,7 +44,10 @@ impl RingVecDyn {
 
     /// Create a random ring vector of the given length.
     pub fn random_with_len(len: usize, modulus: u128) -> Result<Self> {
-        ensure!(modulus.is_power_of_two(), "Modulus must be a power of 2 and greater than 0");
+        ensure!(
+            modulus.is_power_of_two(),
+            "Modulus must be a power of 2 and greater than 0"
+        );
         let modulus_mask = modulus - 1;
         let mut rng = rand::rng();
         let vals = (0..len)
@@ -163,7 +169,7 @@ impl RingVecDyn {
             bytes.len()
         );
         let vals = decompress_ring_vec_data(&bytes[8..8 + data_bytes], len, bit_width)?;
-        let ring_vec = RingVecDyn::from_vec(vals, modulus)?;
+        let ring_vec = RingVec::from_vec(vals, modulus)?;
         Ok((ring_vec, 8 + data_bytes))
     }
 
@@ -185,7 +191,7 @@ impl RingVecDyn {
 
     /// Convenience wrapper for const generic length.
     pub fn byte_size_for_modulus<const N: usize>(modulus: u128) -> usize {
-        RingVecDyn::byte_size_for_modulus_len(N, modulus)
+        RingVec::byte_size_for_modulus_len(N, modulus)
     }
 
     /// Calculate the uncompressed size in bytes (using u128 per element).
@@ -194,20 +200,20 @@ impl RingVecDyn {
     }
 }
 
-impl Index<usize> for RingVecDyn {
+impl Index<usize> for RingVec {
     type Output = u128;
     fn index(&self, index: usize) -> &Self::Output {
         &self.vals[index]
     }
 }
 
-impl IndexMut<usize> for RingVecDyn {
+impl IndexMut<usize> for RingVec {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.vals[index]
     }
 }
 
-impl Add for RingVecDyn {
+impl Add for RingVec {
     type Output = Self;
     fn add(self, other: Self) -> Self::Output {
         self.checked_add(&other)
@@ -215,15 +221,15 @@ impl Add for RingVecDyn {
     }
 }
 
-impl Add<&RingVecDyn> for &RingVecDyn {
-    type Output = RingVecDyn;
-    fn add(self, other: &RingVecDyn) -> RingVecDyn {
+impl Add<&RingVec> for &RingVec {
+    type Output = RingVec;
+    fn add(self, other: &RingVec) -> RingVec {
         self.checked_add(other)
             .expect("RingVec add requires matching length and modulus")
     }
 }
 
-impl Sub for RingVecDyn {
+impl Sub for RingVec {
     type Output = Self;
     fn sub(self, other: Self) -> Self::Output {
         self.checked_sub(&other)
@@ -231,15 +237,15 @@ impl Sub for RingVecDyn {
     }
 }
 
-impl Sub<&RingVecDyn> for &RingVecDyn {
-    type Output = RingVecDyn;
-    fn sub(self, other: &RingVecDyn) -> RingVecDyn {
+impl Sub<&RingVec> for &RingVec {
+    type Output = RingVec;
+    fn sub(self, other: &RingVec) -> RingVec {
         self.checked_sub(other)
             .expect("RingVec sub requires matching length and modulus")
     }
 }
 
-impl Mul for RingVecDyn {
+impl Mul for RingVec {
     type Output = Self;
     fn mul(self, other: Self) -> Self::Output {
         self.checked_mul(&other)
@@ -247,22 +253,22 @@ impl Mul for RingVecDyn {
     }
 }
 
-impl Mul<&RingVecDyn> for &RingVecDyn {
-    type Output = RingVecDyn;
-    fn mul(self, other: &RingVecDyn) -> RingVecDyn {
+impl Mul<&RingVec> for &RingVec {
+    type Output = RingVec;
+    fn mul(self, other: &RingVec) -> RingVec {
         self.checked_mul(other)
             .expect("RingVec mul requires matching length and modulus")
     }
 }
 
-impl Add<u128> for RingVecDyn {
+impl Add<u128> for RingVec {
     type Output = Self;
     fn add(self, rhs: u128) -> Self::Output {
         self.scalar_op(rhs, |a, b| a + b)
     }
 }
 
-impl Sub<u128> for RingVecDyn {
+impl Sub<u128> for RingVec {
     type Output = Self;
     fn sub(self, rhs: u128) -> Self::Output {
         let modulus = self.modulus();
@@ -270,7 +276,7 @@ impl Sub<u128> for RingVecDyn {
     }
 }
 
-impl Mul<u128> for RingVecDyn {
+impl Mul<u128> for RingVec {
     type Output = Self;
     fn mul(self, rhs: u128) -> Self::Output {
         self.scalar_op(rhs, |a, b| a * b)
@@ -366,11 +372,11 @@ mod tests {
         // Test with 10-bit values (modulus = 1024)
         let modulus = 1024u128; // 2^10
         let values = vec![123, 456, 789, 1000];
-        let ring_vec = RingVecDyn::new(values, modulus).unwrap();
+        let ring_vec = RingVec::new(values, modulus).unwrap();
 
         // Test byte conversion
         let bytes = ring_vec.to_bytes();
-        let (reconstructed, bytes_consumed) = RingVecDyn::from_bytes(&bytes, modulus).unwrap();
+        let (reconstructed, bytes_consumed) = RingVec::from_bytes(&bytes, modulus).unwrap();
 
         // Check that values are preserved
         for i in 0..4 {
@@ -384,7 +390,7 @@ mod tests {
         assert_eq!(bytes_consumed, bytes.len());
 
         // Check compression effectiveness
-        let uncompressed_size = RingVecDyn::uncompressed_size_bytes(4);
+        let uncompressed_size = RingVec::uncompressed_size_bytes(4);
         let compressed_size = bytes.len();
         println!(
             "10-bit compression: {} bytes -> {} bytes ({:.1}x reduction)",
@@ -400,7 +406,7 @@ mod tests {
         assert_eq!(compressed_size, ring_vec.byte_size());
         assert_eq!(
             compressed_size,
-            RingVecDyn::byte_size_for_modulus_len(4, modulus)
+            RingVec::byte_size_for_modulus_len(4, modulus)
         );
     }
 
@@ -409,10 +415,10 @@ mod tests {
         // Test with 1-bit values (modulus = 2)
         let modulus = 2u128;
         let values = vec![0, 1, 0, 1, 1, 0, 1, 0];
-        let ring_vec = RingVecDyn::new(values, modulus).unwrap();
+        let ring_vec = RingVec::new(values, modulus).unwrap();
 
         let bytes = ring_vec.to_bytes();
-        let (reconstructed, _) = RingVecDyn::from_bytes(&bytes, modulus).unwrap();
+        let (reconstructed, _) = RingVec::from_bytes(&bytes, modulus).unwrap();
 
         for i in 0..8 {
             assert_eq!(ring_vec[i], reconstructed[i]);
@@ -420,7 +426,7 @@ mod tests {
 
         // Verify extreme compression for binary values
         let compressed_size = bytes.len();
-        let uncompressed_size = RingVecDyn::uncompressed_size_bytes(8);
+        let uncompressed_size = RingVec::uncompressed_size_bytes(8);
         println!(
             "Binary compression: {} bytes -> {} bytes ({:.1}x reduction)",
             uncompressed_size,
@@ -436,24 +442,23 @@ mod tests {
     fn test_different_moduli() {
         // Test various moduli to ensure correct bit width calculation
         let test_cases = [
-            (2u128, 1),     // 1 bit
-            (4u128, 2),     // 2 bits
-            (8u128, 3),     // 3 bits
-            (16u128, 4),    // 4 bits
-            (256u128, 8),   // 8 bits
-            (1024u128, 10), // 10 bits
+            (2u128, 1),      // 1 bit
+            (4u128, 2),      // 2 bits
+            (8u128, 3),      // 3 bits
+            (16u128, 4),     // 4 bits
+            (256u128, 8),    // 8 bits
+            (1024u128, 10),  // 10 bits
             (65536u128, 16), // 16 bits
         ];
 
         for (modulus, expected_bits) in test_cases {
             let values = vec![1, 2, 3, 4];
-            let ring_vec = RingVecDyn::new(values.clone(), modulus).unwrap();
+            let ring_vec = RingVec::new(values.clone(), modulus).unwrap();
 
             assert_eq!(ring_vec.modulus_bit_width(), expected_bits);
 
             let bytes = ring_vec.to_bytes();
-            let (reconstructed, bytes_consumed) =
-                RingVecDyn::from_bytes(&bytes, modulus).unwrap();
+            let (reconstructed, bytes_consumed) = RingVec::from_bytes(&bytes, modulus).unwrap();
 
             for i in 0..4 {
                 assert_eq!(ring_vec[i], reconstructed[i]);
@@ -479,12 +484,12 @@ mod tests {
         let bytes = vec![0x12, 0x34];
 
         // Non-power-of-2 modulus should fail in RingVec::from_bytes -> RingVec::new
-        let result = RingVecDyn::from_bytes(&bytes, 3);
+        let result = RingVec::from_bytes(&bytes, 3);
         assert!(result.is_err());
 
         // Test insufficient bytes (claims length 0 because only prefix? ensure checks)
         let short_bytes = vec![0x01]; // Too few bytes for length prefix
-        let result = RingVecDyn::from_bytes(&short_bytes, 1024);
+        let result = RingVec::from_bytes(&short_bytes, 1024);
         assert!(result.is_err());
     }
 }

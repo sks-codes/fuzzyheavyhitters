@@ -1,35 +1,41 @@
+use clap::Parser;
 use mosaic::{
     channel::{connect_to, listen_to},
-    data_structures::mod2k::Mod2k,
     configs::property_test_config::BenchmarkConfig,
+    data_structures::mod2k::Mod2k,
     fuzzy_match::{
-        check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
-        protocol::request_dealer_check,
+        check_phase::{CheckConfig, CheckMethod, CheckPhase, CheckProperty},
         dealer::{FssDealer, FssKeyBatch},
+        protocol::request_dealer_check,
     },
 };
-use scuttlebutt:: AbstractChannel;
-use std::time::Instant;
 use rand::Rng;
-use clap::Parser;
+use scuttlebutt::AbstractChannel;
+use std::time::Instant;
 
 fn generate_test_inputs(num_inputs: usize, modulus: u128) -> Vec<Mod2k> {
     let mut rng = rand::rng();
     (0..num_inputs)
-        .map(|_| {
-            Mod2k::new(rng.random::<u128>(), modulus)
-        })
+        .map(|_| Mod2k::new(rng.random::<u128>(), modulus))
         .collect()
 }
-
 
 fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config = BenchmarkConfig::from_file(config_path)?;
 
     // Create channels
-    let mut signal_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap())?;
-    let check_server0_channel = listen_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap() + 1)?;
-    let check_server1_channel = listen_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap() + 1)?;
+    let mut signal_server0_channel = listen_to(
+        config.dealer_addr.clone(),
+        config.server0_to_dealer_port.parse::<u16>().unwrap(),
+    )?;
+    let check_server0_channel = listen_to(
+        config.dealer_addr.clone(),
+        config.server0_to_dealer_port.parse::<u16>().unwrap() + 1,
+    )?;
+    let check_server1_channel = listen_to(
+        config.dealer_addr.clone(),
+        config.server1_to_dealer_port.parse::<u16>().unwrap() + 1,
+    )?;
     let dealer = FssDealer::new(
         config.mu,
         0,
@@ -69,7 +75,6 @@ fn run_dealer_benchmark(config_path: &str) -> Result<(), Box<dyn std::error::Err
     println!("Sent {} bytes to server1", server1_sent);
     println!("Received {} bytes from server1", server1_received);
 
-
     Ok(())
 }
 
@@ -83,19 +88,37 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     // Create channels
     let mut signal_dealer_channel = if server {
-        connect_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap())?
+        connect_to(
+            config.dealer_addr.clone(),
+            config.server1_to_dealer_port.parse::<u16>().unwrap(),
+        )?
     } else {
-        connect_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap())?
+        connect_to(
+            config.dealer_addr.clone(),
+            config.server0_to_dealer_port.parse::<u16>().unwrap(),
+        )?
     };
     let mut check_dealer_channel = if server {
-        connect_to(config.dealer_addr.clone(), config.server1_to_dealer_port.parse::<u16>().unwrap() + 1)?
+        connect_to(
+            config.dealer_addr.clone(),
+            config.server1_to_dealer_port.parse::<u16>().unwrap() + 1,
+        )?
     } else {
-        connect_to(config.dealer_addr.clone(), config.server0_to_dealer_port.parse::<u16>().unwrap() + 1)?
+        connect_to(
+            config.dealer_addr.clone(),
+            config.server0_to_dealer_port.parse::<u16>().unwrap() + 1,
+        )?
     };
     let mut other_server_channel = if server {
-        connect_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        connect_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     } else {
-        listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        listen_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     };
     // Create CheckConfig for garbler
     let check_config = CheckConfig {
@@ -106,17 +129,25 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         property: CheckProperty::MuBounded,
         method: CheckMethod::FSS,
     };
-    
+
     let check_phase = CheckPhase::new(check_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);
+    println!(
+        "Generating {} test inputs with bit length {}",
+        config.num_clients, config.h2
+    );
     let inputs = generate_test_inputs(config.num_clients, 1u128 << config.h2 as u128);
 
     println!("Starting server benchmark...");
 
     let start_time = Instant::now();
-    let batch = request_dealer_check(&mut signal_dealer_channel, &mut check_dealer_channel, 1u128 << config.h3 as u128).unwrap();
+    let batch = request_dealer_check(
+        &mut signal_dealer_channel,
+        &mut check_dealer_channel,
+        1u128 << config.h3 as u128,
+    )
+    .unwrap();
     println!("Time to request dealer check: {:?}", start_time.elapsed());
 
     if server {
@@ -129,18 +160,19 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
     }
 
     let keys = batch.keys;
-    let random_values = batch.random_values.iter().map(|r| Mod2k::new(*r, 1u128 << config.h2 as u128)).collect::<Vec<_>>();
+    let random_values = batch
+        .random_values
+        .iter()
+        .map(|r| Mod2k::new(*r, 1u128 << config.h2 as u128))
+        .collect::<Vec<_>>();
 
     let start_time = Instant::now();
-    let _results = check_phase.batch_mu_bounded_testing_fss(
-        &inputs,
-        &keys,
-        &random_values,
-        &mut other_server_channel,
-    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
-    
+    let _results = check_phase
+        .batch_mu_bounded_testing_fss(&inputs, &keys, &random_values, &mut other_server_channel)
+        .map_err(|e| format!("CheckPhase error: {:?}", e))?;
+
     let elapsed = start_time.elapsed();
-    
+
     // Print results
     println!("\n=== Server Benchmark Results ===");
     println!("Server time: {:?}", elapsed);
@@ -169,7 +201,10 @@ fn main() {
         "server1" => run_server_benchmark(&config_path, true),
         "dealer" => run_dealer_benchmark(&config_path),
         _ => {
-            eprintln!("Invalid role '{}'. Must be 'server0', 'server1', or 'dealer'", role);
+            eprintln!(
+                "Invalid role '{}'. Must be 'server0', 'server1', or 'dealer'",
+                role
+            );
             std::process::exit(1);
         }
     };

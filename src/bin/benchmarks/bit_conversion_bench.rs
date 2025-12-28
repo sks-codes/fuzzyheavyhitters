@@ -1,10 +1,13 @@
-use mosaic::util::{u128_to_bits_msb, bits_to_u128_msb};
-use std::time::Instant;
+use mosaic::util::{bits_to_u128_msb, u128_to_bits_msb};
 use std::env;
 use std::hint::black_box;
+use std::time::Instant;
 
 fn parse_arg_usize(idx: usize, default: usize) -> usize {
-    env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default)
+    env::args()
+        .nth(idx)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 fn main() {
@@ -13,7 +16,10 @@ fn main() {
     let bit_length = parse_arg_usize(2, 64); // must be <= 128
     assert!(bit_length <= 128, "bit_length must be <= 128");
 
-    println!("Running {} iterations with bit_length {}", iterations, bit_length);
+    println!(
+        "Running {} iterations with bit_length {}",
+        iterations, bit_length
+    );
 
     // Benchmark bits_to_u128_msb
     let mut bits = vec![false; bit_length];
@@ -31,7 +37,11 @@ fn main() {
     // Prevent optimizer deleting loop.
     black_box(acc_u128);
 
-    println!("bits_to_u128_msb: {:?} total (avg {:?} per call)", dur_bits_to, dur_bits_to / iterations as u32);
+    println!(
+        "bits_to_u128_msb: {:?} total (avg {:?} per call)",
+        dur_bits_to,
+        dur_bits_to / iterations as u32
+    );
 
     // Benchmark u128_to_bits_msb
     let mut value: u128 = 0x1234_5678_9ABC_DEF0_0FED_CBA9_8765_4321u128;
@@ -48,7 +58,11 @@ fn main() {
     let dur_u128_to = start_u128_to.elapsed();
     black_box(parity_acc);
 
-    println!("u128_to_bits_msb: {:?} total (avg {:?} per call)", dur_u128_to, dur_u128_to / iterations as u32);
+    println!(
+        "u128_to_bits_msb: {:?} total (avg {:?} per call)",
+        dur_u128_to,
+        dur_u128_to / iterations as u32
+    );
 
     println!("Final accumulators: acc_u128 = {acc_u128:#034x}, parity_acc = {parity_acc}");
 }

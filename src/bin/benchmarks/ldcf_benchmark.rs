@@ -1,9 +1,5 @@
-use mosaic::{
-    util::u128_to_bits_msb,
-    data_structures::ringvec::RingVec,
-    fss::ldcf::LdcfKey,
-};
 use clap::Parser;
+use mosaic::{data_structures::ringvec::RingVec, fss::ldcf::LdcfKey, util::u128_to_bits_msb};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -27,12 +23,7 @@ fn main() {
     let a = RingVec::new(vec![5u128; 2], modulus).expect("Failed to create RingVec");
     let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = LdcfKey::<2>::gen_ldcf_key(
-        &alpha_bits,
-        &a,
-        &b,
-        modulus,
-    );
+    let (key0, key1) = LdcfKey::<2>::gen_ldcf_key(&alpha_bits, &a, &b, modulus);
 
     // Benchmark Full Domain Evaluation
     let start = Instant::now();
@@ -42,6 +33,10 @@ fn main() {
     println!("Full domain evaluation took: {:?}", duration);
 
     // Verify correctness
-    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec>>();
+    let eval_both = eval0
+        .iter()
+        .zip(eval1.iter())
+        .map(|(x, y)| x - y)
+        .collect::<Vec<RingVec>>();
     println!("Full evaluation: {:?}", eval_both);
 }

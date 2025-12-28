@@ -2,43 +2,41 @@
 //   https://github.com/google/tarpc/blob/master/example-service/src/server.rs
 
 use mosaic::{
-    collect, 
-    FieldElm,
-    data_structures::fastfield::FE, data_structures::prg,
+    collect,
     configs::poplar_config,
-    rpc::{
-        Collector,
-        AddKeysRequest, FinalSharesRequest, ResetRequest, TreeCrawlRequest, TreeInitRequest,
-        TreePruneRequest,
-        TreePruneLastRequest,
-    },
+    data_structures::fastfield::FE,
     data_structures::logexperiments::ServerSide,
+    data_structures::prg,
     rpc::TreeCrawlLastRequest,
+    rpc::{
+        AddKeysRequest, Collector, FinalSharesRequest, ResetRequest, TreeCrawlRequest,
+        TreeInitRequest, TreePruneLastRequest, TreePruneRequest,
+    },
+    FieldElm,
 };
 
 use futures::{
     future::{self, Ready},
     prelude::*,
 };
-use std::{
-    io,
-    sync::{Arc, Mutex},
-};
 use std::io::{BufReader, BufWriter};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::thread::available_parallelism;
 use std::time::Duration;
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
 use tarpc::{
     context,
+    serde_transport::tcp,
     server::{self, Channel},
     tokio_serde::formats::Bincode,
-    serde_transport::tcp,
 };
 
 extern crate num_cpus;
 // type MyChannel = scuttlebutt::SyncChannel<BufReader<UnixStream>, BufWriter<UnixStream>>;
 type MyChannel = scuttlebutt::SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>;
-
 
 #[derive(Clone)]
 struct CollectorServer {
@@ -46,7 +44,7 @@ struct CollectorServer {
     data_len: usize,
     arc: Arc<Mutex<collect::KeyCollection<FE, FieldElm>>>,
     // gc_channel: Option<Arc<Mutex<MyChannel>>>
-    gc_channels: Vec<Arc<Mutex<MyChannel>>>
+    gc_channels: Vec<Arc<Mutex<MyChannel>>>,
 }
 
 impl Collector for CollectorServer {
@@ -80,17 +78,11 @@ impl Collector for CollectorServer {
         future::ready("Done".to_string())
     }
 
-    fn tree_crawl(
-        self,
-        _: context::Context,
-        req: TreeCrawlRequest
-    ) -> Self::TreeCrawlFut {
+    fn tree_crawl(self, _: context::Context, req: TreeCrawlRequest) -> Self::TreeCrawlFut {
         let mut coll = self.arc.lock().unwrap();
 
-        let mut locked_channels: Vec<_> = self.gc_channels
-            .iter()
-            .map(|c| c.lock().unwrap())
-            .collect();
+        let mut locked_channels: Vec<_> =
+            self.gc_channels.iter().map(|c| c.lock().unwrap()).collect();
 
         let mut channel_refs: Vec<&mut MyChannel> = locked_channels
             .iter_mut()
@@ -105,14 +97,12 @@ impl Collector for CollectorServer {
     fn tree_crawl_last(
         self,
         _: context::Context,
-        req: TreeCrawlLastRequest
+        req: TreeCrawlLastRequest,
     ) -> Self::TreeCrawlLastFut {
         let mut coll = self.arc.lock().unwrap();
 
-        let mut locked_channels: Vec<_> = self.gc_channels
-            .iter()
-            .map(|c| c.lock().unwrap())
-            .collect();
+        let mut locked_channels: Vec<_> =
+            self.gc_channels.iter().map(|c| c.lock().unwrap()).collect();
 
         let mut channel_refs: Vec<&mut MyChannel> = locked_channels
             .iter_mut()
@@ -130,7 +120,11 @@ impl Collector for CollectorServer {
         future::ready("Done".to_string())
     }
 
-    fn tree_prune_last(self, _: context::Context, req: TreePruneLastRequest) -> Self::TreePruneLastFut {
+    fn tree_prune_last(
+        self,
+        _: context::Context,
+        req: TreePruneLastRequest,
+    ) -> Self::TreePruneLastFut {
         let mut coll = self.arc.lock().unwrap();
         coll.tree_prune_last(&req.keep);
         future::ready("Done".to_string())
@@ -154,9 +148,8 @@ fn create_server_tcp_socket(port: u16) -> io::Result<MyChannel> {
 
     Ok(scuttlebutt::SyncChannel::new(
         BufReader::with_capacity(64 * 4096 * 4096, stream.try_clone().unwrap()),
-        BufWriter::with_capacity(64 * 4096 * 4096, stream)
-        // BufReader::new(stream.try_clone()?),
-        // BufWriter::new(stream),
+        BufWriter::with_capacity(64 * 4096 * 4096, stream), // BufReader::new(stream.try_clone()?),
+                                                            // BufWriter::new(stream),
     ))
 }
 
@@ -203,8 +196,10 @@ fn connect_with_retries_tcp(addr: SocketAddr) -> io::Result<MyChannel> {
                 if retries >= 10 {
                     return Err(io::Error::new(
                         io::ErrorKind::ConnectionRefused,
-                        format!("Failed to connect to {} after {} retries: {:?}",
-                                addr, 10, last_error)
+                        format!(
+                            "Failed to connect to {} after {} retries: {:?}",
+                            addr, 10, last_error
+                        ),
                     ));
                 }
                 retries += 1;

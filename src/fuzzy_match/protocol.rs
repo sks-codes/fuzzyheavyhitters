@@ -1,23 +1,23 @@
 //! Fuzzy Heavy Hitters Protocol Implementation
-//! 
+//!
 //! This module provides a high-level interface for running the complete fuzzy heavy hitters protocol
 //! including share phase, check phase, and threshold phase.
 
 use crate::{
-    fuzzy_match::{
-        share_phase::SharePhase,
-        share_types::{ShareConfig, DistanceMetric},
-        shared_range::{SharedRange, ShareData},
-        check_phase::{CheckPhase, CheckConfig, CheckData, CheckMethod, CheckProperty},
-        threshold_phase::{ThresholdPhase, ThresholdConfig, ThresholdMethod, ThresholdData},
-        dealer::{FssKeyBatch, DpfKeyBatch, DealerSignal},
-    },
-    util::{send_bool_vec, receive_bool_vec, u128_to_bits_msb, get_distance_threshold},
     channel::CommTrackingChannel,
+    fuzzy_match::{
+        check_phase::{CheckConfig, CheckData, CheckMethod, CheckPhase, CheckProperty},
+        dealer::{DealerSignal, DpfKeyBatch, FssKeyBatch},
+        share_phase::SharePhase,
+        share_types::{DistanceMetric, ShareConfig},
+        shared_range::{ShareData, SharedRange},
+        threshold_phase::{ThresholdConfig, ThresholdData, ThresholdMethod, ThresholdPhase},
+    },
+    util::{get_distance_threshold, receive_bool_vec, send_bool_vec, u128_to_bits_msb},
 };
+use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
-use rayon::prelude::*;
 
 /// Configuration for the entire fuzzy heavy hitters protocol
 #[derive(Debug, Clone)]
@@ -67,11 +67,13 @@ impl MosaicProtocol {
     ) -> Result<Vec<SharedRange>, String> {
         // Receive shares using custom serialization
         let mut len_bytes = [0u8; 8];
-        client_channel.read_bytes(&mut len_bytes)
+        client_channel
+            .read_bytes(&mut len_bytes)
             .map_err(|e| format!("Failed to read length from client: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
         let mut shares_data = vec![0u8; len];
-        client_channel.read_bytes(&mut shares_data)
+        client_channel
+            .read_bytes(&mut shares_data)
             .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
 
         // Custom deserialization for Vec<SharedRange>
@@ -103,28 +105,40 @@ impl MosaicProtocol {
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
         // Convert query points from u128 to Vec<Vec<bool>>
-        let query_point_sets: Vec<Vec<Vec<bool>>> = query_points.iter()
+        let query_point_sets: Vec<Vec<Vec<bool>>> = query_points
+            .iter()
             .map(|query_point| {
-                query_point.iter()
-                    .map(|&point| {
-                        u128_to_bits_msb(point, self.config.share_config.h1)
-                    })
+                query_point
+                    .iter()
+                    .map(|&point| u128_to_bits_msb(point, self.config.share_config.h1))
                     .collect()
             })
             .collect();
 
-        let evals = query_point_sets.iter()
+        let evals = query_point_sets
+            .iter()
             .map(|query_point| {
-                client_shares.iter().map(|range| {
-                    (0..self.config.share_config.d).map(|i| {
-                        self.share_phase.evaluate_at_single_dimension(range, &query_point[i], i).unwrap()
-                    }).collect::<Vec<u128>>()
-                }).collect::<Vec<Vec<u128>>>()
-            }).collect::<Vec<Vec<Vec<u128>>>>();
+                client_shares
+                    .iter()
+                    .map(|range| {
+                        (0..self.config.share_config.d)
+                            .map(|i| {
+                                self.share_phase
+                                    .evaluate_at_single_dimension(range, &query_point[i], i)
+                                    .unwrap()
+                            })
+                            .collect::<Vec<u128>>()
+                    })
+                    .collect::<Vec<Vec<u128>>>()
+            })
+            .collect::<Vec<Vec<Vec<u128>>>>();
 
         // Use parallel batch processing with both dealer and server channels
-        println!("Using full parallel processing with {} check dealer channels and {} server channels",
-                 check_dealer_channels.len(), other_server_channels.len());
+        println!(
+            "Using full parallel processing with {} check dealer channels and {} server channels",
+            check_dealer_channels.len(),
+            other_server_channels.len()
+        );
         let final_results = self.batch_check(
             &evals,
             signal_dealer_channels,
@@ -156,7 +170,8 @@ impl MosaicProtocol {
         let eval_modulus = 1u128 << eval_len;
 
         // Evaluate the empty prefix for each dimension
-        let empty_string_data = client_shares_list.iter()
+        let empty_string_data = client_shares_list
+            .iter()
             .map(|shared_range| {
                 let data = self.share_phase.share_data_init(shared_range).unwrap();
                 data.to_bytes(eval_len)
@@ -166,20 +181,28 @@ impl MosaicProtocol {
         let mut current_prefixes: Vec<Vec<Vec<bool>>> = vec![vec![vec![]; dimension]];
 
         let num_threads = other_server_channels.len();
-        let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap();
 
         for prefix_length in 1..=max_bit_length {
             for dim in 0..dimension {
                 let start = std::time::Instant::now();
-                let mut new_data= thread_pool.install(|| {
-                    current_data.par_iter()
+                let mut new_data = thread_pool.install(|| {
+                    current_data
+                        .par_iter()
                         .zip(current_prefixes.par_iter())
                         .flat_map(|(data, prefix)| {
                             let mut data0 = Vec::with_capacity(client_shares_list.len());
                             let mut data1 = Vec::with_capacity(client_shares_list.len());
                             for (idx, shared_range) in client_shares_list.iter().enumerate() {
-                                let (data_dim, _) = ShareData::from_bytes(&data[idx], eval_len, eval_modulus);
-                                let (eval0, eval1) = self.share_phase.expand_prefix(shared_range, &data_dim, &prefix[dim], dim).unwrap();
+                                let (data_dim, _) =
+                                    ShareData::from_bytes(&data[idx], eval_len, eval_modulus);
+                                let (eval0, eval1) = self
+                                    .share_phase
+                                    .expand_prefix(shared_range, &data_dim, &prefix[dim], dim)
+                                    .unwrap();
 
                                 data0.push(eval0.to_bytes(eval_len));
                                 data1.push(eval1.to_bytes(eval_len));
@@ -190,30 +213,45 @@ impl MosaicProtocol {
                 });
                 println!("Time to collect new data: {:?}", start.elapsed());
                 println!("Number of new data stored: {}", new_data.len());
-                println!("Memory consumption of new_data: {:?} bytes", new_data.iter().map(|data_bytes| data_bytes.iter().map(|b| b.len()).sum::<usize>()).sum::<usize>());
+                println!(
+                    "Memory consumption of new_data: {:?} bytes",
+                    new_data
+                        .iter()
+                        .map(|data_bytes| data_bytes.iter().map(|b| b.len()).sum::<usize>())
+                        .sum::<usize>()
+                );
 
                 crate::util::print_memory_usage();
 
                 let new_eval = thread_pool.install(|| {
-                    new_data.par_iter().map(|data_bytes| {
-                        data_bytes.iter()
-                        .map(|bytes| {
-                            let (share_data, _) = ShareData::from_bytes(bytes, eval_len, eval_modulus);
-                            match share_data {
-                                ShareData::OKVS { eval } => eval.clone(),
-                                ShareData::IntervalFSS { data } => {
-                                    data.iter().map(|eval| eval.result()[0]).collect::<Vec<u128>>()
-                                },
-                                ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
-                                ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),
-                                ShareData::DistanceFSSL3 { eval, .. } => eval.clone(),
-                            }
+                    new_data
+                        .par_iter()
+                        .map(|data_bytes| {
+                            data_bytes
+                                .iter()
+                                .map(|bytes| {
+                                    let (share_data, _) =
+                                        ShareData::from_bytes(bytes, eval_len, eval_modulus);
+                                    match share_data {
+                                        ShareData::OKVS { eval } => eval.clone(),
+                                        ShareData::IntervalFSS { data } => data
+                                            .iter()
+                                            .map(|eval| eval.result()[0])
+                                            .collect::<Vec<u128>>(),
+                                        ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
+                                        ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),
+                                        ShareData::DistanceFSSL3 { eval, .. } => eval.clone(),
+                                    }
+                                })
+                                .collect::<Vec<Vec<u128>>>()
                         })
-                        .collect::<Vec<Vec<u128>>>()
-                    }).collect::<Vec<Vec<Vec<u128>>>>()
+                        .collect::<Vec<Vec<Vec<u128>>>>()
                 });
 
-                println!("Time to expand prefixes for all clients: {:?}", start.elapsed());
+                println!(
+                    "Time to expand prefixes for all clients: {:?}",
+                    start.elapsed()
+                );
 
                 let mut new_prefixes = Vec::new();
                 for prefix in current_prefixes.iter() {
@@ -244,7 +282,11 @@ impl MosaicProtocol {
                 // Use std::mem::take to move qualifying entries out without cloning.
                 current_data.clear();
                 current_prefixes.clear();
-                for ((data, prefix), &exceed) in new_data.iter_mut().zip(new_prefixes.iter_mut()).zip(exceeds_threshold_results.iter()) {
+                for ((data, prefix), &exceed) in new_data
+                    .iter_mut()
+                    .zip(new_prefixes.iter_mut())
+                    .zip(exceeds_threshold_results.iter())
+                {
                     if exceed {
                         current_data.push(std::mem::take(data));
                         current_prefixes.push(std::mem::take(prefix));
@@ -260,19 +302,29 @@ impl MosaicProtocol {
                 crate::util::print_memory_usage();
 
                 // new_data/new_prefixes now contain empty Vecs for moved entries; they'll be dropped.
-                println!("Time to filter data based on threshold (move-based): {:?}", start_copy.elapsed());
+                println!(
+                    "Time to filter data based on threshold (move-based): {:?}",
+                    start_copy.elapsed()
+                );
 
-                println!("Processed dimension {} with prefix length {} in {:?}", 
-                         dim, prefix_length, start.elapsed());
+                println!(
+                    "Processed dimension {} with prefix length {} in {:?}",
+                    dim,
+                    prefix_length,
+                    start.elapsed()
+                );
                 println!("Exceed threshold results: {:?}", exceeds_threshold_results);
             }
         }
-        let final_heavy_hitters = current_prefixes.into_iter()
+        let final_heavy_hitters = current_prefixes
+            .into_iter()
             .map(|prefix| {
                 // Convert each prefix vector (Vec<bool>) back to a byte vector (Vec<u8>)
-                prefix.iter()
+                prefix
+                    .iter()
                     .map(|bits| {
-                        bits.iter().fold(0u128, |acc, &bit| (acc << 1) | if bit { 1 } else { 0 })
+                        bits.iter()
+                            .fold(0u128, |acc, &bit| (acc << 1) | if bit { 1 } else { 0 })
                     })
                     .collect::<Vec<u128>>()
             })
@@ -295,14 +347,20 @@ impl MosaicProtocol {
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
         let num_threads = other_server_channels.len();
-        println!("Using {} threads for parallel processing {} data chunks", num_threads, current_eval.len());
+        println!(
+            "Using {} threads for parallel processing {} data chunks",
+            num_threads,
+            current_eval.len()
+        );
 
         // Calculate distance threshold once
         let distance_threshold = if self.config.share_config.metric == DistanceMetric::LInfinity {
             get_distance_threshold(self.config.delta, "Linf")
         } else {
             match self.config.share_config.metric {
-                DistanceMetric::Lp { p } => get_distance_threshold(self.config.delta, &format!("L{}", p)),
+                DistanceMetric::Lp { p } => {
+                    get_distance_threshold(self.config.delta, &format!("L{}", p))
+                }
                 _ => return Err("Unsupported distance metric for threshold".to_string()),
             }
         };
@@ -332,7 +390,7 @@ impl MosaicProtocol {
                         CheckProperty::Equality => {
                             match self.config.check_config.method {
                                 CheckMethod::FSS => {
-                                    let batch = 
+                                    let batch =
                                         request_dealer_equality(signal_dealer_channel, check_dealer_channel, 1u128 << self.config.check_config.h3)?;
 
                                     if batch.keys.len() < self.config.num_clients {
@@ -446,7 +504,6 @@ impl MosaicProtocol {
             })
             .map_err(|e| format!("Parallel processing failed: {}", e))?;
 
-
         // After parallel processing, exchange the final results in parallel chunks
         let chunk_size = (server_bits.len() + num_threads - 1) / num_threads;
         let mut final_results = vec![false; server_bits.len()];
@@ -458,42 +515,74 @@ impl MosaicProtocol {
             .zip(server_bits.par_chunks(chunk_size))
             .zip(other_server_channels.par_iter_mut())
             .enumerate()
-            .try_for_each(|(chunk_idx, ((result_chunk, bits_chunk), other_server_channel))| {
-                // Use the corresponding other server channel for this chunk
-                let bits_chunk_vec: Vec<bool> = bits_chunk.to_vec();
-                
-                if self.is_server1 {
-                    // Server 1: receive bits from server 0, then send our bits
-                    let server0_bits = receive_bool_vec(other_server_channel)
-                        .map_err(|e| format!("Failed to receive bits from server 0 in chunk {}: {:?}", chunk_idx, e))?;
-                    send_bool_vec(other_server_channel, &bits_chunk_vec)
-                        .map_err(|e| format!("Failed to send bits to server 0 in chunk {}: {:?}", chunk_idx, e))?;
-                    
-                    if server0_bits.len() != bits_chunk_vec.len() {
-                        return Err(format!("Mismatch in chunk {} size: expected {}, got {}", chunk_idx, bits_chunk_vec.len(), server0_bits.len()));
-                    }
-                    
-                    for (i, (bit0, bit1)) in server0_bits.iter().zip(bits_chunk_vec.iter()).enumerate() {
-                        result_chunk[i] = bit0 ^ bit1;
-                    }
-                } else {
-                    // Server 0: send our bits, then receive from server 1
-                    send_bool_vec(other_server_channel, &bits_chunk_vec)
-                        .map_err(|e| format!("Failed to send bits to server 1 in chunk {}: {:?}", chunk_idx, e))?;
-                    let server1_bits = receive_bool_vec(other_server_channel)
-                        .map_err(|e| format!("Failed to receive bits from server 1 in chunk {}: {:?}", chunk_idx, e))?;
-                    
-                    if server1_bits.len() != bits_chunk_vec.len() {
-                        return Err(format!("Mismatch in chunk {} size: expected {}, got {}", chunk_idx, bits_chunk_vec.len(), server1_bits.len()));
-                    }
-                    
-                    for (i, (bit0, bit1)) in bits_chunk_vec.iter().zip(server1_bits.iter()).enumerate() {
-                        result_chunk[i] = bit0 ^ bit1;
-                    }
-                }
+            .try_for_each(
+                |(chunk_idx, ((result_chunk, bits_chunk), other_server_channel))| {
+                    // Use the corresponding other server channel for this chunk
+                    let bits_chunk_vec: Vec<bool> = bits_chunk.to_vec();
 
-                Ok::<(), String>(())
-            })
+                    if self.is_server1 {
+                        // Server 1: receive bits from server 0, then send our bits
+                        let server0_bits = receive_bool_vec(other_server_channel).map_err(|e| {
+                            format!(
+                                "Failed to receive bits from server 0 in chunk {}: {:?}",
+                                chunk_idx, e
+                            )
+                        })?;
+                        send_bool_vec(other_server_channel, &bits_chunk_vec).map_err(|e| {
+                            format!(
+                                "Failed to send bits to server 0 in chunk {}: {:?}",
+                                chunk_idx, e
+                            )
+                        })?;
+
+                        if server0_bits.len() != bits_chunk_vec.len() {
+                            return Err(format!(
+                                "Mismatch in chunk {} size: expected {}, got {}",
+                                chunk_idx,
+                                bits_chunk_vec.len(),
+                                server0_bits.len()
+                            ));
+                        }
+
+                        for (i, (bit0, bit1)) in
+                            server0_bits.iter().zip(bits_chunk_vec.iter()).enumerate()
+                        {
+                            result_chunk[i] = bit0 ^ bit1;
+                        }
+                    } else {
+                        // Server 0: send our bits, then receive from server 1
+                        send_bool_vec(other_server_channel, &bits_chunk_vec).map_err(|e| {
+                            format!(
+                                "Failed to send bits to server 1 in chunk {}: {:?}",
+                                chunk_idx, e
+                            )
+                        })?;
+                        let server1_bits = receive_bool_vec(other_server_channel).map_err(|e| {
+                            format!(
+                                "Failed to receive bits from server 1 in chunk {}: {:?}",
+                                chunk_idx, e
+                            )
+                        })?;
+
+                        if server1_bits.len() != bits_chunk_vec.len() {
+                            return Err(format!(
+                                "Mismatch in chunk {} size: expected {}, got {}",
+                                chunk_idx,
+                                bits_chunk_vec.len(),
+                                server1_bits.len()
+                            ));
+                        }
+
+                        for (i, (bit0, bit1)) in
+                            bits_chunk_vec.iter().zip(server1_bits.iter()).enumerate()
+                        {
+                            result_chunk[i] = bit0 ^ bit1;
+                        }
+                    }
+
+                    Ok::<(), String>(())
+                },
+            )
             .map_err(|e| format!("Parallel bit exchange failed: {}", e))?;
         println!("Time for parallel bit exchange: {:?}", start.elapsed());
         println!("Parallel processing completed successfully");
@@ -502,84 +591,113 @@ impl MosaicProtocol {
 }
 
 /// Request FSS keys from dealer
-pub fn request_dealer_check(signal_dealer_channel: &mut CommTrackingChannel, check_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+pub fn request_dealer_check(
+    signal_dealer_channel: &mut CommTrackingChannel,
+    check_dealer_channel: &mut CommTrackingChannel,
+    modulus: u128,
+) -> Result<FssKeyBatch, String> {
     // Send DealerSignal using custom serialization
     let signal = DealerSignal::RequestCheckKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    signal_dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel
+        .write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    signal_dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel
+        .write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    signal_dealer_channel.flush()
+    signal_dealer_channel
+        .flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    check_dealer_channel.read_bytes(&mut len_bytes)
+    check_dealer_channel
+        .read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    check_dealer_channel.read_bytes(&mut batch_data)
+    check_dealer_channel
+        .read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
     // Use output modulus from threshold config for deserialization
-    let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    let (fss_key_batch, _) =
+        FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
     Ok(fss_key_batch)
 }
 
-pub fn request_dealer_equality(signal_dealer_channel: &mut CommTrackingChannel, check_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<DpfKeyBatch, String> {
+pub fn request_dealer_equality(
+    signal_dealer_channel: &mut CommTrackingChannel,
+    check_dealer_channel: &mut CommTrackingChannel,
+    modulus: u128,
+) -> Result<DpfKeyBatch, String> {
     // Send DealerSignal using custom serialization
     let signal = DealerSignal::RequestEqualityKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    signal_dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel
+        .write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    signal_dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel
+        .write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    signal_dealer_channel.flush()
+    signal_dealer_channel
+        .flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    check_dealer_channel.read_bytes(&mut len_bytes)
+    check_dealer_channel
+        .read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    check_dealer_channel.read_bytes(&mut batch_data)
+    check_dealer_channel
+        .read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
-    
+
     // Use output modulus from threshold config for deserialization
-    let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    let (fss_key_batch, _) = DpfKeyBatch::from_bytes(&batch_data, modulus)?;
     Ok(fss_key_batch)
 }
 
-pub fn request_dealer_threshold(signal_dealer_channel: &mut CommTrackingChannel, threshold_dealer_channel: &mut CommTrackingChannel, modulus: u128) -> Result<FssKeyBatch, String> {
+pub fn request_dealer_threshold(
+    signal_dealer_channel: &mut CommTrackingChannel,
+    threshold_dealer_channel: &mut CommTrackingChannel,
+    modulus: u128,
+) -> Result<FssKeyBatch, String> {
     // Send DealerSignal using custom serialization
     let signal = DealerSignal::RequestThresholdKeys;
     let signal_bytes = signal.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    signal_dealer_channel.write_bytes(&len_bytes)
+    signal_dealer_channel
+        .write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    signal_dealer_channel.write_bytes(&signal_bytes)
+    signal_dealer_channel
+        .write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    signal_dealer_channel.flush()
+    signal_dealer_channel
+        .flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
 
     // Receive FSS key batch from dealer
     let mut len_bytes = [0u8; 8];
-    threshold_dealer_channel.read_bytes(&mut len_bytes)
+    threshold_dealer_channel
+        .read_bytes(&mut len_bytes)
         .map_err(|e| format!("Failed to read key batch length: {}", e))?;
     let len = u64::from_le_bytes(len_bytes) as usize;
 
     let mut batch_data = vec![0u8; len];
-    threshold_dealer_channel.read_bytes(&mut batch_data)
+    threshold_dealer_channel
+        .read_bytes(&mut batch_data)
         .map_err(|e| format!("Failed to read key batch data: {}", e))?;
 
     // Use output modulus from threshold config for deserialization
-    let (fss_key_batch, _) = FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
+    let (fss_key_batch, _) =
+        FssKeyBatch::from_bytes(&batch_data, modulus).expect("Failed to deserialize FssKeyBatch");
     Ok(fss_key_batch)
 }
 
@@ -588,11 +706,14 @@ pub fn shutdown_dealer(dealer_channel: &mut CommTrackingChannel) -> Result<(), S
     // Send shutdown signal using custom serialization
     let signal_bytes = DealerSignal::Shutdown.to_bytes();
     let len_bytes = (signal_bytes.len() as u64).to_le_bytes();
-    dealer_channel.write_bytes(&len_bytes)
+    dealer_channel
+        .write_bytes(&len_bytes)
         .map_err(|e| format!("Failed to write DealerSignal length: {}", e))?;
-    dealer_channel.write_bytes(&signal_bytes)
+    dealer_channel
+        .write_bytes(&signal_bytes)
         .map_err(|e| format!("Failed to write DealerSignal: {}", e))?;
-    dealer_channel.flush()
+    dealer_channel
+        .flush()
         .map_err(|e| format!("Failed to flush DealerSignal: {}", e))?;
     Ok(())
 }

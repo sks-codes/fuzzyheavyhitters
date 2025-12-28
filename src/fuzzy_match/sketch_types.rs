@@ -1,22 +1,54 @@
+use crate::data_structures::modp::Modp;
+use crate::fuzzy_match::sketch_helper::SketchHelper;
 use crate::{
-    configs::cli_config::ProtocolParameters, fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareMethod}
+    configs::cli_config::ProtocolParameters,
+    fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareMethod},
 };
 
 #[derive(Debug, Clone)]
 pub struct SketchConfig {
-    pub h1: usize, // FSS phase input bit length
-    pub h2: usize, // FSS phase output bit length
-    pub q: u128, // sketching values will be in Zq
-    pub delta: u128, // Distance threshold
-    pub d: usize, // Number of dimensions
-    pub method: ShareMethod, // The sharing method used. Only can sketch for FSS now
-    pub metric: DistanceMetric, // Distance metric. Can support sketching both Linf and Lp
+    pub h1: usize,                       // FSS phase input bit length
+    pub h2: usize,                       // FSS phase output bit length
+    pub q: u128,                         // sketching values will be in Zq
+    pub delta: u128,                     // Distance threshold
+    pub d: usize,                        // Number of dimensions
+    pub method: ShareMethod,             // The sharing method used. Only can sketch for FSS now
+    pub metric: DistanceMetric,          // Distance metric. Can support sketching both Linf and Lp
     pub dictionary_type: DictionaryType, // Known or Unknown
 }
 
 impl From<ProtocolParameters> for SketchConfig {
-    fn from(_config: ProtocolParameters) -> Self {
-        unimplemented!()
+    fn from(config: ProtocolParameters) -> Self {
+        let method = match config.share_method.as_str() {
+            "OKVS" => ShareMethod::OKVS,
+            "FSS" => ShareMethod::FSS,
+            other => panic!("Unsupported share method: {}", other),
+        };
+
+        let dictionary_type = match config.dictionary_type.as_str() {
+            "Known" => DictionaryType::Known,
+            "Unknown" => DictionaryType::Unknown,
+            other => panic!("Unsupported dictionary type: {}", other),
+        };
+
+        let metric = match config.distance_metric.as_str() {
+            "Linf" => DistanceMetric::LInfinity,
+            "L1" => DistanceMetric::Lp { p: 1 },
+            "L2" => DistanceMetric::Lp { p: 2 },
+            "L3" => DistanceMetric::Lp { p: 3 },
+            other => panic!("Unsupported distance metric: {}", other),
+        };
+
+        SketchConfig {
+            h1: config.h1,
+            h2: config.h2,
+            q: config.sketch_modulus,
+            delta: config.delta,
+            d: config.d,
+            method,
+            metric,
+            dictionary_type,
+        }
     }
 }
 

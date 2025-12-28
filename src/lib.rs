@@ -1,29 +1,29 @@
 // extern crate cpuprofiler;
 
-pub mod data_structures;
-pub mod garbled_circuits;
-pub mod randomness;
 pub mod collect;
+pub mod configs;
+pub mod data_structures;
 pub mod fss;
 pub mod fuzzy_match;
-pub mod configs;
+pub mod garbled_circuits;
 pub mod naive;
+pub mod randomness;
 
+pub mod aes;
+pub mod channel;
+pub mod okvs_f2k;
 pub mod rpc;
 pub mod sample_driving_data;
 pub mod synthetic_data;
-pub mod aes;
-pub mod okvs_f2k;
 pub mod util;
-pub mod channel;
 
 #[macro_use]
 extern crate lazy_static;
 
-use scuttlebutt::Block;
 pub use crate::data_structures::field::Dummy;
 pub use crate::data_structures::field::FieldElm;
 pub use crate::rpc::CollectorClient;
+use scuttlebutt::Block;
 
 // Additive group, such as (Z_n, +)
 pub trait Group {
@@ -70,7 +70,7 @@ pub fn u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
     out
 }
 
-pub fn  msb_u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
+pub fn msb_u32_to_bits(nbits: u8, input: u32) -> Vec<bool> {
     assert!(nbits <= 32);
 
     let mut out: Vec<bool> = Vec::new();
@@ -129,9 +129,9 @@ pub fn bits_to_string(bits: &[bool]) -> String {
 }
 
 fn all_bit_vectors(dim: usize) -> Vec<Vec<bool>> {
-    (0..1 << dim).map(|i| {
-        (0..dim).map(|j| (i >> j) & 1 == 1).collect()
-    }).collect()
+    (0..1 << dim)
+        .map(|i| (0..dim).map(|j| (i >> j) & 1 == 1).collect())
+        .collect()
 }
 
 pub fn add_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
@@ -170,13 +170,19 @@ pub fn subtract_bitstrings(alpha: &[bool], beta: &[bool]) -> Vec<bool> {
         let sum = *bit ^ carry;
         carry = *bit && carry;
         *bit = sum;
-        if !carry { break; }
+        if !carry {
+            break;
+        }
     }
 
     let mut result = Vec::new();
     let mut carry = false;
 
-    for (a, b) in alpha_padded.iter().rev().zip(beta_twos_complement.iter().rev()) {
+    for (a, b) in alpha_padded
+        .iter()
+        .rev()
+        .zip(beta_twos_complement.iter().rev())
+    {
         let (s, c) = full_adder(*a, *b, carry);
         result.push(s);
         carry = c;

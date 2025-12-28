@@ -30,14 +30,14 @@ pub enum ShareMethod {
 /// Configuration for the share phase
 #[derive(Debug, Clone)]
 pub struct ShareConfig {
-    pub method: ShareMethod, // Share method, "OKVS" or "FSS"
-    pub metric: DistanceMetric, // The distance metric to use
+    pub method: ShareMethod,             // Share method, "OKVS" or "FSS"
+    pub metric: DistanceMetric,          // The distance metric to use
     pub dictionary_type: DictionaryType, // The dictionary type (known or unknown)
-    pub h1: usize, // Number of bits for representing input values (u)
-    pub h2: usize, // Number of bits for representing output values (v)
-    pub d: usize, // Dimension of the input space
-    pub sketch_modulus: u128, // Prime modulus used for sketching
-    pub delta: u128, // Delta for distance 
+    pub h1: usize,                       // Number of bits for representing input values (u)
+    pub h2: usize,                       // Number of bits for representing output values (v)
+    pub d: usize,                        // Dimension of the input space
+    pub sketch_modulus: u128,            // Prime modulus used for sketching
+    pub delta: u128,                     // Delta for distance
 }
 
 impl From<ProtocolParameters> for ShareConfig {

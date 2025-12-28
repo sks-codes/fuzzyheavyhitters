@@ -1,11 +1,11 @@
-use crate::data_structures::mod2k::Mod2k;
-use crate::util::{xor, and_bit};
-use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
+use crate::bytes_to_u128;
+use crate::data_structures::mod2k::Mod2k;
 use crate::data_structures::ringvec::RingVec;
+use crate::util::{and_bit, xor};
 
-use rand_core::RngCore; 
 use rand::Rng;
+use rand_core::RngCore;
 use std::cell::RefCell;
 use std::convert::TryInto;
 
@@ -13,9 +13,9 @@ thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RdcfCW<const N: usize> {
-    pub seed: [u8; AES_BLOCK_SIZE], 
+    pub seed: [u8; AES_BLOCK_SIZE],
     pub seed_bit: (bool, bool),
-    pub ys: (RingVec, RingVec), 
+    pub ys: (RingVec, RingVec),
     pub y_bits: (Mod2k, Mod2k),
 }
 
@@ -38,8 +38,11 @@ impl<const N: usize> RdcfCW<N> {
         out.push(bits_byte);
         out.extend_from_slice(&self.ys.0.to_bytes());
         out.extend_from_slice(&self.ys.1.to_bytes());
-        let y_bits_ringvec = RingVec::new(vec![self.y_bits.0.val, self.y_bits.1.val], self.ys.0.modulus())
-            .expect("Failed to create RingVec from y_bits");
+        let y_bits_ringvec = RingVec::new(
+            vec![self.y_bits.0.val, self.y_bits.1.val],
+            self.ys.0.modulus(),
+        )
+        .expect("Failed to create RingVec from y_bits");
         out.extend_from_slice(&y_bits_ringvec.to_bytes());
         out
     }
@@ -54,27 +57,33 @@ impl<const N: usize> RdcfCW<N> {
         offset += 1;
         let seed_bits = (bits_byte & 0x1 != 0, bits_byte & 0x2 != 0);
 
-        let (ys0, used0) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys0");
+        let (ys0, used0) = RingVec::from_bytes(&bytes[offset..], modulus)
+            .expect("Failed to create RingVec from ys0");
         offset += used0;
 
-        let (ys1, used1) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from ys1");
+        let (ys1, used1) = RingVec::from_bytes(&bytes[offset..], modulus)
+            .expect("Failed to create RingVec from ys1");
         offset += used1;
 
-        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y_bits");
+        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus)
+            .expect("Failed to create RingVec from y_bits");
         offset += used_y_bits;
         assert_eq!(ys0.len(), N, "Unexpected ys0 length");
         assert_eq!(ys1.len(), N, "Unexpected ys1 length");
         assert_eq!(y_bits_ringvec.len(), 2, "Unexpected y_bits length");
-        let y_bits = (Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus));
+        let y_bits = (
+            Mod2k::new(y_bits_ringvec[0], modulus),
+            Mod2k::new(y_bits_ringvec[1], modulus),
+        );
 
         (
             RdcfCW {
-            seed,
-            seed_bit: seed_bits,
-            ys: (ys0, ys1),
-            y_bits,
+                seed,
+                seed_bit: seed_bits,
+                ys: (ys0, ys1),
+                y_bits,
             },
-            offset
+            offset,
         )
     }
 }
@@ -114,7 +123,11 @@ impl<const N: usize> RdcfKey<N> {
         let mut root_seed = [0u8; AES_BLOCK_SIZE];
         root_seed.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
-        let num_words = u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("Failed to read num_words")) as usize;
+        let num_words = u32::from_le_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("Failed to read num_words"),
+        ) as usize;
         offset += 4;
         let mut cor_words = Vec::with_capacity(num_words);
         for _ in 0..num_words {
@@ -128,11 +141,10 @@ impl<const N: usize> RdcfKey<N> {
                 root_seed,
                 cor_words,
             },
-            offset
+            offset,
         )
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct RdcfEval<const N: usize> {
@@ -156,14 +168,19 @@ impl<const N: usize> RdcfEval<N> {
 
     pub fn from_bytes(bytes: &[u8], modulus: u128) -> (Self, usize) {
         let mut offset = 0;
-        let level = usize::from_le_bytes(bytes[offset..offset + std::mem::size_of::<usize>()].try_into().expect("Failed to read level"));
+        let level = usize::from_le_bytes(
+            bytes[offset..offset + std::mem::size_of::<usize>()]
+                .try_into()
+                .expect("Failed to read level"),
+        );
         offset += std::mem::size_of::<usize>();
         let mut seed = [0u8; AES_BLOCK_SIZE];
         seed.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
         let bit = bytes[offset] != 0;
         offset += 1;
-        let (y, used_y) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to create RingVec from y");
+        let (y, used_y) = RingVec::from_bytes(&bytes[offset..], modulus)
+            .expect("Failed to create RingVec from y");
         offset += used_y;
         assert_eq!(y.len(), N, "Unexpected y length");
         let (y_bit, used_y_bit) = Mod2k::from_bytes(&bytes[offset..], modulus);
@@ -177,7 +194,7 @@ impl<const N: usize> RdcfEval<N> {
                 y,
                 y_bit,
             },
-            offset
+            offset,
         )
     }
 
@@ -189,7 +206,7 @@ impl<const N: usize> RdcfEval<N> {
 fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> RdcfData<N> {
     let num_payload_bits = modulus.ilog2();
     let num_payload_bytes = ((num_payload_bits + 7) / 8) as usize;
-    let modulus_mask  = modulus - 1;
+    let modulus_mask = modulus - 1;
     FIXED_KEY_STREAM.with(|stream| {
         let mut s = stream.borrow_mut();
         s.set_key(&key);
@@ -206,8 +223,13 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
         let mut payload_rnd = vec![0u8; num_payload_bytes * (N + 1) * 2 + AES_BLOCK_SIZE * 2];
         s.fill_bytes(&mut payload_rnd);
 
-        out.seeds.0.copy_from_slice(&payload_rnd[payload_rnd.len() - 2 * AES_BLOCK_SIZE..payload_rnd.len() - AES_BLOCK_SIZE]);
-        out.seeds.1.copy_from_slice(&payload_rnd[payload_rnd.len() - AES_BLOCK_SIZE..]);
+        out.seeds.0.copy_from_slice(
+            &payload_rnd
+                [payload_rnd.len() - 2 * AES_BLOCK_SIZE..payload_rnd.len() - AES_BLOCK_SIZE],
+        );
+        out.seeds
+            .1
+            .copy_from_slice(&payload_rnd[payload_rnd.len() - AES_BLOCK_SIZE..]);
 
         out.bits.0 = (out.seeds.0[0] & 0x1) == 0;
         out.bits.1 = (out.seeds.1[0] & 0x1) == 0;
@@ -215,14 +237,26 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> R
         out.seeds.1[0] &= 0xFE; // Zero out first bit
 
         for i in 0..N {
-            out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) & modulus_mask;
+            out.ys.0[i] =
+                bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes])
+                    & modulus_mask;
         }
-        out.y_bits.0 = Mod2k::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
+        out.y_bits.0 = Mod2k::new(
+            bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]),
+            modulus,
+        );
 
         for i in 0..N {
-            out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 1) * num_payload_bytes..(i + N + 2) * num_payload_bytes]) & modulus_mask;
+            out.ys.1[i] = bytes_to_u128(
+                &payload_rnd[(i + N + 1) * num_payload_bytes..(i + N + 2) * num_payload_bytes],
+            ) & modulus_mask;
         }
-        out.y_bits.1 = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 1) * num_payload_bytes..(2 * N + 2) * num_payload_bytes]), modulus);
+        out.y_bits.1 = Mod2k::new(
+            bytes_to_u128(
+                &payload_rnd[(2 * N + 1) * num_payload_bytes..(2 * N + 2) * num_payload_bytes],
+            ),
+            modulus,
+        );
         out
     })
 }
@@ -233,16 +267,21 @@ fn gen_cor_word<const N: usize>(
     right: RingVec,
     modulus: u128,
     eval: &mut (RdcfEval<N>, RdcfEval<N>),
-) -> RdcfCW<N>
-{
+) -> RdcfCW<N> {
     let data = (
-            gen_layer_data::<N>(eval.0.seed, modulus),
-            gen_layer_data::<N>(eval.1.seed, modulus),
-        );
-    let delta_seed = (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0), xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1));
+        gen_layer_data::<N>(eval.0.seed, modulus),
+        gen_layer_data::<N>(eval.1.seed, modulus),
+    );
+    let delta_seed = (
+        xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &data.1.seeds.0),
+        xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &data.1.seeds.1),
+    );
     let delta_bits = (data.0.bits.0 ^ data.1.bits.0, data.0.bits.1 ^ data.1.bits.1);
     let delta_ys = (data.1.ys.0 - data.0.ys.0, data.1.ys.1 - data.0.ys.1);
-    let delta_y_bits = (data.1.y_bits.0 - data.0.y_bits.0, data.1.y_bits.1 - data.0.y_bits.1);
+    let delta_y_bits = (
+        data.1.y_bits.0 - data.0.y_bits.0,
+        data.1.y_bits.1 - data.0.y_bits.1,
+    );
 
     let mut cw = RdcfCW {
         seed: [0u8; 16],
@@ -258,55 +297,89 @@ fn gen_cor_word<const N: usize>(
         cw.seed = delta_seed.1;
         cw.seed_bit = (delta_bits.0 ^ true, delta_bits.1 ^ false);
         cw.ys = (delta_ys.0 + left.clone(), delta_ys.1 + right);
-        cw.y_bits = (delta_y_bits.0 + Mod2k::one(modulus), delta_y_bits.1 + Mod2k::zero(modulus));
+        cw.y_bits = (
+            delta_y_bits.0 + Mod2k::one(modulus),
+            delta_y_bits.1 + Mod2k::zero(modulus),
+        );
     } else {
         cw.seed = delta_seed.0;
         cw.seed_bit = (delta_bits.0 ^ false, delta_bits.1 ^ true);
         cw.ys = (delta_ys.0 + left.clone(), delta_ys.1 + left);
-        cw.y_bits = (delta_y_bits.0 + Mod2k::zero(modulus), delta_y_bits.1 + Mod2k::one(modulus));
+        cw.y_bits = (
+            delta_y_bits.0 + Mod2k::zero(modulus),
+            delta_y_bits.1 + Mod2k::one(modulus),
+        );
     }
 
     let new_seed = if !alpha_bit {
-        (xor::<AES_BLOCK_SIZE>(&data.0.seeds.0, &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.0.bit)),
-        xor::<AES_BLOCK_SIZE>(&data.1.seeds.0, &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.1.bit)))
+        (
+            xor::<AES_BLOCK_SIZE>(
+                &data.0.seeds.0,
+                &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.0.bit),
+            ),
+            xor::<AES_BLOCK_SIZE>(
+                &data.1.seeds.0,
+                &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.1.bit),
+            ),
+        )
     } else {
-        (xor::<AES_BLOCK_SIZE>(&data.0.seeds.1, &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.0.bit)),
-        xor::<AES_BLOCK_SIZE>(&data.1.seeds.1, &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.1.bit)))
+        (
+            xor::<AES_BLOCK_SIZE>(
+                &data.0.seeds.1,
+                &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.0.bit),
+            ),
+            xor::<AES_BLOCK_SIZE>(
+                &data.1.seeds.1,
+                &and_bit::<AES_BLOCK_SIZE>(cw.seed, eval.1.bit),
+            ),
+        )
     };
 
     let new_bits = if !alpha_bit {
-        (data.0.bits.0 ^ (cw.seed_bit.0 & eval.0.bit), data.1.bits.0 ^ (cw.seed_bit.0 & eval.1.bit))
+        (
+            data.0.bits.0 ^ (cw.seed_bit.0 & eval.0.bit),
+            data.1.bits.0 ^ (cw.seed_bit.0 & eval.1.bit),
+        )
     } else {
-        (data.0.bits.1 ^ (cw.seed_bit.1 & eval.0.bit), data.1.bits.1 ^ (cw.seed_bit.1 & eval.1.bit))
+        (
+            data.0.bits.1 ^ (cw.seed_bit.1 & eval.0.bit),
+            data.1.bits.1 ^ (cw.seed_bit.1 & eval.1.bit),
+        )
     };
 
     *eval = (
-                RdcfEval {
-                    level: 0,
-                    seed: new_seed.0,
-                    bit: new_bits.0,
-                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create left eval y"),
-                    y_bit: Mod2k::zero(modulus),
-                },
-                RdcfEval {
-                    level: 0,
-                    seed: new_seed.1,
-                    bit: new_bits.1,
-                    y: RingVec::zero_with_len(N, modulus).expect("Failed to create right eval y"),
-                    y_bit: Mod2k::zero(modulus),
-                }
-            );
+        RdcfEval {
+            level: 0,
+            seed: new_seed.0,
+            bit: new_bits.0,
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create left eval y"),
+            y_bit: Mod2k::zero(modulus),
+        },
+        RdcfEval {
+            level: 0,
+            seed: new_seed.1,
+            bit: new_bits.1,
+            y: RingVec::zero_with_len(N, modulus).expect("Failed to create right eval y"),
+            y_bit: Mod2k::zero(modulus),
+        },
+    );
 
     cw
 }
 
 /// All-prefix DPF implementation.
-impl<const N: usize> RdcfKey<N>
-{
-
+impl<const N: usize> RdcfKey<N> {
     // Need alpha < beta
-    pub fn gen_rdcf_key(alpha_bits: &[bool], a: &RingVec, b: &RingVec, modulus: u128) -> (RdcfKey<N>, RdcfKey<N>) {
-        assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
+    pub fn gen_rdcf_key(
+        alpha_bits: &[bool],
+        a: &RingVec,
+        b: &RingVec,
+        modulus: u128,
+    ) -> (RdcfKey<N>, RdcfKey<N>) {
+        assert!(
+            modulus > 0 && (modulus & (modulus - 1)) == 0,
+            "Modulus must be a power of 2"
+        );
 
         let u = alpha_bits.len();
         let zero = RingVec::zero_with_len(N, modulus).expect("Failed to create zero ringvec");
@@ -315,7 +388,10 @@ impl<const N: usize> RdcfKey<N>
         let mut payload_right = vec![b.clone() - a.clone(); u];
         payload_right[0] = b.clone();
 
-        let root_seeds = (rand::rng().random::<[u8; 16]>(), rand::rng().random::<[u8; 16]>());
+        let root_seeds = (
+            rand::rng().random::<[u8; 16]>(),
+            rand::rng().random::<[u8; 16]>(),
+        );
 
         let eval0 = RdcfEval {
             level: 0,
@@ -325,7 +401,7 @@ impl<const N: usize> RdcfKey<N>
             y_bit: Mod2k::one(modulus),
         };
 
-        let eval1 = RdcfEval{
+        let eval1 = RdcfEval {
             level: 0,
             seed: root_seeds.1,
             bit: false,
@@ -339,11 +415,11 @@ impl<const N: usize> RdcfKey<N>
 
         for (i, &alpha_bit) in alpha_bits.iter().enumerate() {
             let cw = gen_cor_word(
-                alpha_bit, 
+                alpha_bit,
                 payload_left[i].clone(),
-                payload_right[i].clone(), 
+                payload_right[i].clone(),
                 modulus,
-                &mut eval
+                &mut eval,
             );
             cor_words.push(cw);
         }
@@ -401,24 +477,24 @@ impl<const N: usize> RdcfKey<N>
     pub fn expand_prefix(&self, state: &RdcfEval<N>, modulus: u128) -> (RdcfEval<N>, RdcfEval<N>) {
         let data: RdcfData<N> = gen_layer_data(state.seed, modulus);
         let cw = self.cor_words[state.level].clone();
-        
+
         let seeds = (
             xor::<16>(&data.seeds.0, &and_bit::<16>(cw.seed, state.bit)),
-            xor::<16>(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit))
+            xor::<16>(&data.seeds.1, &and_bit::<16>(cw.seed, state.bit)),
         );
         let new_bits = (
             data.bits.0 ^ (cw.seed_bit.0 & state.bit),
-            data.bits.1 ^ (cw.seed_bit.1 & state.bit)
+            data.bits.1 ^ (cw.seed_bit.1 & state.bit),
         );
         let mut new_ys = (
             data.ys.0 + (cw.ys.0 * state.y_bit.val),
-            data.ys.1 + (cw.ys.1 * state.y_bit.val)
+            data.ys.1 + (cw.ys.1 * state.y_bit.val),
         );
         new_ys.0 = new_ys.0 + state.y.clone();
         new_ys.1 = new_ys.1 + state.y.clone();
         let new_y_bit = (
             data.y_bits.0 + (cw.y_bits.0 * state.y_bit),
-            data.y_bits.1 + (cw.y_bits.1 * state.y_bit)
+            data.y_bits.1 + (cw.y_bits.1 * state.y_bit),
         );
         (
             RdcfEval {
@@ -434,7 +510,7 @@ impl<const N: usize> RdcfKey<N>
                 bit: new_bits.1,
                 y: new_ys.1,
                 y_bit: new_y_bit.1,
-            }
+            },
         )
     }
 
@@ -476,11 +552,7 @@ impl<const N: usize> RdcfKey<N>
         self.cor_words.len()
     }
 
-    pub fn full_domain_eval(
-        &self,
-        modulus: u128,
-        domain_size: usize,
-    ) -> Vec<RingVec> {
+    pub fn full_domain_eval(&self, modulus: u128, domain_size: usize) -> Vec<RingVec> {
         let mut states = vec![self.eval_init(modulus); 1 << domain_size];
         for level in 0..domain_size {
             for i in (0..(1 << level)).rev() {
@@ -493,7 +565,7 @@ impl<const N: usize> RdcfKey<N>
     }
 
     pub fn full_domain_incremental_eval(
-        &self, 
+        &self,
         modulus: u128,
         domain_size: usize,
     ) -> Vec<Vec<RingVec>> {
@@ -504,7 +576,12 @@ impl<const N: usize> RdcfKey<N>
             for i in (0..(1 << level)).rev() {
                 (states[i << 1], states[i << 1 | 1]) = self.expand_prefix(&states[i], modulus);
             }
-            results.push(states[..(1 << (level + 1))].iter().map(|x| x.y.clone()).collect());
+            results.push(
+                states[..(1 << (level + 1))]
+                    .iter()
+                    .map(|x| x.y.clone())
+                    .collect(),
+            );
         }
         states.clear();
         results

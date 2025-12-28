@@ -1,7 +1,10 @@
-use crate::{data_structures::ringvec::RingVec, fss::{
-    ldcf::{LdcfEval, LdcfKey},
-    rdcf::{RdcfEval, RdcfKey},
-}};
+use crate::{
+    data_structures::ringvec::RingVec,
+    fss::{
+        ldcf::{LdcfEval, LdcfKey},
+        rdcf::{RdcfEval, RdcfKey},
+    },
+};
 
 #[derive(Clone, Debug)]
 pub struct IntervalFSSEval<const N: usize> {
@@ -28,16 +31,16 @@ impl<const N: usize> IntervalFSSEval<N> {
                 ldcf_eval,
                 rdcf_eval,
             },
-            offset
+            offset,
         )
     }
 
     pub fn ldcf_eval(&self) -> &LdcfEval<N> {
-        &self.ldcf_eval 
+        &self.ldcf_eval
     }
 
     pub fn rdcf_eval(&self) -> &RdcfEval<N> {
-        &self.rdcf_eval 
+        &self.rdcf_eval
     }
 
     pub fn result(&self) -> RingVec {
@@ -45,7 +48,6 @@ impl<const N: usize> IntervalFSSEval<N> {
         self.ldcf_eval.y() - self.rdcf_eval.y()
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct IntervalFSSKey<const N: usize> {
@@ -67,13 +69,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         offset += ldcf_size;
         let (rdcf_key, rdcf_size) = RdcfKey::from_bytes(&bytes[offset..], modulus);
         offset += rdcf_size;
-        (
-            IntervalFSSKey {
-                ldcf_key,
-                rdcf_key,
-            },
-            offset,
-        )
+        (IntervalFSSKey { ldcf_key, rdcf_key }, offset)
     }
 
     pub fn ldcf_key(&self) -> &LdcfKey<N> {
@@ -94,11 +90,13 @@ impl<const N: usize> IntervalFSSKey<N> {
     ) -> (IntervalFSSKey<N>, IntervalFSSKey<N>) {
         let right_left_payload = c.clone() - b.clone();
         let left_left_payload = a.clone() + right_left_payload.clone();
-        let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(alpha_bits, &left_left_payload, c, modulus);
+        let (ldcf_key0, ldcf_key1) =
+            LdcfKey::gen_ldcf_key(alpha_bits, &left_left_payload, c, modulus);
         let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(
             beta_bits,
             &right_left_payload,
-            &RingVec::zero_with_len(right_left_payload.len(), modulus).expect("Failed to create zero ringvec"),
+            &RingVec::zero_with_len(right_left_payload.len(), modulus)
+                .expect("Failed to create zero ringvec"),
             modulus,
         );
         (
@@ -114,7 +112,7 @@ impl<const N: usize> IntervalFSSKey<N> {
     }
 
     pub fn eval_bit(
-        &self, 
+        &self,
         state: &IntervalFSSEval<N>,
         modulus: u128,
         dir: bool,
@@ -147,10 +145,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         )
     }
 
-    pub fn init_eval(
-        &self,
-        modulus: u128,
-    ) -> IntervalFSSEval<N> {
+    pub fn init_eval(&self, modulus: u128) -> IntervalFSSEval<N> {
         let ldcf_eval = self.ldcf_key.eval_init(modulus);
         let rdcf_eval = self.rdcf_key.eval_init(modulus);
         IntervalFSSEval {
@@ -159,40 +154,28 @@ impl<const N: usize> IntervalFSSKey<N> {
         }
     }
 
-    pub fn eval_interval_fss(
-        &self,
-        prefix: &[bool],
-        modulus: u128,
-    ) -> RingVec {
+    pub fn eval_interval_fss(&self, prefix: &[bool], modulus: u128) -> RingVec {
         let ldcf_eval = self.ldcf_key.eval_ldcf(prefix, modulus);
         let rdcf_eval = self.rdcf_key.eval_rdcf(prefix, modulus);
         let result = ldcf_eval - rdcf_eval;
         result
     }
 
-    pub fn full_domain_eval(
-        &self,
-        modulus: u128,
-        domain_size: usize,
-    ) -> Vec<RingVec> {
+    pub fn full_domain_eval(&self, modulus: u128, domain_size: usize) -> Vec<RingVec> {
         let ldcf_full_domain_eval = self.ldcf_key.full_domain_eval(modulus, domain_size);
         let rdcf_full_domain_eval = self.rdcf_key.full_domain_eval(modulus, domain_size);
-        ldcf_full_domain_eval.iter().zip(rdcf_full_domain_eval.iter()).map(|(ldcf, rdcf)| ldcf - rdcf).collect()
+        ldcf_full_domain_eval
+            .iter()
+            .zip(rdcf_full_domain_eval.iter())
+            .map(|(ldcf, rdcf)| ldcf - rdcf)
+            .collect()
     }
 
-    pub fn full_domain_eval_ldcf(
-        &self,
-        modulus: u128,
-        domain_size: usize,
-    ) -> Vec<RingVec> {
+    pub fn full_domain_eval_ldcf(&self, modulus: u128, domain_size: usize) -> Vec<RingVec> {
         self.ldcf_key.full_domain_eval(modulus, domain_size)
     }
 
-    pub fn full_domain_eval_rdcf(
-        &self,
-        modulus: u128,
-        domain_size: usize,
-    ) -> Vec<RingVec> {
+    pub fn full_domain_eval_rdcf(&self, modulus: u128, domain_size: usize) -> Vec<RingVec> {
         self.rdcf_key.full_domain_eval(modulus, domain_size)
     }
 }

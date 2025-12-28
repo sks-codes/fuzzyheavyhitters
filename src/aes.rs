@@ -2,8 +2,8 @@ use core::arch::x86_64::{
     __m128i, _mm_add_epi64, _mm_loadu_si128, _mm_set_epi64x, _mm_storeu_si128,
 };
 
-use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use aes::cipher::generic_array::typenum;
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use aes::Aes128;
 
 // AES key size in bytes. We always use AES-128,
@@ -24,13 +24,13 @@ pub struct FixedKeyPrgStream {
     have: usize,
 }
 
-
 impl FixedKeyPrgStream {
     pub fn new() -> Self {
         let key = GenericArray::from_slice(&[0; AES_KEY_SIZE]);
         // Initialize ctr_array and ctr_generic_array with counters from 0 to 100
         let mut ctr_array = [unsafe { std::mem::zeroed() }; 101];
-        let mut ctr_generic_array = GenericArray::<GenericArray<u8, typenum::U16>, typenum::U101>::default();
+        let mut ctr_generic_array =
+            GenericArray::<GenericArray<u8, typenum::U16>, typenum::U101>::default();
         for i in 0..=100 {
             let mut ctr_bytes = [0u8; AES_BLOCK_SIZE];
             ctr_bytes[8..].copy_from_slice(&(i as u64).to_be_bytes());
@@ -68,7 +68,8 @@ impl FixedKeyPrgStream {
         let mut to_encrypt = self.ctr_generic_array[self.count];
         self.aes.encrypt_block(&mut to_encrypt);
         // Compute:   AES_0000(ctr) XOR ctr
-        to_encrypt.iter_mut()
+        to_encrypt
+            .iter_mut()
             .zip(self.ctr_generic_array[self.count].iter())
             .for_each(|(x1, x2)| *x1 ^= *x2);
         self.buf[self.count * AES_BLOCK_SIZE..(self.count + 1) * AES_BLOCK_SIZE]
@@ -80,14 +81,17 @@ impl FixedKeyPrgStream {
         self.have += 8 * AES_BLOCK_SIZE;
 
         // Create a reference to exactly 8 blocks for encryption
-        let mut blocks_to_encrypt = GenericArray::<GenericArray<u8, typenum::U16>, typenum::U8>::from_mut_slice(
-            &mut self.ctr_generic_array[self.count..self.count + 8]
-        ).clone();
-        
+        let mut blocks_to_encrypt =
+            GenericArray::<GenericArray<u8, typenum::U16>, typenum::U8>::from_mut_slice(
+                &mut self.ctr_generic_array[self.count..self.count + 8],
+            )
+            .clone();
+
         self.aes.encrypt_blocks(&mut blocks_to_encrypt);
-        
+
         for i in 0..8 {
-            blocks_to_encrypt[i].iter_mut()
+            blocks_to_encrypt[i]
+                .iter_mut()
                 .zip(self.ctr_generic_array[self.count + i].iter())
                 .for_each(|(x1, x2)| *x1 ^= *x2);
             self.buf[(self.count + i) * AES_BLOCK_SIZE..(self.count + i + 1) * AES_BLOCK_SIZE]

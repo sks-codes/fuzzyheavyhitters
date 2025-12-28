@@ -1,9 +1,7 @@
-use mosaic::{
-    util::u128_to_bits_msb,
-    data_structures::ringvec::RingVec,
-    fss::interval::IntervalFSSKey,
-};
 use clap::Parser;
+use mosaic::{
+    data_structures::ringvec::RingVec, fss::interval::IntervalFSSKey, util::u128_to_bits_msb,
+};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -32,14 +30,8 @@ fn main() {
     let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
     let c = RingVec::new(vec![10u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = IntervalFSSKey::<2>::gen_interval_fss_key(
-        &alpha_bits,
-        &beta_bits,
-        &a,
-        &b,
-        &c,
-        modulus,
-    );
+    let (key0, key1) =
+        IntervalFSSKey::<2>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
 
     // Benchmark Full Domain Evaluation
     let start = Instant::now();
@@ -49,7 +41,11 @@ fn main() {
     println!("Full domain evaluation took: {:?}", duration);
 
     // Verify correctness
-    let eval_both = eval0.iter().zip(eval1.iter()).map(|(x, y)| x - y).collect::<Vec<RingVec>>();
+    let eval_both = eval0
+        .iter()
+        .zip(eval1.iter())
+        .map(|(x, y)| x - y)
+        .collect::<Vec<RingVec>>();
     for i in 0..(1 << domain_size) {
         if i < alpha {
             assert_eq!(eval_both[i as usize], a);

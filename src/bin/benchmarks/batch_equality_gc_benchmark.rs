@@ -1,12 +1,12 @@
+use clap::Parser;
 use mosaic::{
     channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
-    fuzzy_match::check_phase::{CheckPhase, CheckConfig, CheckMethod, CheckProperty},
+    fuzzy_match::check_phase::{CheckConfig, CheckMethod, CheckPhase, CheckProperty},
 };
-use scuttlebutt::{AesRng, AbstractChannel};
-use std::time::Instant;
 use rand::Rng;
-use clap::Parser;
+use scuttlebutt::{AbstractChannel, AesRng};
+use std::time::Instant;
 
 fn generate_test_inputs(num_inputs: usize, input_bit_length: usize) -> Vec<Vec<bool>> {
     let mut rng = rand::rng();
@@ -29,9 +29,15 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     // Create channels
     let mut other_server_channel = if server {
-        connect_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        connect_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     } else {
-        listen_to(config.server0_addr.clone(), config.server0_to_server1_port.parse::<u16>().unwrap())?
+        listen_to(
+            config.server0_addr.clone(),
+            config.server0_to_server1_port.parse::<u16>().unwrap(),
+        )?
     };
     // Create CheckConfig for garbler
     let check_config = CheckConfig {
@@ -42,11 +48,14 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         property: CheckProperty::Equality,
         method: CheckMethod::GC,
     };
-    
+
     let check_phase = CheckPhase::new(check_config);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
-    println!("Generating {} test inputs with bit length {}", config.num_clients, config.h2);
+    println!(
+        "Generating {} test inputs with bit length {}",
+        config.num_clients, config.h2
+    );
     let inputs = generate_test_inputs(config.num_clients, config.h2 * config.d);
 
     println!("Starting server benchmark...");
@@ -61,14 +70,12 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     let start_time = Instant::now();
     let mut rng = AesRng::new();
-    let _results = check_phase.batch_equality_testing_gc(
-        &inputs,
-        &mut other_server_channel,
-        &mut rng,
-    ).map_err(|e| format!("CheckPhase error: {:?}", e))?;
-    
+    let _results = check_phase
+        .batch_equality_testing_gc(&inputs, &mut other_server_channel, &mut rng)
+        .map_err(|e| format!("CheckPhase error: {:?}", e))?;
+
     let elapsed = start_time.elapsed();
-    
+
     // Print results
     println!("\n=== Server Benchmark Results ===");
     println!("Server time: {:?}", elapsed);

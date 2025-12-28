@@ -1,22 +1,25 @@
+use clap::Parser;
 use mosaic::{
+    channel::{listen_to, setup_parallel_channels},
     configs::cli_config::CliConfig,
     naive::protocol::NaiveProtocol,
-    channel::{listen_to, setup_parallel_channels},
 };
-use clap::Parser;
 use std::fs;
 
 /// Load query points from JSON file
 fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     let content = fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read query file {}: {}", file_path, e))?;
-    
+
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse query file {}: {}", file_path, e))
 }
 
 fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result<(), String> {
-    println!("Starting naive server (side: {})...", if is_server1 { "1" } else { "0" });
+    println!(
+        "Starting naive server (side: {})...",
+        if is_server1 { "1" } else { "0" }
+    );
     let config = CliConfig::from_file(config_path)?;
     let server_addr = if is_server1 {
         config.network.server1_addr.clone()
@@ -28,37 +31,28 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     let threshold = config.protocol.threshold;
     let protocol = NaiveProtocol::new(share_config, is_server1, threshold);
 
-    let client_to_server_port = if is_server1 { 
-        config.network.client_to_server1_port 
-    } else { 
-        config.network.client_to_server0_port 
+    let client_to_server_port = if is_server1 {
+        config.network.client_to_server1_port
+    } else {
+        config.network.client_to_server0_port
     };
 
-    let mut client_channel = listen_to(
-        server_addr.clone(),
-        client_to_server_port,
-    ).map_err(|e| format!("Failed to listen for client connection: {}", e))?;
+    let mut client_channel = listen_to(server_addr.clone(), client_to_server_port)
+        .map_err(|e| format!("Failed to listen for client connection: {}", e))?;
 
-    let client_shares = protocol.receive_client_shares(&mut client_channel)
+    let client_shares = protocol
+        .receive_client_shares(&mut client_channel)
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
 
     let server0_addr = config.network.server0_addr;
     let server0_to_server1_port = config.network.server0_to_server1_port;
 
     let mut other_server_channels = if is_server1 {
-        setup_parallel_channels(
-            true,
-            num_threads,
-            &server0_addr,
-            server0_to_server1_port,
-        ).map_err(|e| format!("Failed to set up channels to other server: {}", e))?
+        setup_parallel_channels(true, num_threads, &server0_addr, server0_to_server1_port)
+            .map_err(|e| format!("Failed to set up channels to other server: {}", e))?
     } else {
-        setup_parallel_channels(
-            false,
-            num_threads,
-            &server0_addr,
-            server0_to_server1_port,
-        ).map_err(|e| format!("Failed to set up channels from other server: {}", e))?
+        setup_parallel_channels(false, num_threads, &server0_addr, server0_to_server1_port)
+            .map_err(|e| format!("Failed to set up channels from other server: {}", e))?
     };
 
     let query_points = load_query_points(&config.query_file)
@@ -70,12 +64,14 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         .map_err(|e| format!("Failed to build thread pool: {}", e))?;
 
     println!("Running server protocol...");
-    let _results = protocol.run_server_known_dictionary_parallel(
-        &client_shares,
-        &query_points,
-        &thread_pool,
-        &mut other_server_channels,
-    ).map_err(|e| format!("Failed to run server protocol: {}", e))?;
+    let _results = protocol
+        .run_server_known_dictionary_parallel(
+            &client_shares,
+            &query_points,
+            &thread_pool,
+            &mut other_server_channels,
+        )
+        .map_err(|e| format!("Failed to run server protocol: {}", e))?;
 
     Ok(())
 }

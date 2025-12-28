@@ -1,16 +1,16 @@
+use clap::Parser;
 use mosaic::{
+    channel::{listen_to, setup_parallel_channels},
     configs::cli_config::CliConfig,
     fuzzy_match::protocol::MosaicProtocol,
-    channel::{setup_parallel_channels, listen_to},
 };
 use std::fs;
-use clap::Parser;
 
 /// Load query points from JSON file
 fn load_query_points(file_path: &str) -> Result<Vec<Vec<u128>>, String> {
     let content = fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read query file {}: {}", file_path, e))?;
-    
+
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse query file {}: {}", file_path, e))
 }
@@ -20,50 +20,62 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     let cli_config = CliConfig::from_file(config_path)?;
     let server_id = if is_server1 { 1 } else { 0 };
     let is_known_dictionary = cli_config.protocol.dictionary_type == "Known";
-    
-    println!("Server {} starting {} dictionary protocol with {} parallel threads...", 
-             server_id, 
-             if is_known_dictionary { "known" } else { "unknown" },
-             num_threads);
+
+    println!(
+        "Server {} starting {} dictionary protocol with {} parallel threads...",
+        server_id,
+        if is_known_dictionary {
+            "known"
+        } else {
+            "unknown"
+        },
+        num_threads
+    );
 
     let server_addr = if is_server1 {
         cli_config.network.server1_addr.clone()
     } else {
         cli_config.network.server0_addr.clone()
     };
-    
+
     // Create protocol configuration
     let protocol_config = cli_config.to_protocol_config(is_server1)?;
     let protocol = MosaicProtocol::new(protocol_config, is_server1);
-    
+
     // Listen for client connection
-    let client_to_server_port = if is_server1 { 
-        cli_config.network.client_to_server1_port 
-    } else { 
-        cli_config.network.client_to_server0_port 
+    let client_to_server_port = if is_server1 {
+        cli_config.network.client_to_server1_port
+    } else {
+        cli_config.network.client_to_server0_port
     };
 
-    let mut client_channel = listen_to(
-        server_addr.clone(),
-        client_to_server_port,
-    ).expect("Failed to listen for client connection");
-    
+    let mut client_channel = listen_to(server_addr.clone(), client_to_server_port)
+        .expect("Failed to listen for client connection");
+
     println!("Server {}: Receiving shares from client...", server_id);
-    let shares = protocol.receive_client_shares(&mut client_channel)
+    let shares = protocol
+        .receive_client_shares(&mut client_channel)
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
-    println!("Server {}: Received {} shares from client", server_id, shares.len());
+    println!(
+        "Server {}: Received {} shares from client",
+        server_id,
+        shares.len()
+    );
 
     // Determine number of parallel channels (use same as num_threads or system parallelism)
     let num_dealer_channels = num_threads;
 
     // Set up multiple dealer channels
-    println!("Server {}: Setting up {} dealer channels...", server_id, num_dealer_channels);
+    println!(
+        "Server {}: Setting up {} dealer channels...",
+        server_id, num_dealer_channels
+    );
     let dealer_to_server_port = if is_server1 {
         cli_config.network.dealer_to_server1_port
     } else {
         cli_config.network.dealer_to_server0_port
     };
-    
+
     let mut signal_dealer_channels = setup_parallel_channels(
         false,
         num_dealer_channels,
@@ -89,10 +101,13 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     // Set up parallel server-to-server communication channels
     let server0_addr = &cli_config.network.server0_addr;
     let server0_to_server1_port = cli_config.network.server0_to_server1_port;
-    
+
     let mut other_server_channels = {
-        println!("Server {}: Setting up {} inter-server channels...", server_id, num_threads);
-        
+        println!(
+            "Server {}: Setting up {} inter-server channels...",
+            server_id, num_threads
+        );
+
         let channels = if is_server1 {
             // Server 1 connects to Server 0's channels
             setup_parallel_channels(
@@ -110,21 +125,32 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
                 server0_to_server1_port,
             )?
         };
-        
-        println!("Server {}: Successfully established {} inter-server channels", server_id, channels.len());
+
+        println!(
+            "Server {}: Successfully established {} inter-server channels",
+            server_id,
+            channels.len()
+        );
         channels
     };
     let start_time = std::time::Instant::now();
 
     let protocol_time = if is_known_dictionary {
         // Load query points for known dictionary
-        println!("Server {}: Loading query points from {}", server_id, cli_config.query_file);
+        println!(
+            "Server {}: Loading query points from {}",
+            server_id, cli_config.query_file
+        );
         let query_points = load_query_points(&cli_config.query_file)?;
-        
+
         // Run the protocol for known dictionary
-        println!("Server {}: Using {} dealer channels and {} server channels for parallel processing", 
-                 server_id, signal_dealer_channels.len(), other_server_channels.len());
-        
+        println!(
+            "Server {}: Using {} dealer channels and {} server channels for parallel processing",
+            server_id,
+            signal_dealer_channels.len(),
+            other_server_channels.len()
+        );
+
         let results = protocol.run_server_known_dictionary_parallel(
             &shares,
             &query_points,
@@ -138,8 +164,11 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
 
         start_time.elapsed()
     } else {
-        println!("Server {}: Running unknown dictionary protocol...", server_id);
-        
+        println!(
+            "Server {}: Running unknown dictionary protocol...",
+            server_id
+        );
+
         // Run the protocol for unknown dictionary
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
@@ -149,17 +178,21 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             &mut other_server_channels,
         )?;
         println!("Server {}: Protocol execution completed", server_id);
-        println!("Found {} heavy hitters: {:?}", heavy_hitters.len(), heavy_hitters);
-        
+        println!(
+            "Found {} heavy hitters: {:?}",
+            heavy_hitters.len(),
+            heavy_hitters
+        );
+
         start_time.elapsed()
     };
-        
+
     // Calculate communication metrics from all channels
     let mut total_other_server_bytes_sent = 0;
     let mut total_other_server_bytes_received = 0;
     let mut total_dealer_bytes_sent = 0;
     let mut total_dealer_bytes_received = 0;
-        
+
     for channel in &other_server_channels {
         let (sent, received) = channel.get_communication_stats();
         total_other_server_bytes_sent += sent;
@@ -184,17 +217,47 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
 
     println!("\n=== Server {} Performance Summary ===", server_id);
     println!("📊 Protocol execution time: {:.2?}", protocol_time);
-    println!("📡 Communication with other server ({} channels):", other_server_channels.len());
-    println!("   Bytes sent: {} bytes ({:.2} KB)", total_other_server_bytes_sent, total_other_server_bytes_sent as f64 / 1024.0);
-    println!("   Bytes received: {} bytes ({:.2} KB)", total_other_server_bytes_received, total_other_server_bytes_received as f64 / 1024.0);
-    println!("📡 Communication with dealer ({} channels):", signal_dealer_channels.len());
-    println!("   Bytes sent: {} bytes ({:.2} KB)", total_dealer_bytes_sent, total_dealer_bytes_sent as f64 / 1024.0);
-    println!("   Bytes received: {} bytes ({:.2} KB)", total_dealer_bytes_received, total_dealer_bytes_received as f64 / 1024.0);
-    println!("📡 Total communication: {} bytes ({:.2} KB)", 
-                total_other_server_bytes_sent + total_other_server_bytes_received + total_dealer_bytes_sent + total_dealer_bytes_received,
-                (total_other_server_bytes_sent + total_other_server_bytes_received + total_dealer_bytes_sent + total_dealer_bytes_received) as f64 / 1024.0);
-        
-    
+    println!(
+        "📡 Communication with other server ({} channels):",
+        other_server_channels.len()
+    );
+    println!(
+        "   Bytes sent: {} bytes ({:.2} KB)",
+        total_other_server_bytes_sent,
+        total_other_server_bytes_sent as f64 / 1024.0
+    );
+    println!(
+        "   Bytes received: {} bytes ({:.2} KB)",
+        total_other_server_bytes_received,
+        total_other_server_bytes_received as f64 / 1024.0
+    );
+    println!(
+        "📡 Communication with dealer ({} channels):",
+        signal_dealer_channels.len()
+    );
+    println!(
+        "   Bytes sent: {} bytes ({:.2} KB)",
+        total_dealer_bytes_sent,
+        total_dealer_bytes_sent as f64 / 1024.0
+    );
+    println!(
+        "   Bytes received: {} bytes ({:.2} KB)",
+        total_dealer_bytes_received,
+        total_dealer_bytes_received as f64 / 1024.0
+    );
+    println!(
+        "📡 Total communication: {} bytes ({:.2} KB)",
+        total_other_server_bytes_sent
+            + total_other_server_bytes_received
+            + total_dealer_bytes_sent
+            + total_dealer_bytes_received,
+        (total_other_server_bytes_sent
+            + total_other_server_bytes_received
+            + total_dealer_bytes_sent
+            + total_dealer_bytes_received) as f64
+            / 1024.0
+    );
+
     Ok(())
 }
 
@@ -215,7 +278,7 @@ fn main() {
     let config_path = args.config;
     let num_threads = args.threads;
 
-   let result = if side == 0 {
+    let result = if side == 0 {
         run_server(&config_path, false, num_threads)
     } else if side == 1 {
         run_server(&config_path, true, num_threads)

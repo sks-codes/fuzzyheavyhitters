@@ -1,15 +1,11 @@
+use crate::channel::CommTrackingChannel;
+use crate::data_structures::mod2k::Mod2k;
+use crate::fss::{ldcf::LdcfKey, rdcf::RdcfKey};
 use crate::garbled_circuits::greater_than_or_equal_threshold::{
-    multiple_gb_greater_than_ss, multiple_ev_greater_than_ss};
-use crate::data_structures::{
-    mod2k::Mod2k,
-};
-use crate::fss::{
-    ldcf::LdcfKey,
-    rdcf::RdcfKey,
+    multiple_ev_greater_than_ss, multiple_gb_greater_than_ss,
 };
 use crate::util::u128_to_bits_msb;
-use crate::channel::CommTrackingChannel;
-use scuttlebutt::{AesRng, AbstractChannel};
+use scuttlebutt::{AbstractChannel, AesRng};
 
 /// Method for threshold comparison
 #[derive(Debug, Clone, PartialEq)]
@@ -24,9 +20,7 @@ pub enum ThresholdMethod {
 #[derive(Debug, Clone)]
 pub enum ThresholdData {
     /// No additional data needed for garbled circuits
-    GarbledCircuits {
-        t: u128,
-    },
+    GarbledCircuits { t: u128 },
     /// FSS key and random value for IntervalFSS privacy
     IntervalFSS {
         /// FSS key for this server
@@ -84,7 +78,7 @@ impl ThresholdPhase {
     }
 
     /// Aggregate match results and compare with threshold using garbled circuits
-    /// 
+    ///
     /// This method:
     /// 1. Takes ring shares from the check phase for all clients: b^1, b^2, ..., b^n
     /// 2. Aggregates them: sum = b^1 + b^2 + ... + b^n (number of clients that "match")
@@ -110,7 +104,7 @@ impl ThresholdPhase {
     }
 
     /// Compare with threshold using IntervalFSS approach
-    /// 
+    ///
     /// This method:
     /// 1. Takes ring shares from the check phase for all clients: b^1, b^2, ..., b^n
     /// 2. Aggregates them: sum = b^1 + b^2 + ... + b^n (number of clients that "match")
@@ -124,28 +118,33 @@ impl ThresholdPhase {
         fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
-        let masked_values = match_results.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
-            input + random_value
-        }).collect::<Vec<Mod2k>>();
+        let masked_values = match_results
+            .iter()
+            .zip(random_values.iter())
+            .map(|(&input, &random_value)| input + random_value)
+            .collect::<Vec<Mod2k>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
             // Garbler: send all masked values, then read all counterpart masked values
             for masked_eval in &masked_values {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel
-                    .write_bytes(&eval_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(&eval_bytes).map_err(|e| {
+                    ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
 
             let mut combined = Vec::with_capacity(masked_values.len());
             for &masked_value in &masked_values {
                 let mut received_bytes = [0u8; 16];
-                channel
-                    .read_bytes(&mut received_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                channel.read_bytes(&mut received_bytes).map_err(|e| {
+                    ThresholdPhaseError::ChannelError(format!(
+                        "Failed to read other masked evals: {}",
+                        e
+                    ))
+                })?;
                 let other_masked_value =
                     Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
                 combined.push(masked_value + other_masked_value);
@@ -156,9 +155,12 @@ impl ThresholdPhase {
             let mut combined = Vec::with_capacity(masked_values.len());
             for &masked_value in &masked_values {
                 let mut received_bytes = [0u8; 16];
-                channel
-                    .read_bytes(&mut received_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                channel.read_bytes(&mut received_bytes).map_err(|e| {
+                    ThresholdPhaseError::ChannelError(format!(
+                        "Failed to read other masked evals: {}",
+                        e
+                    ))
+                })?;
                 let other_masked_value =
                     Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h3);
                 combined.push(masked_value + other_masked_value);
@@ -166,29 +168,34 @@ impl ThresholdPhase {
 
             for masked_eval in &masked_values {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel
-                    .write_bytes(&eval_bytes)
-                    .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(&eval_bytes).map_err(|e| {
+                    ThresholdPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                ThresholdPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
 
             combined
         };
 
         let out_modulus = 2;
-        let threshold_exceeded = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
-            let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
-            let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
-            fss_result[0] == 1
-        }).collect::<Vec<bool>>();
+        let threshold_exceeded = combined_masked_values
+            .iter()
+            .zip(fss_keys.iter())
+            .map(|(masked_value, (fss_key0, fss_key1))| {
+                let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
+                let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus)
+                    + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
+                fss_result[0] == 1
+            })
+            .collect::<Vec<bool>>();
 
         Ok(threshold_exceeded)
     }
 
     /// Common function to compare with threshold using the configured method
-    /// 
+    ///
     /// This function dispatches to either garbled circuits or IntervalFSS based on the config
     pub fn compare_with_threshold(
         &self,
@@ -199,23 +206,26 @@ impl ThresholdPhase {
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
         match self.config.method {
             ThresholdMethod::GC => {
-                let mut current_t = Mod2k::zero(1u128<<self.config.h3);
+                let mut current_t = Mod2k::zero(1u128 << self.config.h3);
                 for (i, threshold_data) in threshold_data_list.iter().enumerate() {
                     match threshold_data {
                         ThresholdData::GarbledCircuits { t } => {
                             if i != 0 {
                                 if *t != current_t.val() {
                                     return Err(ThresholdPhaseError::InvalidConfig(
-                                        "All GarbledCircuits thresholds must be the same".to_string(),
+                                        "All GarbledCircuits thresholds must be the same"
+                                            .to_string(),
                                     ));
                                 }
                             } else {
                                 current_t = Mod2k::new(*t, 1u128 << self.config.h3);
                             }
-                        },
-                        _ => return Err(ThresholdPhaseError::InvalidConfig(
-                            "Garbled circuits method requires GarbledCircuits data".to_string()
-                        )),
+                        }
+                        _ => {
+                            return Err(ThresholdPhaseError::InvalidConfig(
+                                "Garbled circuits method requires GarbledCircuits data".to_string(),
+                            ))
+                        }
                     }
                 }
                 self.compare_with_threshold_gc(aggregated_results, current_t, channel, rng)
@@ -225,16 +235,27 @@ impl ThresholdPhase {
                 let mut random_values = Vec::new();
                 for threshold_data in threshold_data_list {
                     match threshold_data {
-                        ThresholdData::IntervalFSS { fss_key, random_value } => {
+                        ThresholdData::IntervalFSS {
+                            fss_key,
+                            random_value,
+                        } => {
                             fss_keys.push(fss_key.clone());
                             random_values.push(Mod2k::new(*random_value, 1u128 << self.config.h3));
-                        },
-                        _ => return Err(ThresholdPhaseError::InvalidConfig(
-                            "FSS method requires FSS data with FSS key and random value".to_string()
-                        )),
+                        }
+                        _ => {
+                            return Err(ThresholdPhaseError::InvalidConfig(
+                                "FSS method requires FSS data with FSS key and random value"
+                                    .to_string(),
+                            ))
+                        }
                     }
                 }
-                self.compare_with_threshold_intervalfss(aggregated_results, &random_values, &fss_keys, channel)
+                self.compare_with_threshold_intervalfss(
+                    aggregated_results,
+                    &random_values,
+                    &fss_keys,
+                    channel,
+                )
             }
         }
     }

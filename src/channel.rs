@@ -1,10 +1,10 @@
+use scuttlebutt::{AbstractChannel, SyncChannel};
 use std::io::{BufReader, BufWriter};
+use std::net::TcpListener;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::net::TcpListener;
-use scuttlebutt::{AbstractChannel, SyncChannel};
 
 /// A wrapper around scuttlebutt's SyncChannel that tracks communication costs
 #[derive(Clone)]
@@ -69,7 +69,10 @@ impl AbstractChannel for CommTrackingChannel {
     }
 }
 
-pub fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
+pub fn connect_to(
+    ip: String,
+    port: u16,
+) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
     println!("Connecting to {}", addr);
     let stream = loop {
@@ -90,7 +93,7 @@ pub fn connect_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn 
 pub fn listen_to(ip: String, port: u16) -> Result<CommTrackingChannel, Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", ip, port);
     println!("Listening on {}", addr);
-    
+
     let listener = TcpListener::bind(&addr)?;
     let (stream, _) = listener.accept()?;
     stream.set_nodelay(true)?;

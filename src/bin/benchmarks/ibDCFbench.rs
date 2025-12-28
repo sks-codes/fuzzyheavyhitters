@@ -1,15 +1,11 @@
-use mosaic::{
-    fss::ibdcf::IbDCFKey,
-    string_to_bits,
-};
 use csv::Writer;
+use mosaic::{fss::ibdcf::IbDCFKey, string_to_bits};
 use std::time::Instant;
 
-use std::io;
+use rand::distr::Alphanumeric;
 use rand::Rng;
 use rayon::prelude::*;
-use rand::distr::Alphanumeric;
-
+use std::io;
 
 fn sample_string(len: usize) -> String {
     let mut rng = rand::rng();
@@ -18,8 +14,7 @@ fn sample_string(len: usize) -> String {
         .take(len / 8)
         .collect()
 }
-fn generate_ibdcf_keys(string_length : usize, num_keys : usize) -> (Vec<IbDCFKey>, Vec<IbDCFKey>) {
-
+fn generate_ibdcf_keys(string_length: usize, num_keys: usize) -> (Vec<IbDCFKey>, Vec<IbDCFKey>) {
     rayon::iter::repeat(0)
         .take(num_keys)
         .enumerate()
@@ -47,11 +42,13 @@ fn generate_ibdcf_keys(string_length : usize, num_keys : usize) -> (Vec<IbDCFKey
 //         .unzip()
 // }
 
-
 #[tokio::main]
 async fn main() -> io::Result<()> {
     println!("Using only one thread!");
-    rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_global()
+        .unwrap();
 
     let mut wtr = Writer::from_path("src/bin/benchmarks/ibDCFbench.csv")?;
     wtr.write_record(&["string_length", "number_keys", "time", "avg_time", "size"])?;
@@ -59,13 +56,22 @@ async fn main() -> io::Result<()> {
     let string_lengths = [16, 128, 256, 384, 512, 640, 768, 896, 1024];
     let num_keys = 10000;
 
-    for i in string_lengths{
+    for i in string_lengths {
         let start = Instant::now();
-        let keys= generate_ibdcf_keys(i, num_keys);
+        let keys = generate_ibdcf_keys(i, num_keys);
         let delta = start.elapsed().as_secs_f64();
-        println!("Time to generate ibDCF keys for string length {}: {:?}", i, delta);
+        println!(
+            "Time to generate ibDCF keys for string length {}: {:?}",
+            i, delta
+        );
         let encoded: Vec<u8> = bincode::serialize(&keys.0[0]).unwrap();
-        wtr.write_record(&[i.to_string(), num_keys.to_string(), delta.to_string(), (delta / (num_keys as f64)).to_string(), encoded.len().to_string()])?;
+        wtr.write_record(&[
+            i.to_string(),
+            num_keys.to_string(),
+            delta.to_string(),
+            (delta / (num_keys as f64)).to_string(),
+            encoded.len().to_string(),
+        ])?;
     }
     wtr.flush()?;
 
@@ -76,12 +82,18 @@ async fn main() -> io::Result<()> {
     let string_lengths = [16, 128, 256, 384, 512, 640, 768, 896, 1024];
     let num_keys = 10000;
 
-    for i in string_lengths{
+    for i in string_lengths {
         let start = Instant::now();
-        let keys= generate_ibdcf_keys(i, num_keys);
+        let keys = generate_ibdcf_keys(i, num_keys);
         let delta = start.elapsed().as_secs_f64();
         let encoded: Vec<u8> = bincode::serialize(&keys.0[0]).unwrap();
-        wtr.write_record(&[i.to_string(), num_keys.to_string(), delta.to_string(), (delta / (num_keys as f64)).to_string(), encoded.len().to_string()])?;
+        wtr.write_record(&[
+            i.to_string(),
+            num_keys.to_string(),
+            delta.to_string(),
+            (delta / (num_keys as f64)).to_string(),
+            encoded.len().to_string(),
+        ])?;
     }
     wtr.flush()?;
 

@@ -1,11 +1,11 @@
 use crate::collect;
-use crate::FieldElm;
 use crate::data_structures::fastfield::FE;
+use crate::FieldElm;
 
-use serde::Deserialize;
-use serde::Serialize;
 use crate::data_structures::logexperiments::ServerSide;
 use crate::fss::ibdcf::IbDCFKey;
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResetRequest {}
@@ -21,13 +21,13 @@ pub struct TreeInitRequest {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeCrawlRequest {
     pub gc_sender: bool,
-    pub threshold: FE
+    pub threshold: FE,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeCrawlLastRequest {
     pub gc_sender: bool,
-    pub threshold: FieldElm
+    pub threshold: FieldElm,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

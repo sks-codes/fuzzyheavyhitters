@@ -1,2 +1,2 @@
-pub mod share_phase;
 pub mod protocol;
+pub mod share_phase;

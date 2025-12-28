@@ -1,13 +1,13 @@
-use std::fs::OpenOptions;
 use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
 use std::io::Write;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Experiment {
     pub metadata: Metadata,
     pub parameters: Parameters,
     pub client_side: ClientSide,
-    pub server_side: Vec<(ServerSide,ServerSide)>,
-    pub experiment_results: ExperimentResults
+    pub server_side: Vec<(ServerSide, ServerSide)>,
+    pub experiment_results: ExperimentResults,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,7 +22,7 @@ pub struct Parameters {
     pub dimensions: usize,
     pub string_length: usize,
     pub threshold: usize,
-    pub ball_radius: u32
+    pub ball_radius: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,12 +49,14 @@ pub struct ExperimentResults {
 pub struct TimeBreakdown {
     pub fss: f64,
     pub gc_equality: f64,
-    pub field_actions : f64,
-    pub gc_compare: f64
-
+    pub field_actions: f64,
+    pub gc_compare: f64,
 }
 
-pub fn log_experiment_to_json(exp: &Experiment, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn log_experiment_to_json(
+    exp: &Experiment,
+    file_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

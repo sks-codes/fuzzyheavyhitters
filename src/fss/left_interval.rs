@@ -1,15 +1,15 @@
 // The interval in this file is different.
 // If a prefix is LESS THAN the prefix of beta, it will take the mid payload.
 
-use crate::data_structures::mod2k::Mod2k;
-use crate::util::{xor, and_bit};
-use crate::bytes_to_u128;
 use crate::aes::{FixedKeyPrgStream, AES_BLOCK_SIZE};
-use crate::data_structures::ringvec::RingVec;
+use crate::bytes_to_u128;
+use crate::data_structures::mod2k::Mod2k;
 use crate::data_structures::pair::Pair;
+use crate::data_structures::ringvec::RingVec;
+use crate::util::{and_bit, xor};
 
-use rand_core::RngCore; 
 use rand::Rng;
+use rand_core::RngCore;
 use std::cell::RefCell;
 use std::convert::TryInto;
 
@@ -17,35 +17,31 @@ thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LIntervalFSSCW<const N: usize> {
-    pub seeds: ([u8; AES_BLOCK_SIZE], 
-                [u8; AES_BLOCK_SIZE]),
-    pub bits: ((Pair<bool>, Pair<bool>),
-               (Pair<bool>, Pair<bool>)),
-    pub ys: ((RingVec, RingVec), 
-             (RingVec, RingVec)),
-    pub y_bits: ((Pair<Mod2k>, Pair<Mod2k>),
-                 (Pair<Mod2k>, Pair<Mod2k>)),
+    pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
+    pub bits: ((Pair<bool>, Pair<bool>), (Pair<bool>, Pair<bool>)),
+    pub ys: ((RingVec, RingVec), (RingVec, RingVec)),
+    pub y_bits: ((Pair<Mod2k>, Pair<Mod2k>), (Pair<Mod2k>, Pair<Mod2k>)),
 }
 
 impl<const N: usize> LIntervalFSSCW<N> {
     pub fn bytes_size(modulus: u128) -> usize {
         // Calculate the size of the serialized LIntervalFSSCW<N> structure
         let mut size = 0;
-        
+
         // seeds: 2 * AES_BLOCK_SIZE
         size += 2 * AES_BLOCK_SIZE;
-        
+
         // bits: 1 byte (8 bools packed into 1 byte)
         size += 1;
-        
+
         // ys: 4 RingVec<N>
         let ringvec_bytes_size = RingVec::byte_size_for_modulus_len(N, modulus);
         size += 4 * ringvec_bytes_size;
-        
+
         // y_bits: 1 RingVec<8> (8 ModInt values)
         let y_bits_bytes_size = RingVec::byte_size_for_modulus_len(8, modulus);
         size += y_bits_bytes_size;
-        
+
         size
     }
 
@@ -54,30 +50,30 @@ impl<const N: usize> LIntervalFSSCW<N> {
         out.extend_from_slice(&self.seeds.0);
         out.extend_from_slice(&self.seeds.1);
         let mut bits_byte = 0u8;
-        bits_byte |= (self.bits.0.0.first as u8) << 0;
-        bits_byte |= (self.bits.0.0.second as u8) << 1;
-        bits_byte |= (self.bits.0.1.first as u8) << 2;
-        bits_byte |= (self.bits.0.1.second as u8) << 3;
-        bits_byte |= (self.bits.1.0.first as u8) << 4;
-        bits_byte |= (self.bits.1.0.second as u8) << 5;
-        bits_byte |= (self.bits.1.1.first as u8) << 6;
-        bits_byte |= (self.bits.1.1.second as u8) << 7;
+        bits_byte |= (self.bits.0 .0.first as u8) << 0;
+        bits_byte |= (self.bits.0 .0.second as u8) << 1;
+        bits_byte |= (self.bits.0 .1.first as u8) << 2;
+        bits_byte |= (self.bits.0 .1.second as u8) << 3;
+        bits_byte |= (self.bits.1 .0.first as u8) << 4;
+        bits_byte |= (self.bits.1 .0.second as u8) << 5;
+        bits_byte |= (self.bits.1 .1.first as u8) << 6;
+        bits_byte |= (self.bits.1 .1.second as u8) << 7;
         out.push(bits_byte);
-        out.extend(self.ys.0.0.to_bytes());
-        out.extend(self.ys.0.1.to_bytes());
-        out.extend(self.ys.1.0.to_bytes());
-        out.extend(self.ys.1.1.to_bytes());
+        out.extend(self.ys.0 .0.to_bytes());
+        out.extend(self.ys.0 .1.to_bytes());
+        out.extend(self.ys.1 .0.to_bytes());
+        out.extend(self.ys.1 .1.to_bytes());
         // y_bits (4 ModInt)
         let mut y_bits_list = Vec::new();
-        y_bits_list.push(self.y_bits.0.0.first.val());
-        y_bits_list.push(self.y_bits.0.0.second.val());
-        y_bits_list.push(self.y_bits.0.1.first.val());
-        y_bits_list.push(self.y_bits.0.1.second.val());
-        y_bits_list.push(self.y_bits.1.0.first.val());
-        y_bits_list.push(self.y_bits.1.0.second.val());
-        y_bits_list.push(self.y_bits.1.1.first.val());
-        y_bits_list.push(self.y_bits.1.1.second.val());
-        let y_bits_ringvec = RingVec::new(y_bits_list, self.ys.0.0.modulus())
+        y_bits_list.push(self.y_bits.0 .0.first.val());
+        y_bits_list.push(self.y_bits.0 .0.second.val());
+        y_bits_list.push(self.y_bits.0 .1.first.val());
+        y_bits_list.push(self.y_bits.0 .1.second.val());
+        y_bits_list.push(self.y_bits.1 .0.first.val());
+        y_bits_list.push(self.y_bits.1 .0.second.val());
+        y_bits_list.push(self.y_bits.1 .1.first.val());
+        y_bits_list.push(self.y_bits.1 .1.second.val());
+        let y_bits_ringvec = RingVec::new(y_bits_list, self.ys.0 .0.modulus())
             .expect("Failed to create RingVec from y_bits");
         out.extend(y_bits_ringvec.to_bytes());
         out
@@ -87,45 +83,67 @@ impl<const N: usize> LIntervalFSSCW<N> {
         let mut offset = 0;
         let mut seeds0 = [0u8; AES_BLOCK_SIZE];
         let mut seeds1 = [0u8; AES_BLOCK_SIZE];
-        seeds0.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        seeds0.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
-        seeds1.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        seeds1.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
         let bits_byte = bytes[offset];
         offset += 1;
-        let bits = ((
-            Pair::new((bits_byte & 0x1) != 0, (bits_byte & 0x2) != 0),
-            Pair::new((bits_byte & 0x4) != 0, (bits_byte & 0x8) != 0),
-        ), (
-            Pair::new((bits_byte & 0x10) != 0, (bits_byte & 0x20) != 0),
-            Pair::new((bits_byte & 0x40) != 0, (bits_byte & 0x80) != 0),
-        )
+        let bits = (
+            (
+                Pair::new((bits_byte & 0x1) != 0, (bits_byte & 0x2) != 0),
+                Pair::new((bits_byte & 0x4) != 0, (bits_byte & 0x8) != 0),
+            ),
+            (
+                Pair::new((bits_byte & 0x10) != 0, (bits_byte & 0x20) != 0),
+                Pair::new((bits_byte & 0x40) != 0, (bits_byte & 0x80) != 0),
+            ),
         );
 
         // ys
-        let (ys00, used00) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
+        let (ys00, used00) =
+            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
         offset += used00;
-        let (ys01, used01) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
+        let (ys01, used01) =
+            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
         offset += used01;
-        let (ys10, used10) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
+        let (ys10, used10) =
+            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
         offset += used10;
-        let (ys11, used11) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
+        let (ys11, used11) =
+            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
         offset += used11;
         // y_bits
-        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
+        let (y_bits_ringvec, used_y_bits) =
+            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
         offset += used_y_bits;
         assert_eq!(ys00.len(), N, "Unexpected ys00 length");
         assert_eq!(ys01.len(), N, "Unexpected ys01 length");
         assert_eq!(ys10.len(), N, "Unexpected ys10 length");
         assert_eq!(ys11.len(), N, "Unexpected ys11 length");
         assert_eq!(y_bits_ringvec.len(), 8, "Unexpected y_bits length");
-        let y_bits = ((
-            Pair::new(Mod2k::new(y_bits_ringvec[0], modulus), Mod2k::new(y_bits_ringvec[1], modulus)),
-            Pair::new(Mod2k::new(y_bits_ringvec[2], modulus), Mod2k::new(y_bits_ringvec[3], modulus))
-        ), (
-            Pair::new(Mod2k::new(y_bits_ringvec[4], modulus), Mod2k::new(y_bits_ringvec[5], modulus)),
-            Pair::new(Mod2k::new(y_bits_ringvec[6], modulus), Mod2k::new(y_bits_ringvec[7], modulus))
-        ));
+        let y_bits = (
+            (
+                Pair::new(
+                    Mod2k::new(y_bits_ringvec[0], modulus),
+                    Mod2k::new(y_bits_ringvec[1], modulus),
+                ),
+                Pair::new(
+                    Mod2k::new(y_bits_ringvec[2], modulus),
+                    Mod2k::new(y_bits_ringvec[3], modulus),
+                ),
+            ),
+            (
+                Pair::new(
+                    Mod2k::new(y_bits_ringvec[4], modulus),
+                    Mod2k::new(y_bits_ringvec[5], modulus),
+                ),
+                Pair::new(
+                    Mod2k::new(y_bits_ringvec[6], modulus),
+                    Mod2k::new(y_bits_ringvec[7], modulus),
+                ),
+            ),
+        );
         (
             LIntervalFSSCW {
                 seeds: (seeds0, seeds1),
@@ -133,7 +151,7 @@ impl<const N: usize> LIntervalFSSCW<N> {
                 ys: ((ys00, ys01), (ys10, ys11)),
                 y_bits,
             },
-            offset
+            offset,
         )
     }
 }
@@ -172,9 +190,9 @@ impl<const N: usize> LIntervalFSSKey<N> {
         let key_idx = bytes[offset] != 0;
         offset += 1;
         let mut root_seed = [0u8; AES_BLOCK_SIZE];
-        root_seed.copy_from_slice(&bytes[offset..offset+AES_BLOCK_SIZE]);
+        root_seed.copy_from_slice(&bytes[offset..offset + AES_BLOCK_SIZE]);
         offset += AES_BLOCK_SIZE;
-        let num_words = u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
+        let num_words = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         let mut cor_words = Vec::with_capacity(num_words);
         for _ in 0..num_words {
@@ -188,11 +206,10 @@ impl<const N: usize> LIntervalFSSKey<N> {
                 root_seed,
                 cor_words,
             },
-            offset
+            offset,
         )
     }
 }
-
 
 #[derive(Clone, Debug)]
 pub struct LIntervalFSSEval<const N: usize> {
@@ -211,14 +228,17 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> L
         s.set_key(&key);
         let mut out = LIntervalFSSData {
             seeds: ([0; AES_BLOCK_SIZE], [0; AES_BLOCK_SIZE]),
-            bits: (Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)),
+            bits: (
+                Pair::<bool>::new(false, false),
+                Pair::<bool>::new(false, false),
+            ),
             ys: (
                 RingVec::zero_with_len(N, modulus).expect("Failed to create left ringvec"),
                 RingVec::zero_with_len(N, modulus).expect("Failed to create right ringvec"),
             ),
             y_bits: (
-                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
-                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
             ),
         };
 
@@ -237,16 +257,36 @@ fn gen_layer_data<const N: usize>(key: [u8; AES_BLOCK_SIZE], modulus: u128) -> L
         s.fill_bytes(&mut payload_rnd);
 
         for i in 0..N {
-            out.ys.0[i] = bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes]) % modulus;
+            out.ys.0[i] =
+                bytes_to_u128(&payload_rnd[i * num_payload_bytes..(i + 1) * num_payload_bytes])
+                    % modulus;
         }
-        out.y_bits.0.first = Mod2k::new(bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]), modulus);
-        out.y_bits.0.second = Mod2k::new(bytes_to_u128(&payload_rnd[(N + 1) * num_payload_bytes..(N + 2) * num_payload_bytes]), modulus);
+        out.y_bits.0.first = Mod2k::new(
+            bytes_to_u128(&payload_rnd[N * num_payload_bytes..(N + 1) * num_payload_bytes]),
+            modulus,
+        );
+        out.y_bits.0.second = Mod2k::new(
+            bytes_to_u128(&payload_rnd[(N + 1) * num_payload_bytes..(N + 2) * num_payload_bytes]),
+            modulus,
+        );
 
         for i in 0..N {
-            out.ys.1[i] = bytes_to_u128(&payload_rnd[(i + N + 2) * num_payload_bytes..(i + N + 3) * num_payload_bytes]) % modulus;
+            out.ys.1[i] = bytes_to_u128(
+                &payload_rnd[(i + N + 2) * num_payload_bytes..(i + N + 3) * num_payload_bytes],
+            ) % modulus;
         }
-        out.y_bits.1.first = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 2) * num_payload_bytes..(2 * N + 3) * num_payload_bytes]), modulus);
-        out.y_bits.1.second = Mod2k::new(bytes_to_u128(&payload_rnd[(2 * N + 3) * num_payload_bytes..(2 * N + 4) * num_payload_bytes]), modulus);
+        out.y_bits.1.first = Mod2k::new(
+            bytes_to_u128(
+                &payload_rnd[(2 * N + 2) * num_payload_bytes..(2 * N + 3) * num_payload_bytes],
+            ),
+            modulus,
+        );
+        out.y_bits.1.second = Mod2k::new(
+            bytes_to_u128(
+                &payload_rnd[(2 * N + 3) * num_payload_bytes..(2 * N + 4) * num_payload_bytes],
+            ),
+            modulus,
+        );
 
         out
     })
@@ -262,13 +302,12 @@ fn gen_cor_word<const N: usize>(
     right: RingVec,
     modulus: u128,
     eval: &mut Vec<(LIntervalFSSEval<N>, LIntervalFSSEval<N>)>,
-) -> LIntervalFSSCW<N>
-{
+) -> LIntervalFSSCW<N> {
     let mut data = vec![];
     eval.iter().for_each(|(eval0, eval1)| {
         data.push((
             gen_layer_data(eval0.seed, modulus),
-            gen_layer_data(eval1.seed, modulus)
+            gen_layer_data(eval1.seed, modulus),
         ));
     });
 
@@ -280,40 +319,45 @@ fn gen_cor_word<const N: usize>(
     data.iter().for_each(|(d0, d1)| {
         delta_seed.push((
             xor::<16>(&d1.seeds.0, &d0.seeds.0),
-            xor::<16>(&d1.seeds.1, &d0.seeds.1)
+            xor::<16>(&d1.seeds.1, &d0.seeds.1),
         ));
-        delta_bits.push((
-            d1.bits.0 ^ d0.bits.0,
-            d1.bits.1 ^ d0.bits.1
-        ));
+        delta_bits.push((d1.bits.0 ^ d0.bits.0, d1.bits.1 ^ d0.bits.1));
         delta_ys.push((
-            d1.ys.0.clone() - d0.ys.0.clone(), 
-            d1.ys.1.clone() - d0.ys.1.clone()
+            d1.ys.0.clone() - d0.ys.0.clone(),
+            d1.ys.1.clone() - d0.ys.1.clone(),
         ));
-        delta_y_bits.push((
-            d1.y_bits.0 - d0.y_bits.0,
-            d1.y_bits.1 - d0.y_bits.1
-        ));
+        delta_y_bits.push((d1.y_bits.0 - d0.y_bits.0, d1.y_bits.1 - d0.y_bits.1));
     });
 
     if data.len() > 2 {
-        panic!("Something went wrong, data length is greater than 2: {}", data.len());
+        panic!(
+            "Something went wrong, data length is greater than 2: {}",
+            data.len()
+        );
     }
 
     let seed1 = rand::rng().random::<[u8; 16]>();
     let bits1 = (
-        Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()), 
-        Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()));
+        Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()),
+        Pair::<bool>::new(rand::rng().random::<bool>(), rand::rng().random::<bool>()),
+    );
     let ys1 = (
         RingVec::random_with_len(N, modulus).expect("Failed to create ys1.0"),
         RingVec::random_with_len(N, modulus).expect("Failed to create ys1.1"),
     );
     let y_bits1 = (
-        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)), 
-        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)));
+        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)),
+        Pair::<Mod2k>::new(Mod2k::random(modulus), Mod2k::random(modulus)),
+    );
     let mut cw = LIntervalFSSCW {
         seeds: ([0u8; 16], seed1),
-        bits: ((Pair::<bool>::new(false, false), Pair::<bool>::new(false, false)), bits1),
+        bits: (
+            (
+                Pair::<bool>::new(false, false),
+                Pair::<bool>::new(false, false),
+            ),
+            bits1,
+        ),
         ys: (
             (
                 RingVec::zero_with_len(N, modulus).expect("Failed to create left ys0.0"),
@@ -322,9 +366,12 @@ fn gen_cor_word<const N: usize>(
             ys1,
         ),
         y_bits: (
-            (Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)), 
-             Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus))), 
-            y_bits1),
+            (
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
+                Pair::<Mod2k>::new(Mod2k::zero(modulus), Mod2k::zero(modulus)),
+            ),
+            y_bits1,
+        ),
     };
 
     let bool10 = Pair::<bool>::new(true, false);
@@ -337,54 +384,70 @@ fn gen_cor_word<const N: usize>(
 
     if data.len() == 1 {
         if alpha_bit && !beta_bit {
-            panic!("Alpha should be smaller than beta, but got alpha_bit = true and beta_bit = false");
+            panic!(
+                "Alpha should be smaller than beta, but got alpha_bit = true and beta_bit = false"
+            );
         }
         if !alpha_bit && beta_bit {
             cw.seeds.0 = rand::rng().random::<[u8; 16]>();
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool01 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0.clone() + mid1.clone(), delta_ys[0].1.clone() + right.clone());
-            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
-                           delta_y_bits[0].1 + mint01);
+            cw.ys.0 = (
+                delta_ys[0].0.clone() + mid1.clone(),
+                delta_ys[0].1.clone() + right.clone(),
+            );
+            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, delta_y_bits[0].1 + mint01);
         } else if !alpha_bit {
             cw.seeds.0 = delta_seed[0].1;
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool00 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0.clone() + right.clone(), delta_ys[0].1.clone() + right.clone());
-            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
-                           delta_y_bits[0].1 + mint00);
+            cw.ys.0 = (
+                delta_ys[0].0.clone() + right.clone(),
+                delta_ys[0].1.clone() + right.clone(),
+            );
+            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, delta_y_bits[0].1 + mint00);
         } else if alpha_bit {
             cw.seeds.0 = delta_seed[0].0;
             cw.bits.0 = (bool00 ^ delta_bits[0].0, bool10 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0.clone() + left1.clone(), delta_ys[0].1.clone() + right.clone());
-            cw.y_bits.0 = (delta_y_bits[0].0 + mint00, 
-                           delta_y_bits[0].1 + mint10);
+            cw.ys.0 = (
+                delta_ys[0].0.clone() + left1.clone(),
+                delta_ys[0].1.clone() + right.clone(),
+            );
+            cw.y_bits.0 = (delta_y_bits[0].0 + mint00, delta_y_bits[0].1 + mint10);
         }
     } else {
         if !alpha_bit {
             cw.seeds.0 = delta_seed[0].1;
             cw.bits.0 = (bool10 ^ delta_bits[0].0, bool00 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0.clone() + mid0.clone(), delta_ys[0].1.clone() + mid0.clone());
-            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, 
-                           delta_y_bits[0].1 + mint00);
+            cw.ys.0 = (
+                delta_ys[0].0.clone() + mid0.clone(),
+                delta_ys[0].1.clone() + mid0.clone(),
+            );
+            cw.y_bits.0 = (delta_y_bits[0].0 + mint10, delta_y_bits[0].1 + mint00);
         } else {
             cw.seeds.0 = delta_seed[0].0;
             cw.bits.0 = (bool00 ^ delta_bits[0].0, bool10 ^ delta_bits[0].1);
-            cw.ys.0 = (delta_ys[0].0.clone() + left0.clone(), delta_ys[0].1.clone() + mid0.clone());
-            cw.y_bits.0 = (delta_y_bits[0].0 + mint00, 
-                           delta_y_bits[0].1 + mint10);
+            cw.ys.0 = (
+                delta_ys[0].0.clone() + left0.clone(),
+                delta_ys[0].1.clone() + mid0.clone(),
+            );
+            cw.y_bits.0 = (delta_y_bits[0].0 + mint00, delta_y_bits[0].1 + mint10);
         }
 
         if !beta_bit {
             cw.seeds.1 = delta_seed[1].1;
             cw.bits.1 = (bool01 ^ delta_bits[1].0, bool00 ^ delta_bits[1].1);
-            cw.ys.1 = (delta_ys[1].0.clone() + right.clone(), delta_ys[1].1.clone() + right.clone());
-            cw.y_bits.1 = (delta_y_bits[1].0 + mint01, 
-                           delta_y_bits[1].1 + mint00);
+            cw.ys.1 = (
+                delta_ys[1].0.clone() + right.clone(),
+                delta_ys[1].1.clone() + right.clone(),
+            );
+            cw.y_bits.1 = (delta_y_bits[1].0 + mint01, delta_y_bits[1].1 + mint00);
         } else {
             cw.seeds.1 = delta_seed[1].0;
             cw.bits.1 = (bool00 ^ delta_bits[1].0, bool01 ^ delta_bits[1].1);
-            cw.ys.1 = (delta_ys[1].0.clone() + mid1.clone(), delta_ys[1].1.clone() + right.clone());
-            cw.y_bits.1 = (delta_y_bits[1].0 + mint00, 
-                           delta_y_bits[1].1 + mint01);
+            cw.ys.1 = (
+                delta_ys[1].0.clone() + mid1.clone(),
+                delta_ys[1].1.clone() + right.clone(),
+            );
+            cw.y_bits.1 = (delta_y_bits[1].0 + mint00, delta_y_bits[1].1 + mint01);
         }
     }
 
@@ -398,36 +461,64 @@ fn gen_cor_word<const N: usize>(
         let eval1 = eval[0].1.clone();
         if !alpha_bit {
             new_seeds.push((
-                xor::<16>(&d0.seeds.0, 
+                xor::<16>(
+                    &d0.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.0, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.0 ^ (cw.bits.0.0 & eval0.bit.first) ^ (cw.bits.1.0 & eval0.bit.second),
-                           d1.bits.0 ^ (cw.bits.0.0 & eval1.bit.first) ^ (cw.bits.1.0 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.0 + (cw.y_bits.0.0 * eval0.y_bit.first) + (cw.y_bits.1.0 * eval0.y_bit.second),
-                             d1.y_bits.0 + (cw.y_bits.0.0 * eval1.y_bit.first) + (cw.y_bits.1.0 * eval1.y_bit.second)));
+            new_bits.push((
+                d0.bits.0 ^ (cw.bits.0 .0 & eval0.bit.first) ^ (cw.bits.1 .0 & eval0.bit.second),
+                d1.bits.0 ^ (cw.bits.0 .0 & eval1.bit.first) ^ (cw.bits.1 .0 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.0
+                    + (cw.y_bits.0 .0 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval0.y_bit.second),
+                d1.y_bits.0
+                    + (cw.y_bits.0 .0 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval1.y_bit.second),
+            ));
         }
         if beta_bit {
             new_seeds.push((
-                xor::<16>(&d0.seeds.1, 
+                xor::<16>(
+                    &d0.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.1, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.1 ^ (cw.bits.0.1 & eval0.bit.first) ^ (cw.bits.1.1 & eval0.bit.second),
-                           d1.bits.1 ^ (cw.bits.0.1 & eval1.bit.first) ^ (cw.bits.1.1 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.1 + (cw.y_bits.0.1 * eval0.y_bit.first) + (cw.y_bits.1.1 * eval0.y_bit.second),
-                             d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
-        }    
+            new_bits.push((
+                d0.bits.1 ^ (cw.bits.0 .1 & eval0.bit.first) ^ (cw.bits.1 .1 & eval0.bit.second),
+                d1.bits.1 ^ (cw.bits.0 .1 & eval1.bit.first) ^ (cw.bits.1 .1 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.1
+                    + (cw.y_bits.0 .1 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval0.y_bit.second),
+                d1.y_bits.1
+                    + (cw.y_bits.0 .1 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval1.y_bit.second),
+            ));
+        }
     } else {
         let d0 = data[0].0.clone();
         let d1 = data[0].1.clone();
@@ -435,34 +526,62 @@ fn gen_cor_word<const N: usize>(
         let eval1 = eval[0].1.clone();
         if !alpha_bit {
             new_seeds.push((
-                xor::<16>(&d0.seeds.0, 
+                xor::<16>(
+                    &d0.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.0, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.0 ^ (cw.bits.0.0 & eval0.bit.first) ^ (cw.bits.1.0 & eval0.bit.second),
-                           d1.bits.0 ^ (cw.bits.0.0 & eval1.bit.first) ^ (cw.bits.1.0 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.0 + (cw.y_bits.0.0 * eval0.y_bit.first) + (cw.y_bits.1.0 * eval0.y_bit.second),
-                             d1.y_bits.0 + (cw.y_bits.0.0 * eval1.y_bit.first) + (cw.y_bits.1.0 * eval1.y_bit.second)));
+            new_bits.push((
+                d0.bits.0 ^ (cw.bits.0 .0 & eval0.bit.first) ^ (cw.bits.1 .0 & eval0.bit.second),
+                d1.bits.0 ^ (cw.bits.0 .0 & eval1.bit.first) ^ (cw.bits.1 .0 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.0
+                    + (cw.y_bits.0 .0 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval0.y_bit.second),
+                d1.y_bits.0
+                    + (cw.y_bits.0 .0 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval1.y_bit.second),
+            ));
         } else {
             new_seeds.push((
-                xor::<16>(&d0.seeds.1, 
+                xor::<16>(
+                    &d0.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.1, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.1 ^ (cw.bits.0.1 & eval0.bit.first) ^ (cw.bits.1.1 & eval0.bit.second),
-                           d1.bits.1 ^ (cw.bits.0.1 & eval1.bit.first) ^ (cw.bits.1.1 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.1 + (cw.y_bits.0.1 * eval0.y_bit.first) + (cw.y_bits.1.1 * eval0.y_bit.second),
-                             d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
+            new_bits.push((
+                d0.bits.1 ^ (cw.bits.0 .1 & eval0.bit.first) ^ (cw.bits.1 .1 & eval0.bit.second),
+                d1.bits.1 ^ (cw.bits.0 .1 & eval1.bit.first) ^ (cw.bits.1 .1 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.1
+                    + (cw.y_bits.0 .1 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval0.y_bit.second),
+                d1.y_bits.1
+                    + (cw.y_bits.0 .1 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval1.y_bit.second),
+            ));
         }
 
         let (d0, d1): (LIntervalFSSData<N>, LIntervalFSSData<N>) = data[1].clone();
@@ -471,38 +590,69 @@ fn gen_cor_word<const N: usize>(
 
         if !beta_bit {
             new_seeds.push((
-                xor::<16>(&d0.seeds.0, 
+                xor::<16>(
+                    &d0.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.0, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.0,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.0 ^ (cw.bits.0.0 & eval0.bit.first) ^ (cw.bits.1.0 & eval0.bit.second),
-                           d1.bits.0 ^ (cw.bits.0.0 & eval1.bit.first) ^ (cw.bits.1.0 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.0 + (cw.y_bits.0.0 * eval0.y_bit.first) + (cw.y_bits.1.0 * eval0.y_bit.second),
-                             d1.y_bits.0 + (cw.y_bits.0.0 * eval1.y_bit.first) + (cw.y_bits.1.0 * eval1.y_bit.second)));
+            new_bits.push((
+                d0.bits.0 ^ (cw.bits.0 .0 & eval0.bit.first) ^ (cw.bits.1 .0 & eval0.bit.second),
+                d1.bits.0 ^ (cw.bits.0 .0 & eval1.bit.first) ^ (cw.bits.1 .0 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.0
+                    + (cw.y_bits.0 .0 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval0.y_bit.second),
+                d1.y_bits.0
+                    + (cw.y_bits.0 .0 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .0 * eval1.y_bit.second),
+            ));
         } else {
             new_seeds.push((
-                xor::<16>(&d0.seeds.1, 
+                xor::<16>(
+                    &d0.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval0.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval0.bit.second))),
-                xor::<16>(&d1.seeds.1, 
+                        &and_bit::<16>(cw.seeds.1, eval0.bit.second),
+                    ),
+                ),
+                xor::<16>(
+                    &d1.seeds.1,
                     &xor::<16>(
                         &and_bit::<16>(cw.seeds.0, eval1.bit.first),
-                        &and_bit::<16>(cw.seeds.1, eval1.bit.second)))
+                        &and_bit::<16>(cw.seeds.1, eval1.bit.second),
+                    ),
+                ),
             ));
-            new_bits.push((d0.bits.1 ^ (cw.bits.0.1 & eval0.bit.first) ^ (cw.bits.1.1 & eval0.bit.second),
-                           d1.bits.1 ^ (cw.bits.0.1 & eval1.bit.first) ^ (cw.bits.1.1 & eval1.bit.second)));
-            new_y_bits.push((d0.y_bits.1 + (cw.y_bits.0.1 * eval0.y_bit.first) + (cw.y_bits.1.1 * eval0.y_bit.second),
-                             d1.y_bits.1 + (cw.y_bits.0.1 * eval1.y_bit.first) + (cw.y_bits.1.1 * eval1.y_bit.second)));
+            new_bits.push((
+                d0.bits.1 ^ (cw.bits.0 .1 & eval0.bit.first) ^ (cw.bits.1 .1 & eval0.bit.second),
+                d1.bits.1 ^ (cw.bits.0 .1 & eval1.bit.first) ^ (cw.bits.1 .1 & eval1.bit.second),
+            ));
+            new_y_bits.push((
+                d0.y_bits.1
+                    + (cw.y_bits.0 .1 * eval0.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval0.y_bit.second),
+                d1.y_bits.1
+                    + (cw.y_bits.0 .1 * eval1.y_bit.first)
+                    + (cw.y_bits.1 .1 * eval1.y_bit.second),
+            ));
         }
     }
 
-    let new_eval: Vec<(LIntervalFSSEval<N>, LIntervalFSSEval<N>)> = new_seeds.iter().zip(new_bits.iter()).zip(new_y_bits.iter())
+    let new_eval: Vec<(LIntervalFSSEval<N>, LIntervalFSSEval<N>)> = new_seeds
+        .iter()
+        .zip(new_bits.iter())
+        .zip(new_y_bits.iter())
         .map(|((seed, bits), y_bits)| {
             (
                 LIntervalFSSEval {
@@ -518,10 +668,11 @@ fn gen_cor_word<const N: usize>(
                     bit: bits.1,
                     y: RingVec::zero_with_len(N, modulus).expect("Failed to create right eval y"),
                     y_bit: y_bits.1.clone(),
-                }
+                },
             )
-        }).collect();
-    
+        })
+        .collect();
+
     eval.clear();
     eval.extend(new_eval);
 
@@ -529,13 +680,21 @@ fn gen_cor_word<const N: usize>(
 }
 
 /// All-prefix DPF implementation.
-impl<const N: usize> LIntervalFSSKey<N>
-{
-
+impl<const N: usize> LIntervalFSSKey<N> {
     // Need alpha < beta
-    pub fn gen_linterval_fss_key(alpha_bits: &[bool], beta_bits: &[bool], a: RingVec, b: RingVec, c: RingVec, modulus: u128) -> (LIntervalFSSKey<N>, LIntervalFSSKey<N>) {
+    pub fn gen_linterval_fss_key(
+        alpha_bits: &[bool],
+        beta_bits: &[bool],
+        a: RingVec,
+        b: RingVec,
+        c: RingVec,
+        modulus: u128,
+    ) -> (LIntervalFSSKey<N>, LIntervalFSSKey<N>) {
         assert!(alpha_bits.len() == beta_bits.len());
-        assert!(modulus > 0 && (modulus & (modulus-1)) == 0, "Modulus must be a power of 2");
+        assert!(
+            modulus > 0 && (modulus & (modulus - 1)) == 0,
+            "Modulus must be a power of 2"
+        );
 
         let u = alpha_bits.len();
         let mut payload_left0 = vec![a.clone() - b.clone(); u];
@@ -548,9 +707,12 @@ impl<const N: usize> LIntervalFSSKey<N>
         let mut payload_mid1 = vec![b.clone() - c.clone(); u];
         payload_mid1[0] = b.clone();
         let mut payload_right = vec![zero; u];
-        payload_right[0] = c.clone();   
+        payload_right[0] = c.clone();
 
-        let root_seeds = (rand::rng().random::<[u8; 16]>(), rand::rng().random::<[u8; 16]>());
+        let root_seeds = (
+            rand::rng().random::<[u8; 16]>(),
+            rand::rng().random::<[u8; 16]>(),
+        );
 
         let eval0 = LIntervalFSSEval {
             level: 0,
@@ -574,15 +736,15 @@ impl<const N: usize> LIntervalFSSKey<N>
 
         for (i, (&alpha_bit, &beta_bit)) in alpha_bits.iter().zip(beta_bits.iter()).enumerate() {
             let cw = gen_cor_word(
-                alpha_bit, 
-                beta_bit, 
+                alpha_bit,
+                beta_bit,
                 payload_left0[i].clone(),
                 payload_left1[i].clone(),
-                payload_mid0[i].clone(), 
+                payload_mid0[i].clone(),
                 payload_mid1[i].clone(),
-                payload_right[i].clone(), 
+                payload_right[i].clone(),
                 modulus,
-                &mut eval
+                &mut eval,
             );
             cor_words.push(cw);
         }
@@ -601,7 +763,12 @@ impl<const N: usize> LIntervalFSSKey<N>
         )
     }
 
-    pub fn eval_bit(&self, state: &LIntervalFSSEval<N>, modulus: u128, dir: bool) -> LIntervalFSSEval<N> {
+    pub fn eval_bit(
+        &self,
+        state: &LIntervalFSSEval<N>,
+        modulus: u128,
+        dir: bool,
+    ) -> LIntervalFSSEval<N> {
         let data: LIntervalFSSData<N> = gen_layer_data(state.seed, modulus);
         let mut seed = if !dir {
             data.seeds.0.clone()
@@ -626,23 +793,27 @@ impl<const N: usize> LIntervalFSSKey<N>
 
         let cw = self.cor_words[state.level].clone();
 
-        seed = xor::<16>(&seed,
-                        &xor::<16>(&and_bit::<16>(cw.seeds.0, state.bit.first),
-                                    &and_bit::<16>(cw.seeds.1, state.bit.second)));
+        seed = xor::<16>(
+            &seed,
+            &xor::<16>(
+                &and_bit::<16>(cw.seeds.0, state.bit.first),
+                &and_bit::<16>(cw.seeds.1, state.bit.second),
+            ),
+        );
         new_bit = if !dir {
-            new_bit ^ (cw.bits.0.0 & state.bit.first) ^ (cw.bits.1.0 & state.bit.second)
+            new_bit ^ (cw.bits.0 .0 & state.bit.first) ^ (cw.bits.1 .0 & state.bit.second)
         } else {
-            new_bit ^ (cw.bits.0.1 & state.bit.first) ^ (cw.bits.1.1 & state.bit.second)
+            new_bit ^ (cw.bits.0 .1 & state.bit.first) ^ (cw.bits.1 .1 & state.bit.second)
         };
         new_y = if !dir {
-            new_y + (cw.ys.0.0 * state.y_bit.first.val) + (cw.ys.1.0 * state.y_bit.second.val)
+            new_y + (cw.ys.0 .0 * state.y_bit.first.val) + (cw.ys.1 .0 * state.y_bit.second.val)
         } else {
-            new_y + (cw.ys.0.1 * state.y_bit.first.val) + (cw.ys.1.1 * state.y_bit.second.val)
+            new_y + (cw.ys.0 .1 * state.y_bit.first.val) + (cw.ys.1 .1 * state.y_bit.second.val)
         };
         new_y_bit = if !dir {
-            new_y_bit + (cw.y_bits.0.0 * state.y_bit.first) + (cw.y_bits.1.0 * state.y_bit.second)
+            new_y_bit + (cw.y_bits.0 .0 * state.y_bit.first) + (cw.y_bits.1 .0 * state.y_bit.second)
         } else {
-            new_y_bit + (cw.y_bits.0.1 * state.y_bit.first) + (cw.y_bits.1.1 * state.y_bit.second)
+            new_y_bit + (cw.y_bits.0 .1 * state.y_bit.first) + (cw.y_bits.1 .1 * state.y_bit.second)
         };
 
         new_y = new_y + state.y.clone();
@@ -684,7 +855,6 @@ impl<const N: usize> LIntervalFSSKey<N>
 
         state.y
     }
-
 
     pub fn domain_size(&self) -> usize {
         self.cor_words.len()

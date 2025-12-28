@@ -1,6 +1,6 @@
-use std::time::Instant;
 use mosaic::aes::FixedKeyPrgStream;
 use rand_core::RngCore;
+use std::time::Instant;
 
 fn main() {
     println!("AES Stream Operations Benchmark");
@@ -33,25 +33,35 @@ fn main() {
 
     // Benchmark fill_bytes operation with different buffer sizes
     let buffer_sizes = [16, 32, 64, 128, 256, 512, 1024, 4096];
-    
+
     for &size in &buffer_sizes {
         println!("\nBenchmarking fill_bytes() with {} byte buffer...", size);
         stream.set_key(&key);
         stream.refill();
-        
+
         let mut buffer = vec![0u8; size];
         let test_iterations = 100_000;
-        
+
         let start = Instant::now();
         for _ in 0..test_iterations {
             stream.fill_bytes(&mut buffer);
         }
         let fill_bytes_duration = start.elapsed();
-        
-        println!("fill_bytes({} bytes) x {}: {:?}", size, test_iterations, fill_bytes_duration);
-        println!("Average per fill_bytes(): {:?}", fill_bytes_duration / test_iterations);
-        println!("Throughput: {:.2} MB/s", 
-                (size as f64 * test_iterations as f64) / (1024.0 * 1024.0) / fill_bytes_duration.as_secs_f64());
+
+        println!(
+            "fill_bytes({} bytes) x {}: {:?}",
+            size, test_iterations, fill_bytes_duration
+        );
+        println!(
+            "Average per fill_bytes(): {:?}",
+            fill_bytes_duration / test_iterations
+        );
+        println!(
+            "Throughput: {:.2} MB/s",
+            (size as f64 * test_iterations as f64)
+                / (1024.0 * 1024.0)
+                / fill_bytes_duration.as_secs_f64()
+        );
     }
 
     // Combined operation benchmark (realistic usage pattern)
@@ -59,7 +69,7 @@ fn main() {
     let combined_iterations = 10_000;
     let buffer_size = 256;
     let mut buffer = vec![0u8; buffer_size];
-    
+
     let start = Instant::now();
     for i in 0..combined_iterations {
         // let start = Instant::now();
@@ -75,15 +85,21 @@ fn main() {
         // println!("Combined operation {} took {:?}", i + 1, start.elapsed());
     }
     let combined_duration = start.elapsed();
-    
-    println!("Combined operations x {}: {:?}", combined_iterations, combined_duration);
-    println!("Average per combined operation: {:?}", combined_duration / combined_iterations);
+
+    println!(
+        "Combined operations x {}: {:?}",
+        combined_iterations, combined_duration
+    );
+    println!(
+        "Average per combined operation: {:?}",
+        combined_duration / combined_iterations
+    );
 
     // Memory allocation impact test
     println!("\nBenchmarking memory allocation impact...");
     let alloc_iterations = 50_000;
     stream.set_key(&key);
-    
+
     // Pre-allocated buffer
     let mut pre_buffer = vec![0u8; 1024];
     let start = Instant::now();
@@ -92,7 +108,7 @@ fn main() {
         stream.fill_bytes(&mut pre_buffer);
     }
     let pre_alloc_duration = start.elapsed();
-    
+
     // Fresh allocation each time
     let start = Instant::now();
     for _ in 0..alloc_iterations {
@@ -101,23 +117,26 @@ fn main() {
         stream.fill_bytes(&mut fresh_buffer);
     }
     let fresh_alloc_duration = start.elapsed();
-    
+
     println!("Pre-allocated buffer: {:?}", pre_alloc_duration);
     println!("Fresh allocation each time: {:?}", fresh_alloc_duration);
-    println!("Allocation overhead: {:?}", fresh_alloc_duration - pre_alloc_duration);
+    println!(
+        "Allocation overhead: {:?}",
+        fresh_alloc_duration - pre_alloc_duration
+    );
 
     // Test thread-local performance impact
     println!("\nBenchmarking thread-local access pattern...");
     let tl_iterations = 100_000;
     let buffer_size = 128;
-    
+
     let start = Instant::now();
     for _ in 0..tl_iterations {
         // Simulate the pattern used in gen_layer_data
         let mut buffer1 = vec![0u8; buffer_size];
-        let mut buffer2 = vec![0u8; buffer_size]; 
+        let mut buffer2 = vec![0u8; buffer_size];
         let mut buffer3 = vec![0u8; buffer_size];
-        
+
         stream.set_key(&key);
         stream.refill();
         stream.fill_bytes(&mut buffer1);
@@ -127,9 +146,15 @@ fn main() {
         stream.fill_bytes(&mut buffer3);
     }
     let tl_duration = start.elapsed();
-    
-    println!("Thread-local pattern x {}: {:?}", tl_iterations, tl_duration);
-    println!("Average per thread-local operation: {:?}", tl_duration / tl_iterations);
+
+    println!(
+        "Thread-local pattern x {}: {:?}",
+        tl_iterations, tl_duration
+    );
+    println!(
+        "Average per thread-local operation: {:?}",
+        tl_duration / tl_iterations
+    );
 
     println!("\nBenchmark completed!");
 }

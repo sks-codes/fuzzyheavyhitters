@@ -1,17 +1,22 @@
-use mosaic::{
-    fss::ldcf::LdcfKey,
-    data_structures::ringvec::RingVec,
-};
+use mosaic::{data_structures::ringvec::RingVec, fss::ldcf::LdcfKey};
 use std::env;
-use std::time::Instant;
 use std::hint::black_box;
+use std::time::Instant;
 
-fn parse_arg<T: std::str::FromStr>(idx: usize, default: T) -> T { env::args().nth(idx).and_then(|s| s.parse().ok()).unwrap_or(default) }
+fn parse_arg<T: std::str::FromStr>(idx: usize, default: T) -> T {
+    env::args()
+        .nth(idx)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
 
 // Simple harness: generate random inputs, build keys once, then repeatedly call expand_prefix.
 fn bench<const N: usize>(iterations: usize, depth: usize, modulus_bits: usize) {
     assert!(depth > 0, "depth must be > 0");
-    assert!(modulus_bits > 0 && modulus_bits <= 64, "modulus bits 1..=64 supported");
+    assert!(
+        modulus_bits > 0 && modulus_bits <= 64,
+        "modulus bits 1..=64 supported"
+    );
     let modulus: u128 = 1u128 << modulus_bits;
 
     // Random alpha prefix bits
@@ -35,7 +40,10 @@ fn bench<const N: usize>(iterations: usize, depth: usize, modulus_bits: usize) {
         calls += 1;
     }
     let dur = start.elapsed();
-    println!("LDCF expand_prefix bench: N={} depth={} modulus_bits={} iterations={}", N, depth, modulus_bits, iterations);
+    println!(
+        "LDCF expand_prefix bench: N={} depth={} modulus_bits={} iterations={}",
+        N, depth, modulus_bits, iterations
+    );
     println!(" total: {:?}; avg: {:?}", dur, dur / calls as u32);
     black_box(state);
 }
@@ -53,6 +61,9 @@ fn main() {
         8 => bench::<8>(iterations, depth, modulus_bits),
         16 => bench::<16>(iterations, depth, modulus_bits),
         32 => bench::<32>(iterations, depth, modulus_bits),
-        other => { eprintln!("Unsupported N {} (choose 1,2,4,8,16,32)", other); std::process::exit(1); }
+        other => {
+            eprintln!("Unsupported N {} (choose 1,2,4,8,16,32)", other);
+            std::process::exit(1);
+        }
     }
 }

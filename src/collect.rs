@@ -1,19 +1,21 @@
-use std::convert::{TryFrom, TryInto};
-use std::io::{BufReader, BufWriter};
+use crate::data_structures::field::BlockPair;
+use crate::data_structures::logexperiments::{ServerSide, TimeBreakdown};
+use crate::fss::ibdcf::{eval_str, EvalState, IbDCFKey};
+use crate::garbled_circuits::equality::{multiple_ev_equality_test, multiple_gb_equality_test};
+use crate::garbled_circuits::greater_than::{
+    multiple_ev_greater_than, multiple_gb_greater_than, BitWidth,
+};
 use crate::{all_bit_vectors, block_to_bits, data_structures::prg, Share};
+use ocelot::ot::{Receiver, Sender};
+use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng, Block, SyncChannel};
 use serde::{Deserialize, Serialize};
-use crate::fss::ibdcf::{IbDCFKey, EvalState, eval_str};
-use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
-use ocelot::ot::{Receiver, Sender};
-use crate::garbled_circuits::equality::{multiple_gb_equality_test, multiple_ev_equality_test};
-use crate::data_structures::field::BlockPair;
+use std::convert::{TryFrom, TryInto};
+use std::io::{BufReader, BufWriter};
 use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::time::Instant;
-use crate::garbled_circuits::greater_than::{multiple_gb_greater_than, multiple_ev_greater_than, BitWidth};
-use crate::data_structures::logexperiments::{ServerSide, TimeBreakdown};
 
 #[derive(Clone)]
 struct TreeNode {
@@ -24,10 +26,8 @@ struct TreeNode {
 unsafe impl Send for TreeNode {}
 unsafe impl Sync for TreeNode {}
 
-
 #[derive(Clone)]
-pub struct KeyCollection<T,U>
-{
+pub struct KeyCollection<T, U> {
     _depth: usize,
     pub keys: Vec<(bool, Vec<(IbDCFKey, IbDCFKey)>)>,
     frontier: Vec<TreeNode>,
@@ -42,14 +42,30 @@ pub struct Result<T> {
     pub value: T,
 }
 
-impl<T,U> KeyCollection<T,U>
+impl<T, U> KeyCollection<T, U>
 where
-    T: Share + Clone + std::fmt::Debug + PartialOrd + From<u32> + Send + Sync + TryFrom<Block> + Into<Block>,
-    U: Share + Clone + std::fmt::Debug + PartialOrd + From<u32> + Send + Sync + TryFrom<BlockPair> + Into<BlockPair>,
+    T: Share
+        + Clone
+        + std::fmt::Debug
+        + PartialOrd
+        + From<u32>
+        + Send
+        + Sync
+        + TryFrom<Block>
+        + Into<Block>,
+    U: Share
+        + Clone
+        + std::fmt::Debug
+        + PartialOrd
+        + From<u32>
+        + Send
+        + Sync
+        + TryFrom<BlockPair>
+        + Into<BlockPair>,
     <U as TryFrom<BlockPair>>::Error: std::fmt::Debug,
 {
-    pub fn new(seed: &prg::PrgSeed, depth: usize) -> KeyCollection<T,U> {
-        KeyCollection::<T,U> {
+    pub fn new(seed: &prg::PrgSeed, depth: usize) -> KeyCollection<T, U> {
+        KeyCollection::<T, U> {
             _depth: depth,
             keys: vec![],
             frontier: vec![],
@@ -61,7 +77,6 @@ where
 
     pub fn add_key(&mut self, key: Vec<(IbDCFKey, IbDCFKey)>) {
         self.keys.push((true, key)); //TODO: come back and remove this bool
-
     }
 
     pub fn tree_init(&mut self) {
@@ -74,21 +89,20 @@ where
 
         for k in &self.keys {
             let mut root_states = vec![];
-            for interval_key in k.1.clone(){
+            for interval_key in k.1.clone() {
                 root_states.push((interval_key.0.eval_init(), interval_key.1.eval_init()));
             }
             root.key_states.push(root_states);
         }
 
         assert!(self.keys.len() > 0);
-        for _ in 0..self.keys[0].1.len(){
+        for _ in 0..self.keys[0].1.len() {
             root.path.push(vec![]);
         }
 
         self.frontier.clear();
         self.frontier_last.clear();
         self.frontier.push(root);
-
     }
 
     fn make_tree_node(&self, parent: &TreeNode, search_string: &Vec<bool>) -> TreeNode {
@@ -103,7 +117,7 @@ where
             .collect();
 
         let mut new_path = vec![];
-        for (i, dim_path) in parent.path.iter().enumerate(){
+        for (i, dim_path) in parent.path.iter().enumerate() {
             let mut new_dim_path = dim_path.clone();
             new_dim_path.push(search_string[i]);
             new_path.push(new_dim_path)
@@ -120,7 +134,7 @@ where
         &mut self,
         gc_sender: bool,
         channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>],
-        threshold: T
+        threshold: T,
     ) -> (Vec<bool>, ServerSide) {
         println!("Crawl");
         let start = Instant::now();
@@ -145,7 +159,8 @@ where
                 node.key_states
                     .par_iter()
                     .map(|state| {
-                        let left_bits: Vec<bool> = state.iter()
+                        let left_bits: Vec<bool> = state
+                            .iter()
                             .map(|(left, right)| left.y_bit ^ left.bit ^ right.y_bit ^ gc_sender)
                             .collect();
                         // let mut right_bits: Vec<bool> = state.iter()
@@ -163,7 +178,10 @@ where
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
-            .flat_map(|node| node.iter().map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>()))
+            .flat_map(|node| {
+                node.iter()
+                    .map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>())
+            })
             .collect();
         let all_node_vals = crossbeam::scope(|s| {
             let mut results = vec![];
@@ -186,7 +204,7 @@ where
                     };
                     channel.flush().expect("flush failed");
                     let mut node_vals = vec![];
-                    if gc_sender{
+                    if gc_sender {
                         let mut all_shares = Vec::with_capacity(bin_shares.len());
                         for i in 0..bin_shares.len() {
                             let r0 = T::random();
@@ -202,14 +220,16 @@ where
                             }
                         }
                         let mut ot = OtSender::init(&mut channel, &mut rng).unwrap();
-                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|_| {
-                            println!("Error in tree_crawl ot send")
-                        }).unwrap();
-                    }
-                    else{
+                        ot.send(&mut channel, all_shares.as_slice(), &mut rng)
+                            .map_err(|_| println!("Error in tree_crawl ot send"))
+                            .unwrap();
+                    } else {
                         let mut ot = OtReceiver::init(&mut channel, &mut rng).unwrap();
-                        let out_blocks = ot.receive(&mut channel, bin_shares.as_slice(), &mut rng).unwrap();
-                        node_vals = out_blocks.into_iter()
+                        let out_blocks = ot
+                            .receive(&mut channel, bin_shares.as_slice(), &mut rng)
+                            .unwrap();
+                        node_vals = out_blocks
+                            .into_iter()
                             .map(|b| {
                                 T::try_from(b)
                                     .map_err(|_| {
@@ -230,7 +250,8 @@ where
             }
 
             results
-        }).unwrap();
+        })
+        .unwrap();
 
         let gc_and_ot = start.elapsed() - fss;
         println!("Equality Garbled Circuit and OT - {:?}", gc_and_ot);
@@ -248,7 +269,7 @@ where
                         node_sum.add_lazy(v);
                     }
                 }
-                if !gc_sender{
+                if !gc_sender {
                     node_sum.add_lazy(&threshold);
                 }
                 node_sum
@@ -270,11 +291,14 @@ where
                 }
                 let end_idx = std::cmp::min(start_idx + chunk_size, results_by_node.len());
                 let chunk = results_by_node[start_idx..end_idx].to_vec();
-                let chunk_bits : Vec<Vec<u16>> = chunk
+                let chunk_bits: Vec<Vec<u16>> = chunk
                     .iter()
                     .map(|b| {
-                        let block : Block = b.clone().try_into().unwrap();
-                        block_to_bits(block, true).iter().map(|b| *b as u16).collect()
+                        let block: Block = b.clone().try_into().unwrap();
+                        block_to_bits(block, true)
+                            .iter()
+                            .map(|b| *b as u16)
+                            .collect()
                     })
                     .collect::<Vec<Vec<u16>>>();
 
@@ -282,10 +306,20 @@ where
                     let mut rng = AesRng::new();
                     let mut channel = (*channel).clone();
                     let final_shares = if gc_sender {
-                        multiple_gb_greater_than(&mut rng, &mut channel, chunk_bits.as_slice(), BitWidth::Bits128);
+                        multiple_gb_greater_than(
+                            &mut rng,
+                            &mut channel,
+                            chunk_bits.as_slice(),
+                            BitWidth::Bits128,
+                        );
                         vec![]
                     } else {
-                        multiple_ev_greater_than(&mut rng, &mut channel, chunk_bits.as_slice(), BitWidth::Bits128)
+                        multiple_ev_greater_than(
+                            &mut rng,
+                            &mut channel,
+                            chunk_bits.as_slice(),
+                            BitWidth::Bits128,
+                        )
                     };
                     final_shares
                 }));
@@ -295,7 +329,8 @@ where
                 results.extend(handle.join().unwrap());
             }
             results
-        }).unwrap();
+        })
+        .unwrap();
 
         let gc_comp_time = start.elapsed() - (gc_and_ot + fss + fa);
         println!("GEQ garbled circuit - {:?}", gc_comp_time);
@@ -304,24 +339,27 @@ where
 
         self.frontier = next_frontier;
         // results_by_node
-        (final_res, ServerSide{
-            total_level_time: start.elapsed().as_secs_f64(),
-            time_breakdown: TimeBreakdown {
-                fss: fss.as_secs_f64(),
-                gc_equality: gc_and_ot.as_secs_f64(),
-                field_actions: fa.as_secs_f64(),
-                gc_compare: gc_comp_time.as_secs_f64(),
+        (
+            final_res,
+            ServerSide {
+                total_level_time: start.elapsed().as_secs_f64(),
+                time_breakdown: TimeBreakdown {
+                    fss: fss.as_secs_f64(),
+                    gc_equality: gc_and_ot.as_secs_f64(),
+                    field_actions: fa.as_secs_f64(),
+                    gc_compare: gc_comp_time.as_secs_f64(),
+                },
+                num_threads: channels.len(),
+                nodes_searched: results_by_node.len(),
             },
-            num_threads: channels.len(),
-            nodes_searched: results_by_node.len(),
-        })
+        )
     }
 
     pub fn tree_crawl_last(
         &mut self,
         gc_sender: bool,
         channels: &mut [&mut SyncChannel<BufReader<TcpStream>, BufWriter<TcpStream>>],
-        threshold: U
+        threshold: U,
     ) -> (Vec<bool>, ServerSide) {
         println!("Crawl");
         let start = Instant::now();
@@ -346,10 +384,12 @@ where
                 node.key_states
                     .par_iter()
                     .map(|state| {
-                        let mut left_bits: Vec<bool> = state.iter()
+                        let mut left_bits: Vec<bool> = state
+                            .iter()
                             .map(|(left, _)| left.y_bit ^ left.bit)
                             .collect();
-                        let mut right_bits: Vec<bool> = state.iter()
+                        let mut right_bits: Vec<bool> = state
+                            .iter()
                             .map(|(_, right)| right.y_bit ^ right.bit)
                             .collect();
                         left_bits.append(&mut right_bits);
@@ -364,7 +404,10 @@ where
 
         let all_client_strings: Vec<Vec<u16>> = node_client_string
             .iter()
-            .flat_map(|node| node.iter().map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>()))
+            .flat_map(|node| {
+                node.iter()
+                    .map(|client| client.iter().map(|&b| b as u16).collect::<Vec<u16>>())
+            })
             .collect();
         let all_node_vals = crossbeam::scope(|s| {
             let mut results = vec![];
@@ -386,7 +429,7 @@ where
                         multiple_ev_equality_test(&mut rng, &mut channel, &chunk)
                     };
                     let mut node_vals = vec![];
-                    if gc_sender{
+                    if gc_sender {
                         let mut all_shares = Vec::with_capacity(bin_shares.len());
                         for i in 0..bin_shares.len() {
                             let r0 = U::random();
@@ -404,17 +447,23 @@ where
                             }
                         }
                         let mut ot = OtSender::init(&mut channel, &mut rng).unwrap();
-                        ot.send(&mut channel, all_shares.as_slice(), &mut rng).map_err(|_| {
-                            println!("Error in tree_crawl ot send")
-                        }).unwrap();
-                    }
-                    else{
+                        ot.send(&mut channel, all_shares.as_slice(), &mut rng)
+                            .map_err(|_| println!("Error in tree_crawl ot send"))
+                            .unwrap();
+                    } else {
                         let mut ot = OtReceiver::init(&mut channel, &mut rng).unwrap();
-                        let doubled_binary_shares = bin_shares.iter().flat_map(|&b| [b, b]).collect::<Vec<bool>>();
-                        let out_blocks = ot.receive(&mut channel, doubled_binary_shares.as_slice(), &mut rng).unwrap();
+                        let doubled_binary_shares = bin_shares
+                            .iter()
+                            .flat_map(|&b| [b, b])
+                            .collect::<Vec<bool>>();
+                        let out_blocks = ot
+                            .receive(&mut channel, doubled_binary_shares.as_slice(), &mut rng)
+                            .unwrap();
                         let mut i = 0;
                         while i < out_blocks.len() - 1 {
-                            let val = U::try_from(BlockPair([out_blocks[i], out_blocks[i+1]])).map_err(|_| {}).unwrap();
+                            let val = U::try_from(BlockPair([out_blocks[i], out_blocks[i + 1]]))
+                                .map_err(|_| {})
+                                .unwrap();
                             node_vals.push(val);
                             i += 2;
                         }
@@ -428,8 +477,8 @@ where
             }
 
             results
-        }).unwrap();
-
+        })
+        .unwrap();
 
         let gc_and_ot = start.elapsed() - fss;
         println!("Equality Garbled Circuit and OT - {:?}", gc_and_ot);
@@ -437,13 +486,14 @@ where
         let mut current_idx = 0;
         for node in &node_client_string {
             let num_clients = node.len();
-            let node_results : Vec<U> = all_node_vals[current_idx..current_idx + num_clients].to_vec();
+            let node_results: Vec<U> =
+                all_node_vals[current_idx..current_idx + num_clients].to_vec();
             let mut node_sum = U::zero();
             for (i, v) in node_results.iter().enumerate() {
                 if self.keys[i].0 {
                     node_sum.add_lazy(v);
                 }
-                if !gc_sender{
+                if !gc_sender {
                     node_sum.add_lazy(&threshold);
                 }
             }
@@ -466,14 +516,20 @@ where
                 }
                 let end_idx = std::cmp::min(start_idx + chunk_size, results_by_node.len());
                 let chunk = results_by_node[start_idx..end_idx].to_vec();
-                let chunk_bits : Vec<Vec<u16>> = chunk
+                let chunk_bits: Vec<Vec<u16>> = chunk
                     .iter()
                     .map(|b| {
                         let mut x = b.clone();
                         x.reduce();
                         let blocks: BlockPair = x.try_into().expect("Conversion failed");
-                        let mut bits : Vec<u16> = block_to_bits(blocks.0[0], true).iter().map(|b| *b as u16).collect();
-                        let second_half : Vec<u16>= block_to_bits(blocks.0[1], true).iter().map(|b| *b as u16).collect();
+                        let mut bits: Vec<u16> = block_to_bits(blocks.0[0], true)
+                            .iter()
+                            .map(|b| *b as u16)
+                            .collect();
+                        let second_half: Vec<u16> = block_to_bits(blocks.0[1], true)
+                            .iter()
+                            .map(|b| *b as u16)
+                            .collect();
                         bits.extend(second_half);
                         bits
                     })
@@ -483,10 +539,20 @@ where
                     let mut rng = AesRng::new();
                     let mut channel = (*channel).clone();
                     let final_shares = if gc_sender {
-                        multiple_gb_greater_than(&mut rng, &mut channel, chunk_bits.as_slice(), BitWidth::Bits256);
+                        multiple_gb_greater_than(
+                            &mut rng,
+                            &mut channel,
+                            chunk_bits.as_slice(),
+                            BitWidth::Bits256,
+                        );
                         vec![]
                     } else {
-                        multiple_ev_greater_than(&mut rng, &mut channel, chunk_bits.as_slice(), BitWidth::Bits256)
+                        multiple_ev_greater_than(
+                            &mut rng,
+                            &mut channel,
+                            chunk_bits.as_slice(),
+                            BitWidth::Bits256,
+                        )
                     };
                     final_shares
                 }));
@@ -496,29 +562,35 @@ where
                 results.extend(handle.join().unwrap());
             }
             results
-        }).unwrap();
+        })
+        .unwrap();
 
         let gc_comp_time = start.elapsed() - (gc_and_ot + fss + fa);
         println!("GEQ garbled circuit - {:?}", gc_comp_time);
         println!("...done");
-        self.frontier_last = next_frontier.par_iter().enumerate().map(|(i,node)| {
-                Result::<U> {
-                    path: node.path.clone(),
-                    value: results_by_node[i].clone(),
-                }
-            }).collect::<Vec<Result<U>>>();
+        self.frontier_last = next_frontier
+            .par_iter()
+            .enumerate()
+            .map(|(i, node)| Result::<U> {
+                path: node.path.clone(),
+                value: results_by_node[i].clone(),
+            })
+            .collect::<Vec<Result<U>>>();
 
-        (final_res, ServerSide{
-            total_level_time: start.elapsed().as_secs_f64(),
-            time_breakdown: TimeBreakdown {
-                fss: fss.as_secs_f64(),
-                gc_equality: gc_and_ot.as_secs_f64(),
-                field_actions: fa.as_secs_f64(),
-                gc_compare: gc_comp_time.as_secs_f64(),
+        (
+            final_res,
+            ServerSide {
+                total_level_time: start.elapsed().as_secs_f64(),
+                time_breakdown: TimeBreakdown {
+                    fss: fss.as_secs_f64(),
+                    gc_equality: gc_and_ot.as_secs_f64(),
+                    field_actions: fa.as_secs_f64(),
+                    gc_compare: gc_comp_time.as_secs_f64(),
+                },
+                num_threads: channels.len(),
+                nodes_searched: results_by_node.len(),
             },
-            num_threads: channels.len(),
-            nodes_searched: results_by_node.len(),
-        })
+        )
     }
 
     pub fn tree_prune(&mut self, alive_vals: &[bool]) {
@@ -543,13 +615,12 @@ where
         }
     }
 
-
     pub fn final_shares(&self) -> Vec<Result<U>> {
         let mut alive = vec![];
         for n in &self.frontier_last {
             alive.push(Result::<U> {
                 path: n.path.clone(),
-                value: n.value.clone()
+                value: n.value.clone(),
             });
 
             println!("Final {:?}", n.path);
@@ -582,4 +653,3 @@ where
         out
     }
 }
-

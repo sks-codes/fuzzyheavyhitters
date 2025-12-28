@@ -2,8 +2,8 @@ use core::arch::x86_64::{
     __m128i, _mm_add_epi64, _mm_loadu_si128, _mm_set_epi64x, _mm_storeu_si128,
 };
 
-use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::cipher::generic_array::typenum;
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit, KeyIvInit, StreamCipher};
 use aes::Aes128;
 use ctr::Ctr128BE;
 

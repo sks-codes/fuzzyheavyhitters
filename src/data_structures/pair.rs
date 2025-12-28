@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul, BitXor, BitAnd}; // Import all necessary traits
+use std::ops::{Add, BitAnd, BitXor, Mul, Sub}; // Import all necessary traits
 
 /// A generic struct to represent a pair of values of type `T`.
 #[derive(Debug, PartialEq, Copy, Clone, serde::Serialize, serde::Deserialize)]

@@ -3,16 +3,16 @@ use blake3;
 use std::cmp::{max, min};
 
 use crate::{
+    data_structures::ringvec::RingVec,
     fss::{
-        distance::{DistanceFSSKey, DistanceFSSEval},
-        interval::{IntervalFSSKey, IntervalFSSEval},
+        distance::{DistanceFSSEval, DistanceFSSKey},
+        interval::{IntervalFSSEval, IntervalFSSKey},
     },
     fuzzy_match::{
-        shared_range::{ShareData, SharedRange},
         share_okvs_strategies::KeyValuePairStrategy,
+        shared_range::{ShareData, SharedRange},
     },
     okvs_f2k::RbOkvsF2k,
-    data_structures::ringvec::RingVec,
     util::u128_to_bits_msb,
 };
 
@@ -34,7 +34,7 @@ impl SharePhase {
         let mut okvs_shares_1 = Vec::new();
 
         // Create separate OKVS for each dimension
-        for dim in 0..self.config.d{
+        for dim in 0..self.config.d {
             let left = left_bound[dim];
             let right = right_bound[dim];
             let x_i = x[dim];
@@ -58,13 +58,7 @@ impl SharePhase {
 
             let columns = max((keys.len() as f64 * 1.1) as usize, 60);
             let band_width = min(columns, 100);
-            let okvs = RbOkvsF2k::<u128>::new(
-                keys.len(),
-                columns,
-                band_width,
-                &r1[dim],
-                &r2[dim],
-            );
+            let okvs = RbOkvsF2k::<u128>::new(keys.len(), columns, band_width, &r1[dim], &r2[dim]);
 
             let encoding_0 = okvs.encode(&keys, &values_0)?;
             let encoding_1 = okvs.encode(&keys, &values_1)?;
@@ -109,14 +103,8 @@ impl SharePhase {
         let columns = okvs_share.len();
         let band_width = min(columns, 100);
 
-        let okvs = RbOkvsF2k::<u128>::new(
-            1,
-            columns,
-            band_width,
-            r1, 
-            r2,
-        );
-        
+        let okvs = RbOkvsF2k::<u128>::new(1, columns, band_width, r1, r2);
+
         let result = okvs.decode(&okvs_share, &[key_bits.clone()]);
         if result.is_empty() {
             Ok(0) // Return 0 if decode fails
@@ -126,14 +114,29 @@ impl SharePhase {
                 Ok(result[0])
             } else {
                 // Server 1: need to add the deterministic mask
-                let key_bits_bytes: Vec<u8> = key_bits.iter().map(|&b| if b { 1u8 } else { 0u8 }).collect();
+                let key_bits_bytes: Vec<u8> = key_bits
+                    .iter()
+                    .map(|&b| if b { 1u8 } else { 0u8 })
+                    .collect();
                 let hash = blake3::hash(&key_bits_bytes);
                 let hash_bytes = hash.as_bytes();
                 let value_mask = u128::from_le_bytes([
-                    hash_bytes[0], hash_bytes[1], hash_bytes[2], hash_bytes[3],
-                    hash_bytes[4], hash_bytes[5], hash_bytes[6], hash_bytes[7],
-                    hash_bytes[8], hash_bytes[9], hash_bytes[10], hash_bytes[11],
-                    hash_bytes[12], hash_bytes[13], hash_bytes[14], hash_bytes[15],
+                    hash_bytes[0],
+                    hash_bytes[1],
+                    hash_bytes[2],
+                    hash_bytes[3],
+                    hash_bytes[4],
+                    hash_bytes[5],
+                    hash_bytes[6],
+                    hash_bytes[7],
+                    hash_bytes[8],
+                    hash_bytes[9],
+                    hash_bytes[10],
+                    hash_bytes[11],
+                    hash_bytes[12],
+                    hash_bytes[13],
+                    hash_bytes[14],
+                    hash_bytes[15],
                 ]) & modulus_mask;
                 Ok((result[0] + modulus_mask + 1 - value_mask) & modulus_mask)
             }
@@ -151,15 +154,19 @@ impl SharePhase {
 
         let modulus = 1u128 << self.config.h2;
 
-        let left_payload = RingVec::new(vec![1], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
-        let mid_payload = RingVec::new(vec![0], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
-        let right_payload = RingVec::new(vec![1], modulus).map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
+        let left_payload = RingVec::new(vec![1], modulus)
+            .map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
+        let mid_payload = RingVec::new(vec![0], modulus)
+            .map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
+        let right_payload = RingVec::new(vec![1], modulus)
+            .map_err(|e| SharePhaseError::InvalidRange(e.to_string()))?;
 
         for (&alpha, &beta) in left_bound.iter().zip(right_bound.iter()) {
             if alpha > beta {
-                return Err(SharePhaseError::InvalidRange(
-                    format!("Left bound {} cannot be greater than right bound {}", alpha, beta)
-                ));
+                return Err(SharePhaseError::InvalidRange(format!(
+                    "Left bound {} cannot be greater than right bound {}",
+                    alpha, beta
+                )));
             }
 
             // Convert bounds to bits representation
@@ -167,8 +174,8 @@ impl SharePhase {
             let beta_bits = u128_to_bits_msb(beta, self.config.h1);
 
             let (fss_key_0, fss_key_1) = IntervalFSSKey::<1>::gen_interval_fss_key(
-                &alpha_bits, 
-                &beta_bits, 
+                &alpha_bits,
+                &beta_bits,
                 &left_payload,
                 &mid_payload,
                 &right_payload,
@@ -178,13 +185,13 @@ impl SharePhase {
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
         }
-        
+
         Ok((
-            SharedRange::IntervalFSS { 
+            SharedRange::IntervalFSS {
                 keys: keys_0,
                 role: false, // Server 0
             },
-            SharedRange::IntervalFSS { 
+            SharedRange::IntervalFSS {
                 keys: keys_1,
                 role: true, // Server 1
             },
@@ -213,12 +220,13 @@ impl SharePhase {
         let mut keys_1 = Vec::new();
 
         let modulus = 1u128 << self.config.h2;
-        
+
         for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
             if alpha > beta || alpha > center || beta < center {
-                return Err(SharePhaseError::InvalidRange(
-                    format!("Left bound {} cannot be greater than right bound {}", alpha, beta)
-                ));
+                return Err(SharePhaseError::InvalidRange(format!(
+                    "Left bound {} cannot be greater than right bound {}",
+                    alpha, beta
+                )));
             }
 
             // Convert bounds to bits representation
@@ -230,22 +238,22 @@ impl SharePhase {
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<2>::gen_distance_fss_key(
                 center,
                 &center_bits,
-                &alpha_bits, 
-                &beta_bits, 
+                &alpha_bits,
+                &beta_bits,
                 max_distance,
                 modulus,
             );
-            
+
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
         }
 
         Ok((
-            SharedRange::DistanceFSSL1 { 
+            SharedRange::DistanceFSSL1 {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL1 { 
+            SharedRange::DistanceFSSL1 {
                 keys: keys_1,
                 role: true,
             },
@@ -264,12 +272,13 @@ impl SharePhase {
         let mut keys_1 = Vec::new();
 
         let modulus = 1u128 << self.config.h2;
-        
+
         for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
             if alpha > beta || alpha > center || beta < center {
-                return Err(SharePhaseError::InvalidRange(
-                    format!("Left bound {} cannot be greater than right bound {}", alpha, beta)
-                ));
+                return Err(SharePhaseError::InvalidRange(format!(
+                    "Left bound {} cannot be greater than right bound {}",
+                    alpha, beta
+                )));
             }
 
             // Convert bounds to bits representation
@@ -281,22 +290,22 @@ impl SharePhase {
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<3>::gen_distance_fss_key(
                 center,
                 &center_bits,
-                &alpha_bits, 
-                &beta_bits, 
+                &alpha_bits,
+                &beta_bits,
                 max_distance,
                 modulus,
             );
-            
+
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
         }
 
         Ok((
-            SharedRange::DistanceFSSL2 { 
+            SharedRange::DistanceFSSL2 {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL2 { 
+            SharedRange::DistanceFSSL2 {
                 keys: keys_1,
                 role: true,
             },
@@ -315,12 +324,13 @@ impl SharePhase {
         let mut keys_1 = Vec::new();
 
         let modulus = 1u128 << self.config.h2;
-        
+
         for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
             if alpha > beta || alpha > center || beta < center {
-                return Err(SharePhaseError::InvalidRange(
-                    format!("Left bound {} cannot be greater than right bound {}", alpha, beta)
-                ));
+                return Err(SharePhaseError::InvalidRange(format!(
+                    "Left bound {} cannot be greater than right bound {}",
+                    alpha, beta
+                )));
             }
 
             // Convert bounds to bits representation
@@ -332,22 +342,22 @@ impl SharePhase {
             let (fss_key_0, fss_key_1) = DistanceFSSKey::<4>::gen_distance_fss_key(
                 center,
                 &center_bits,
-                &alpha_bits, 
-                &beta_bits, 
+                &alpha_bits,
+                &beta_bits,
                 max_distance,
                 modulus,
             );
-            
+
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
         }
 
         Ok((
-            SharedRange::DistanceFSSL3 { 
+            SharedRange::DistanceFSSL3 {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL3 { 
+            SharedRange::DistanceFSSL3 {
                 keys: keys_1,
                 role: true,
             },
@@ -382,19 +392,27 @@ impl SharePhase {
         let mut new_prefix = prefix.to_vec();
         new_prefix.push(false);
         let mut eval0 = eval.to_vec();
-        eval0[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &new_prefix, role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
+        eval0[dimension] = self.evaluate_okvs_generic(
+            &okvs_shares[dimension],
+            &new_prefix,
+            role,
+            &okvs_seeds[dimension].0,
+            &okvs_seeds[dimension].1,
+        )?;
         new_prefix.pop();
         new_prefix.push(true);
         let mut eval1 = eval.to_vec();
-        eval1[dimension] = self.evaluate_okvs_generic(&okvs_shares[dimension], &new_prefix, role, &okvs_seeds[dimension].0, &okvs_seeds[dimension].1)?;
+        eval1[dimension] = self.evaluate_okvs_generic(
+            &okvs_shares[dimension],
+            &new_prefix,
+            role,
+            &okvs_seeds[dimension].0,
+            &okvs_seeds[dimension].1,
+        )?;
 
         Ok((
-            ShareData::OKVS {
-                eval: eval0,
-            },
-            ShareData::OKVS {
-                eval: eval1,
-            },
+            ShareData::OKVS { eval: eval0 },
+            ShareData::OKVS { eval: eval1 },
         ))
     }
 
@@ -410,15 +428,12 @@ impl SharePhase {
 
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
-        (data0[dimension], data1[dimension]) = interval_fss_key.expand_prefix(interval_fss_data, modulus);
+        (data0[dimension], data1[dimension]) =
+            interval_fss_key.expand_prefix(interval_fss_data, modulus);
 
         Ok((
-            ShareData::IntervalFSS {
-                data: data0,
-            },
-            ShareData::IntervalFSS {
-                data: data1,
-            },
+            ShareData::IntervalFSS { data: data0 },
+            ShareData::IntervalFSS { data: data1 },
         ))
     }
 
@@ -437,7 +452,8 @@ impl SharePhase {
 
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
-        (data0[dimension], data1[dimension]) = key.expand_prefix(prefix, &data[dimension], input_len, modulus);
+        (data0[dimension], data1[dimension]) =
+            key.expand_prefix(prefix, &data[dimension], input_len, modulus);
 
         let mut eval0 = eval.to_vec();
         eval0[dimension] = if !role {
@@ -454,43 +470,39 @@ impl SharePhase {
         };
 
         match N {
-            2 => {
-                Ok((
-                    ShareData::DistanceFSSL1 {
-                        data: unsafe { std::mem::transmute(data0) },
-                        eval: eval0,
-                    },
-                    ShareData::DistanceFSSL1 {
-                        data: unsafe { std::mem::transmute(data1) },
-                        eval: eval1,
-                    },
-                ))
-            },
-            3 => {
-                Ok((
-                    ShareData::DistanceFSSL2 {
-                        data: unsafe { std::mem::transmute(data0) },
-                        eval: eval0,
-                    },
-                    ShareData::DistanceFSSL2 {
-                        data: unsafe { std::mem::transmute(data1) },
-                        eval: eval1,
-                    },
-                ))
-            },
-            4 => {
-                Ok((
-                    ShareData::DistanceFSSL3 {
-                        data: unsafe { std::mem::transmute(data0) },
-                        eval: eval0,
-                    },
-                    ShareData::DistanceFSSL3 {
-                        data: unsafe { std::mem::transmute(data1) },
-                        eval: eval1,
-                    },
-                ))
-            },
-            _ => Err(SharePhaseError::EvaluationError("Invalid share data type for distance FSS expansion".to_string())),
+            2 => Ok((
+                ShareData::DistanceFSSL1 {
+                    data: unsafe { std::mem::transmute(data0) },
+                    eval: eval0,
+                },
+                ShareData::DistanceFSSL1 {
+                    data: unsafe { std::mem::transmute(data1) },
+                    eval: eval1,
+                },
+            )),
+            3 => Ok((
+                ShareData::DistanceFSSL2 {
+                    data: unsafe { std::mem::transmute(data0) },
+                    eval: eval0,
+                },
+                ShareData::DistanceFSSL2 {
+                    data: unsafe { std::mem::transmute(data1) },
+                    eval: eval1,
+                },
+            )),
+            4 => Ok((
+                ShareData::DistanceFSSL3 {
+                    data: unsafe { std::mem::transmute(data0) },
+                    eval: eval0,
+                },
+                ShareData::DistanceFSSL3 {
+                    data: unsafe { std::mem::transmute(data1) },
+                    eval: eval1,
+                },
+            )),
+            _ => Err(SharePhaseError::EvaluationError(
+                "Invalid share data type for distance FSS expansion".to_string(),
+            )),
         }
     }
 }

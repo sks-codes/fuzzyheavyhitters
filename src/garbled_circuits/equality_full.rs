@@ -1,9 +1,9 @@
-use crate::data_structures::mod2k::{Mod2k, get_bit_width_from_modint};
+use crate::data_structures::mod2k::{get_bit_width_from_modint, Mod2k};
 
 use fancy_garbling::{
+    twopac::semihonest::{Evaluator, Garbler},
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
     FancyReveal,
-    twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
@@ -24,17 +24,14 @@ pub fn garbler_preprocess_equality_test(input: &[Mod2k]) -> Vec<u128> {
     input.iter().map(|x| x.val).collect()
 }
 
-pub fn multiple_gb_equality_test<C>(
-    rng: &mut AesRng,
-    channel: &mut C,
-    inputs: &[Mod2k]
-) -> bool
+pub fn multiple_gb_equality_test<C>(rng: &mut AesRng, channel: &mut C, inputs: &[Mod2k]) -> bool
 where
     C: AbstractChannel + Clone,
 {
     let x_values = garbler_preprocess_equality_test(inputs);
     let bit_width = get_bit_width_from_modint(&inputs[0]);
-    let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    let mut gb =
+        Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
 
     // Mask for the output - now just one boolean since we're ANDing everything
     let result = rand::rng().random::<bool>();
@@ -50,7 +47,12 @@ where
 }
 
 /// The garbler's wire exchange method
-fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u128], result: bool, bit_width: usize) -> EQInputs<F::Item>
+fn gb_set_fancy_inputs<F, E>(
+    gb: &mut F,
+    input: &[u128],
+    result: bool,
+    bit_width: usize,
+) -> EQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -62,7 +64,8 @@ where
     let result_wire: F::Item = gb.encode(result as u16, 2).unwrap();
 
     // The evaluator receives their input labels using Oblivious Transfer (OT)
-    let evaluator_wires: Vec<BinaryBundle<F::Item>> = gb.bin_receive_many(input.len(), bit_width).unwrap();
+    let evaluator_wires: Vec<BinaryBundle<F::Item>> =
+        gb.bin_receive_many(input.len(), bit_width).unwrap();
 
     EQInputs {
         garbler_wires,
@@ -75,15 +78,12 @@ fn evaluator_preprocess_equality_test(input: &[Mod2k]) -> Vec<u128> {
     input.iter().map(|x| x.val).collect()
 }
 
-pub fn multiple_ev_equality_test<C>(
-    rng: &mut AesRng,
-    channel: &mut C,
-    inputs: &[Mod2k]
-) -> bool
+pub fn multiple_ev_equality_test<C>(rng: &mut AesRng, channel: &mut C, inputs: &[Mod2k]) -> bool
 where
     C: AbstractChannel + Clone,
 {
-    let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    let mut ev =
+        Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
     let y_values = evaluator_preprocess_equality_test(inputs);
     let bit_width = get_bit_width_from_modint(&inputs[0]);
     let wires = ev_set_fancy_inputs(&mut ev, &y_values, bit_width);
@@ -104,7 +104,8 @@ where
     E: Debug,
 {
     // The evaluator receives the garblers input labels.
-    let garbler_wires: Vec<BinaryBundle<F::Item>> = ev.bin_receive_many(input.len(), bit_width).unwrap();
+    let garbler_wires: Vec<BinaryBundle<F::Item>> =
+        ev.bin_receive_many(input.len(), bit_width).unwrap();
     // The evaluator receives the single result mask
     let result_wire: F::Item = ev.receive(2).unwrap();
     // The evaluator receives their input labels using Oblivious Transfer (OT).

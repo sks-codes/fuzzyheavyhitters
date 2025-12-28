@@ -1,4 +1,8 @@
-use fancy_garbling::{twopac::semihonest::{Evaluator, Garbler}, AllWire, BinaryBundle, BundleGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput, FancyReveal};
+use fancy_garbling::{
+    twopac::semihonest::{Evaluator, Garbler},
+    AllWire, BinaryBundle, BundleGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
+    FancyReveal,
+};
 
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
@@ -17,22 +21,25 @@ struct EQInputs<F> {
 pub fn multiple_gb_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<u16>]
+    inputs: &[Vec<u16>],
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
     let num_tests = inputs.len();
     let mut results = Vec::with_capacity(num_tests);
-    let mut gb = Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    let mut gb =
+        Garbler::<C, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
     // let start = Instant::now();
     // println!("Step 1");
-    let masked_inputs =
-        inputs.iter().map(|input| {
+    let masked_inputs = inputs
+        .iter()
+        .map(|input| {
             let mask = rng.clone().gen_bool();
             results.push(mask);
             [input.as_slice(), &[mask as u16]].concat()
-        }).collect::<Vec<Vec<u16>>>();
+        })
+        .collect::<Vec<Vec<u16>>>();
 
     let wire_inputs = masked_inputs.into_iter().flatten().collect::<Vec<u16>>();
     let wires = gb_set_fancy_inputs(&mut gb, wire_inputs.as_slice(), inputs.len());
@@ -47,17 +54,19 @@ where
 }
 
 /// The garbler's wire exchange method
-fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u16], num_tests : usize) -> EQInputs<F::Item>
+fn gb_set_fancy_inputs<F, E>(gb: &mut F, input: &[u16], num_tests: usize) -> EQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
 {
     // The garbler encodes their input into binary wires
     println!("garb len: {:?}", input.len());
-    let garbler_wires: BinaryBundle<F::Item> = BinaryBundle::new(gb.encode_many(&input, &vec![2; input.len()]).unwrap());//.map(BinaryBundle::from).unwrap();
-    // The evaluator receives their input labels using Oblivious Transfer (OT)
+    let garbler_wires: BinaryBundle<F::Item> =
+        BinaryBundle::new(gb.encode_many(&input, &vec![2; input.len()]).unwrap()); //.map(BinaryBundle::from).unwrap();
+                                                                                   // The evaluator receives their input labels using Oblivious Transfer (OT)
     println!("eval len: {:?}", input.len());
-    let evaluator_wires: BinaryBundle<F::Item> = BinaryBundle::new(gb.receive_many(&vec![2;input.len() - num_tests]).unwrap());
+    let evaluator_wires: BinaryBundle<F::Item> =
+        BinaryBundle::new(gb.receive_many(&vec![2; input.len() - num_tests]).unwrap());
 
     EQInputs {
         garbler_wires,
@@ -65,17 +74,17 @@ where
     }
 }
 
-
 pub fn multiple_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<u16>]
+    inputs: &[Vec<u16>],
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
     let num_tests = inputs.len();
-    let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    let mut ev =
+        Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
     let input_vec = inputs.to_vec().into_iter().flatten().collect::<Vec<u16>>();
     let ev_in = input_vec.as_slice();
     let wires = ev_set_fancy_inputs(&mut ev, &ev_in, num_tests);
@@ -90,7 +99,7 @@ where
 }
 
 /// The evaluator's wire exchange method
-fn ev_set_fancy_inputs<F, E>(ev: &mut F, input: &[u16], num_tests : usize) -> EQInputs<F::Item>
+fn ev_set_fancy_inputs<F, E>(ev: &mut F, input: &[u16], num_tests: usize) -> EQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -99,17 +108,18 @@ where
     let nwires = input.len();
     println!("garb len: {:?}", nwires + num_tests);
     // The evaluator receives the garblers input labels.
-    let garbler_wires: BinaryBundle<F::Item> = BinaryBundle::new(ev.receive_many(&vec![2; nwires + num_tests]).unwrap());
+    let garbler_wires: BinaryBundle<F::Item> =
+        BinaryBundle::new(ev.receive_many(&vec![2; nwires + num_tests]).unwrap());
     println!("eval len: {:?}", nwires);
     // The evaluator receives their input labels using Oblivious Transfer (OT).
-    let evaluator_wires: BinaryBundle<F::Item> = BinaryBundle::new(ev.encode_many(input, &vec![2; nwires]).unwrap());//map(BinaryBundle::from).unwrap();
+    let evaluator_wires: BinaryBundle<F::Item> =
+        BinaryBundle::new(ev.encode_many(input, &vec![2; nwires]).unwrap()); //map(BinaryBundle::from).unwrap();
 
     EQInputs {
         garbler_wires,
         evaluator_wires,
     }
 }
-
 
 /// Extension trait for `FancyBinary` providing gadgets that operate over binary bundles.
 pub trait BinaryGadgets: FancyBinary + BundleGadgets {
@@ -168,10 +178,11 @@ pub trait BinaryGadgets: FancyBinary + BundleGadgets {
             let x_start = i * (string_len + 1);
             let y_start = i * string_len;
             let eq_result = self.bin_eq_bundles(
-                &BinaryBundle::new(x.wires()[x_start..x_start+string_len].to_vec()),
-                &BinaryBundle::new(y.wires()[y_start..y_start+string_len].to_vec()))?;
+                &BinaryBundle::new(x.wires()[x_start..x_start + string_len].to_vec()),
+                &BinaryBundle::new(y.wires()[y_start..y_start + string_len].to_vec()),
+            )?;
 
-            let masked_result = self.xor(&eq_result, &x.wires()[x_start+string_len])?;
+            let masked_result = self.xor(&eq_result, &x.wires()[x_start + string_len])?;
             results.push(masked_result);
         }
         Ok(BinaryBundle::new(results))
@@ -179,16 +190,14 @@ pub trait BinaryGadgets: FancyBinary + BundleGadgets {
 }
 
 /// Implement BinaryGadgets for `Garbler`
-impl<C, R, S, W> BinaryGadgets for fancy_garbling::twopac::semihonest::Garbler<C, R, S, W>
-where
-    Self: FancyBinary + BundleGadgets,
+impl<C, R, S, W> BinaryGadgets for fancy_garbling::twopac::semihonest::Garbler<C, R, S, W> where
+    Self: FancyBinary + BundleGadgets
 {
 }
 
 /// Implement BinaryGadgets for `Evaluator`
-impl<C, R, S, W> BinaryGadgets for fancy_garbling::twopac::semihonest::Evaluator<C, R, S, W>
-where
-    Self: FancyBinary + BundleGadgets,
+impl<C, R, S, W> BinaryGadgets for fancy_garbling::twopac::semihonest::Evaluator<C, R, S, W> where
+    Self: FancyBinary + BundleGadgets
 {
 }
 
@@ -201,6 +210,10 @@ fn fancy_equality<F>(
 where
     F: FancyReveal + Fancy + BinaryGadgets + FancyBinary + FancyArithmetic,
 {
-    let equality_bits = f.multi_bin_eq_bundles_shared(&wire_inputs.garbler_wires, &wire_inputs.evaluator_wires,num_tests)?;
+    let equality_bits = f.multi_bin_eq_bundles_shared(
+        &wire_inputs.garbler_wires,
+        &wire_inputs.evaluator_wires,
+        num_tests,
+    )?;
     Ok(equality_bits)
 }

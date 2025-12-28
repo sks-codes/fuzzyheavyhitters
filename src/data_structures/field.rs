@@ -1,11 +1,11 @@
 use crate::data_structures::fastfield::FE;
 use num_bigint::BigUint;
+use scuttlebutt::Block;
 use serde::Deserialize;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::u32;
-use scuttlebutt::Block;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FieldElm {
@@ -457,7 +457,6 @@ where
     }
 }
 
-
 impl TryFrom<Block> for FieldElm {
     type Error = &'static str;
 
@@ -501,7 +500,6 @@ impl From<FieldElm> for BlockPair {
         BlockPair(blocks)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

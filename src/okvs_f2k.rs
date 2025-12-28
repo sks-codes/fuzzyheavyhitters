@@ -1,7 +1,7 @@
-use std::convert::TryInto;
-use std::ops::BitXor;
-use std::fmt::Debug;
 use blake3;
+use std::convert::TryInto;
+use std::fmt::Debug;
+use std::ops::BitXor;
 
 // Custom error type for OKVS operations
 #[derive(Debug, Clone, PartialEq)]
@@ -49,9 +49,21 @@ pub struct RbOkvsF2k<V: OkvsValue> {
 }
 
 impl<V: OkvsValue> RbOkvsF2k<V> {
-    pub fn new(kv_count: usize, columns: usize, band_width: usize, r1: &[u8; 16], r2: &[u8; 16]) -> Self {
-        assert!(band_width < columns, "Band width must be less than or equal to the number of columns");
-        assert!(band_width <= 256, "Band width must be less than or equal to 256");
+    pub fn new(
+        kv_count: usize,
+        columns: usize,
+        band_width: usize,
+        r1: &[u8; 16],
+        r2: &[u8; 16],
+    ) -> Self {
+        assert!(
+            band_width < columns,
+            "Band width must be less than or equal to the number of columns"
+        );
+        assert!(
+            band_width <= 256,
+            "Band width must be less than or equal to 256"
+        );
         Self {
             kv_count,
             columns,
@@ -63,7 +75,11 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
     }
 
     pub fn encode(&self, keys: &Vec<Vec<bool>>, values: &Vec<V>) -> Result<Vec<V>> {
-        assert_eq!(keys.len(), values.len(), "Keys and values must have the same length");
+        assert_eq!(
+            keys.len(),
+            values.len(),
+            "Keys and values must have the same length"
+        );
         assert_eq!(keys.len(), self.kv_count, "Keys length must match kv_count");
         let (mut matrix, start_pos, mut y) = self.create_sorted_matrix(keys, values)?;
         self.simple_gauss(&mut y, &mut matrix, start_pos)
@@ -94,15 +110,25 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
         res
     }
 
-    fn create_sorted_matrix(&self, keys: &Vec<Vec<bool>>, values: &Vec<V>) -> Result<(Vec<Vec<bool>>, Vec<usize>, Vec<V>)> {
+    fn create_sorted_matrix(
+        &self,
+        keys: &Vec<Vec<bool>>,
+        values: &Vec<V>,
+    ) -> Result<(Vec<Vec<bool>>, Vec<usize>, Vec<V>)> {
         let mut start_pos: Vec<(usize, usize)> = vec![(0, 0); self.kv_count];
         let mut matrix: Vec<Vec<bool>> = vec![vec![false; self.band_width]; self.kv_count];
         let mut start_ids: Vec<usize> = vec![0; self.kv_count];
         let mut y: Vec<V> = vec![V::default(); self.kv_count];
 
-        start_pos.iter_mut().enumerate().for_each(|(i, start_pos_i)| {
-            *start_pos_i = (i, self.hash_to_index(&keys[i], &self.r1, self.columns - self.band_width));
-        });
+        start_pos
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, start_pos_i)| {
+                *start_pos_i = (
+                    i,
+                    self.hash_to_index(&keys[i], &self.r1, self.columns - self.band_width),
+                );
+            });
 
         radix_sort(&mut start_pos, self.columns - self.band_width - 1);
 
@@ -114,9 +140,12 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
             *y_i = values[start_pos[i].0];
         });
 
-        start_ids.iter_mut().enumerate().for_each(|(i, start_ids_i)| {
-            *start_ids_i = start_pos[i].1;
-        });
+        start_ids
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, start_ids_i)| {
+                *start_ids_i = start_pos[i].1;
+            });
 
         Ok((matrix, start_ids, y))
     }
@@ -127,8 +156,12 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
         bands: &mut Vec<Vec<bool>>,
         start_pos: Vec<usize>,
     ) -> Result<Vec<V>> {
-        assert_eq!(bands.len(), self.kv_count, "Number of bands must match kv_count");
-        assert_eq!(y.len(), self.kv_count, "Length of y must match kv_count");  
+        assert_eq!(
+            bands.len(),
+            self.kv_count,
+            "Number of bands must match kv_count"
+        );
+        assert_eq!(y.len(), self.kv_count, "Length of y must match kv_count");
 
         let mut pivot = vec![0 as usize; self.kv_count];
         let mut first_nonzero = vec![self.band_width; self.kv_count];
@@ -147,7 +180,7 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
 
             pivot[i] = first_nonzero[i] + start_pos[i];
 
-            let bands_i = bands[i].clone();   
+            let bands_i = bands[i].clone();
             let y_i = y[i];
 
             for j in (i + 1)..self.kv_count {
@@ -162,13 +195,12 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
                     }
                     y[j] = y[j] ^ y_i;
                 }
-
             }
         }
 
         let mut x = vec![V::default(); self.columns];
         for i in (0..self.kv_count).rev() {
-            let mut res = y[i];   
+            let mut res = y[i];
             for j in 0..self.band_width {
                 if bands[i][j] {
                     res = res ^ x[start_pos[i] + j];
@@ -194,30 +226,31 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
 
     fn hash_to_index(&self, x: &[bool], r1: &[u8; 16], column: usize) -> usize {
         let mut hasher = blake3::Hasher::new();
-        
+
         // Include the original length
         hasher.update(&(x.len() as u64).to_le_bytes());
-        
+
         // Pack bools into bytes (8 bools per byte)
         let packed_bytes = self.pack_bools_to_bytes(x);
         hasher.update(&packed_bytes);
-        
+
         hasher.update(r1);
         let hash = hasher.finalize();
-        let index = u128::from_le_bytes(hash.as_bytes()[0..16].try_into().unwrap()) % (column as u128);
+        let index =
+            u128::from_le_bytes(hash.as_bytes()[0..16].try_into().unwrap()) % (column as u128);
         index as usize
     }
 
     fn hash_to_band(&self, x: &[bool], r2: &[u8; 16]) -> Vec<bool> {
         let mut hasher = blake3::Hasher::new();
-        
+
         // Include the original length
         hasher.update(&(x.len() as u64).to_le_bytes());
-        
+
         // Pack bools into bytes (8 bools per byte)
         let packed_bytes = self.pack_bools_to_bytes(x);
         hasher.update(&packed_bytes);
-        
+
         hasher.update(r2);
         let hash = hasher.finalize();
         let mut band = vec![false; self.band_width];
@@ -232,13 +265,13 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
     fn pack_bools_to_bytes(&self, bools: &[bool]) -> Vec<u8> {
         let num_bytes = (bools.len() + 7) / 8; // Round up to nearest byte
         let mut bytes = vec![0u8; num_bytes];
-        
+
         for (i, &bit) in bools.iter().enumerate() {
             if bit {
                 bytes[i / 8] |= 1 << (i % 8);
             }
         }
-        
+
         bytes
     }
 }

@@ -1,25 +1,28 @@
 use mosaic::{
-    collect, string_to_bits, FieldElm,
-    data_structures::fastfield, CollectorClient,
+    collect,
     configs::poplar_config,
-    rpc::{
-        AddKeysRequest, FinalSharesRequest, ResetRequest,
-        TreeInitRequest,
-        TreeCrawlRequest,
-    }, 
-    data_structures::logexperiments::{log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters, ServerSide},
+    data_structures::fastfield,
+    data_structures::logexperiments::{
+        log_experiment_to_json, ClientSide, Experiment, ExperimentResults, Metadata, Parameters,
+        ServerSide,
+    },
     fss::ibdcf::IbDCFKey,
+    rpc::{AddKeysRequest, FinalSharesRequest, ResetRequest, TreeCrawlRequest, TreeInitRequest},
     rpc::{TreeCrawlLastRequest, TreePruneLastRequest, TreePruneRequest},
     sample_driving_data::{csv_to_bitvecs, save_heavy_hitters},
+    string_to_bits, CollectorClient, FieldElm,
 };
 
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
+use chrono_tz::America::New_York;
+use chrono_tz::Tz;
 use futures::try_join;
-use std::io;
 use rand::prelude::*;
 use rand_distr::Zipf;
 use rayon::prelude::*;
+use std::io;
 use tarpc::{
     client,
     context,
@@ -27,9 +30,6 @@ use tarpc::{
     tokio_serde::formats::Bincode,
     //server::{self, Channel},
 };
-use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
-use chrono_tz::America::New_York;
 
 use rand::distr::Alphanumeric;
 
@@ -66,7 +66,7 @@ fn generate_random_bit_vectors(len: usize, d: usize) -> Vec<Vec<bool>> {
         .collect()
 }
 
-fn generate_strings(cfg: &poplar_config::Config, aug_len : usize) -> Vec<Vec<Vec<bool>>> {
+fn generate_strings(cfg: &poplar_config::Config, aug_len: usize) -> Vec<Vec<Vec<bool>>> {
     (0..cfg.num_sites)
         .map(|_| {
             generate_random_bit_vectors(cfg.data_len - aug_len, cfg.n_dims) //leaving space for later per-client augmentation
@@ -74,17 +74,16 @@ fn generate_strings(cfg: &poplar_config::Config, aug_len : usize) -> Vec<Vec<Vec
         .collect::<Vec<Vec<Vec<bool>>>>()
 }
 
-fn augment_string(string: Vec<Vec<bool>>, aug_len : usize) -> Vec<Vec<bool>> {
+fn augment_string(string: Vec<Vec<bool>>, aug_len: usize) -> Vec<Vec<bool>> {
     let mut out = vec![];
-    for mut d_str in string{
-        let aug : String = sample_string(aug_len);
+    for mut d_str in string {
+        let aug: String = sample_string(aug_len);
         let mut bits = string_to_bits(&aug);
         d_str.append(&mut bits);
         out.push(d_str);
     }
     out
 }
-
 
 #[allow(unused)]
 fn generate_keys(cfg: &poplar_config::Config) -> (Vec<Vec<IntervalKey>>, Vec<Vec<IntervalKey>>) {
@@ -115,10 +114,7 @@ async fn reset_servers(
     Ok(())
 }
 
-async fn tree_init(
-    client0: &mut CollectorClient,
-    client1: &mut CollectorClient,
-) -> io::Result<()> {
+async fn tree_init(client0: &mut CollectorClient, client1: &mut CollectorClient) -> io::Result<()> {
     let req = TreeInitRequest {};
     let response0 = client0.tree_init(long_context(), req.clone());
     let response1 = client1.tree_init(long_context(), req);
@@ -149,7 +145,6 @@ async fn add_fuzzy_keys(
         addkey1.push(key1);
     }
 
-
     let req0 = AddKeysRequest { keys: addkey0 };
     let req1 = AddKeysRequest { keys: addkey1 };
 
@@ -169,7 +164,6 @@ async fn add_keys(
     keys1: Vec<Vec<IntervalKey>>,
     _nreqs: usize,
 ) -> io::Result<()> {
-
     let req0 = AddKeysRequest { keys: keys0 };
     let req1 = AddKeysRequest { keys: keys1 };
 
@@ -200,8 +194,14 @@ async fn run_level(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlRequest { gc_sender: true , threshold};
-    let req1 = TreeCrawlRequest { gc_sender: false, threshold};
+    let req0 = TreeCrawlRequest {
+        gc_sender: true,
+        threshold,
+    };
+    let req1 = TreeCrawlRequest {
+        gc_sender: false,
+        threshold,
+    };
 
     let response0 = client0.tree_crawl(long_context(), req0);
     let response1 = client1.tree_crawl(long_context(), req1);
@@ -223,7 +223,9 @@ async fn run_level(
     // println!("Keep: {:?}", &keep);
     let mut ap = 0;
     for i in vals1.clone() {
-        if i {ap+= 1;};
+        if i {
+            ap += 1;
+        };
     }
     println!("Active paths: {:?}", ap);
 
@@ -253,8 +255,14 @@ async fn run_level_last(
         start_time.elapsed().as_secs_f64()
     );
 
-    let req0 = TreeCrawlLastRequest { gc_sender: true, threshold: threshold.clone() };
-    let req1 = TreeCrawlLastRequest { gc_sender: false, threshold: threshold };
+    let req0 = TreeCrawlLastRequest {
+        gc_sender: true,
+        threshold: threshold.clone(),
+    };
+    let req1 = TreeCrawlLastRequest {
+        gc_sender: false,
+        threshold: threshold,
+    };
 
     let response0 = client0.tree_crawl_last(long_context(), req0);
     let response1 = client1.tree_crawl_last(long_context(), req1);
@@ -272,7 +280,7 @@ async fn run_level_last(
 
     println!("Keep: {:?}", vals1);
 
-    let req = TreePruneLastRequest { keep: vals1};
+    let req = TreePruneLastRequest { keep: vals1 };
     let response0 = client0.tree_prune_last(long_context(), req.clone());
     let response1 = client1.tree_prune_last(long_context(), req);
     try_join!(response0, response1).unwrap();
@@ -288,8 +296,8 @@ async fn final_shares(
     let response0 = client0.final_shares(long_context(), req.clone());
     let response1 = client1.final_shares(long_context(), req);
     let (vals0, vals1) = try_join!(response0, response1).unwrap();
-    let results = &collect::KeyCollection::<fastfield::FE,FieldElm>::final_values(&vals0, &vals1);
-    for res in results{
+    let results = &collect::KeyCollection::<fastfield::FE, FieldElm>::final_values(&vals0, &vals1);
+    for res in results {
         println!("Path = {:?}", res.path);
         let _ = save_heavy_hitters(res.path.clone(), "data/ride_heavy_hitters.csv");
     }
@@ -300,21 +308,26 @@ async fn final_shares(
 #[tokio::main]
 async fn main() -> io::Result<()> {
     println!("Using only one thread!");
-    rayon::ThreadPoolBuilder::new().num_threads(1).build_global().unwrap();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build_global()
+        .unwrap();
 
     env_logger::init();
     let (cfg, _, mut nreqs) = poplar_config::get_args("Leader", false, true);
     debug_assert_eq!(cfg.data_len % 8, 0);
 
     // XXX WARNING: THERE IS NO TLS HERE!!!
-    let mut client0 =
-        CollectorClient::new(client::Config::default(),
-                                        tcp::connect(cfg.server0, Bincode::default).await?
-        ).spawn();
-    let mut client1 =
-        CollectorClient::new(client::Config::default(),
-                                      tcp::connect(cfg.server1, Bincode::default).await?
-        ).spawn();
+    let mut client0 = CollectorClient::new(
+        client::Config::default(),
+        tcp::connect(cfg.server0, Bincode::default).await?,
+    )
+    .spawn();
+    let mut client1 = CollectorClient::new(
+        client::Config::default(),
+        tcp::connect(cfg.server1, Bincode::default).await?,
+    )
+    .spawn();
     // let start = Instant::now();
     // println!("Generating keys...");
     // let (bench_keys0, bench_keys1) = generate_keys(&cfg);
@@ -327,13 +340,15 @@ async fn main() -> io::Result<()> {
     //     delta,
     //     delta / (bench_keys0.len() as f64)
     // );
-    let mut client_data = ClientSide{ key_gen_time_avg_ms: 0.0, key_size_bytes: 0 };
+    let mut client_data = ClientSide {
+        key_gen_time_avg_ms: 0.0,
+        key_size_bytes: 0,
+    };
     let aug_len = 8;
     if cfg.distribution.as_str() == "zipf" {
         println!("Zipf distribution sampling...");
         let strings = generate_strings(&cfg, aug_len);
         println!("Generated {:?} samples", strings.len());
-
 
         reset_servers(&mut client0, &mut client1).await?;
 
@@ -353,7 +368,7 @@ async fn main() -> io::Result<()> {
                         client1.clone(),
                         &strings,
                         this_batch,
-                        aug_len
+                        aug_len,
                     ));
                 }
             }
@@ -362,8 +377,7 @@ async fn main() -> io::Result<()> {
                 r.await?;
             }
         }
-    }
-    else if cfg.distribution.as_str() == "rides" {
+    } else if cfg.distribution.as_str() == "rides" {
         println!("RideAustin distribution sampling...");
         let strings = csv_to_bitvecs("data/sample.csv").expect("ride sample failed");
         nreqs = strings.len();
@@ -394,9 +408,9 @@ async fn main() -> io::Result<()> {
                         &cfg,
                         client0.clone(),
                         client1.clone(),
-                        addkey0[nreqs-left_to_go - this_batch..nreqs-left_to_go].to_vec(),
-                        addkey1[nreqs-left_to_go - this_batch..nreqs-left_to_go].to_vec(),
-                        nreqs
+                        addkey0[nreqs - left_to_go - this_batch..nreqs - left_to_go].to_vec(),
+                        addkey1[nreqs - left_to_go - this_batch..nreqs - left_to_go].to_vec(),
+                        nreqs,
                     ));
                 }
             }
@@ -407,7 +421,8 @@ async fn main() -> io::Result<()> {
         }
         let total_client_time = client_time.elapsed().as_secs_f64();
         let avg_client_time = total_client_time / nreqs as f64;
-        let serialized_key = bincode::serialize(&vec![addkey0[0].clone(), addkey1[0].clone()]).unwrap();
+        let serialized_key =
+            bincode::serialize(&vec![addkey0[0].clone(), addkey1[0].clone()]).unwrap();
         let key_size = serialized_key.len();
         client_data.key_gen_time_avg_ms = avg_client_time * 1000f64;
         client_data.key_size_bytes = key_size;
@@ -416,21 +431,18 @@ async fn main() -> io::Result<()> {
     }
     tree_init(&mut client0, &mut client1).await?;
 
-
     let start = Instant::now();
     // let mut active_paths = 0;
-    let mut server_data : Vec<(ServerSide, ServerSide)> = vec![];
-    for level in 0..cfg.data_len-1 {
-        let (_active_paths, server_data0, server_data1) = run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
+    let mut server_data: Vec<(ServerSide, ServerSide)> = vec![];
+    for level in 0..cfg.data_len - 1 {
+        let (_active_paths, server_data0, server_data1) =
+            run_level(&cfg, &mut client0, &mut client1, level, nreqs, start).await?;
         server_data.push((server_data0, server_data1));
-        println!(
-            "Level {:?} {:?}",
-            level,
-            start.elapsed().as_secs_f64()
-        );
+        println!("Level {:?} {:?}", level, start.elapsed().as_secs_f64());
     }
 
-    let (active_paths, server_data0, server_data1) = run_level_last(&cfg, &mut client0, &mut client1, nreqs, start).await?;
+    let (active_paths, server_data0, server_data1) =
+        run_level_last(&cfg, &mut client0, &mut client1, nreqs, start).await?;
     server_data.push((server_data0, server_data1));
     println!(
         "Level {:?} active_paths={:?} {:?}",
@@ -444,16 +456,25 @@ async fn main() -> io::Result<()> {
     let utc_now: DateTime<Utc> = Utc::now();
     let et_now: DateTime<Tz> = utc_now.with_timezone(&New_York);
 
-    let data = Experiment{metadata: Metadata{
-        experiment_id: "RideAustin Busiest Day".to_string(),
-        date: et_now.to_string(),
-    }, parameters: Parameters {
-        num_clients: nreqs,
-        dimensions: cfg.n_dims,
-        string_length: cfg.data_len,
-        threshold: cfg.threshold as usize,
-        ball_radius: cfg.ball_size as u32,
-    }, client_side: client_data, server_side: server_data, experiment_results: ExperimentResults{total_time, num_heavy_hitters}};
+    let data = Experiment {
+        metadata: Metadata {
+            experiment_id: "RideAustin Busiest Day".to_string(),
+            date: et_now.to_string(),
+        },
+        parameters: Parameters {
+            num_clients: nreqs,
+            dimensions: cfg.n_dims,
+            string_length: cfg.data_len,
+            threshold: cfg.threshold as usize,
+            ball_radius: cfg.ball_size as u32,
+        },
+        client_side: client_data,
+        server_side: server_data,
+        experiment_results: ExperimentResults {
+            total_time,
+            num_heavy_hitters,
+        },
+    };
 
     let _ = log_experiment_to_json(&data, "data/ride_austin_experiments.json");
     Ok(())

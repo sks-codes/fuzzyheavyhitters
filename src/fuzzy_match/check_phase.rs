@@ -1,19 +1,15 @@
 use crate::channel::CommTrackingChannel;
+use crate::data_structures::mod2k::Mod2k;
+use crate::fss::{dpf::DpfKey, ldcf::LdcfKey, rdcf::RdcfKey};
 use crate::fuzzy_match::share_phase::SharePhaseError;
 use crate::garbled_circuits::{
-    batch_equality_full::{batch_gb_equality_test, batch_ev_equality_test},
-    less_than_or_equal_threshold::{multiple_gb_less_than_ss, multiple_ev_less_than_ss},
+    batch_equality_full::{batch_ev_equality_test, batch_gb_equality_test},
+    less_than_or_equal_threshold::{multiple_ev_less_than_ss, multiple_gb_less_than_ss},
 };
-use crate::data_structures::mod2k::Mod2k;
-use crate::fss::{
-    ldcf::LdcfKey,
-    rdcf::RdcfKey,
-    dpf::DpfKey,
-};
-use crate::util::{u128_to_bits_msb, bits_to_u8s, u8s_to_bits};
-use scuttlebutt::{AesRng, Block, AbstractChannel};
-use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
+use crate::util::{bits_to_u8s, u128_to_bits_msb, u8s_to_bits};
 use ocelot::ot::{Receiver, Sender};
+use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
+use scuttlebutt::{AbstractChannel, AesRng, Block};
 use std::convert::TryInto;
 
 /// Method for check phase comparison
@@ -34,7 +30,7 @@ pub enum CheckProperty {
 pub enum CheckData {
     LinfGarbledCircuits,
     LinfDpf {
-        fss_key: DpfKey<1>,
+        fss_key: DpfKey,
         random_value: Vec<bool>,
     },
     /// Threshold value for Lp distance comparison with garbled circuits
@@ -54,7 +50,8 @@ pub enum CheckData {
 pub struct CheckConfig {
     pub h2: usize, // Input bit length of Check Phase, which is the output bit length of Share Phase
     pub h3: usize, // Output bit length of Check Phase, which is the input bit length of threshold phase
-    pub d: usize, /// Number of dimensions for evaluation
+    pub d: usize,
+    /// Number of dimensions for evaluation
     pub is_garbler_side: bool,
     pub property: CheckProperty,
     pub method: CheckMethod,
@@ -88,7 +85,7 @@ pub struct CheckPhase {
 impl CheckPhase {
     /// Create a new check phase with the given configuration
     pub fn new(config: CheckConfig) -> Self {
-        Self { config}
+        Self { config }
     }
 
     pub fn run_batch_fuzzy_match_check(
@@ -100,13 +97,16 @@ impl CheckPhase {
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         match &self.config.property {
             CheckProperty::Equality => {
-                let inputs = evals.iter().map(|eval| {
-                    let mut input = Vec::new();
-                    for &val in eval {
-                        input.extend_from_slice(&u128_to_bits_msb(val, self.config.h2));
-                    }
-                    input
-                }).collect::<Vec<Vec<bool>>>();
+                let inputs = evals
+                    .iter()
+                    .map(|eval| {
+                        let mut input = Vec::new();
+                        for &val in eval {
+                            input.extend_from_slice(&u128_to_bits_msb(val, self.config.h2));
+                        }
+                        input
+                    })
+                    .collect::<Vec<Vec<bool>>>();
 
                 match &self.config.method {
                     CheckMethod::GC => {
@@ -127,7 +127,10 @@ impl CheckPhase {
                         let mut random_values = Vec::new();
                         for check_data in check_data_list.iter() {
                             match check_data {
-                                CheckData::LinfDpf { fss_key, random_value } => {
+                                CheckData::LinfDpf {
+                                    fss_key,
+                                    random_value,
+                                } => {
                                     fss_keys.push(fss_key.clone());
                                     random_values.push(random_value.clone());
                                 }
@@ -143,13 +146,16 @@ impl CheckPhase {
                 }
             }
             CheckProperty::MuBounded => {
-                let inputs = evals.iter().map(|eval| {
-                    let mut input = Mod2k::zero(1u128 << self.config.h2);
-                    eval.iter().for_each(|&val| {
-                        input = input + Mod2k::new(val, 1u128 << self.config.h2);
-                    });
-                    input
-                }).collect::<Vec<Mod2k>>();
+                let inputs = evals
+                    .iter()
+                    .map(|eval| {
+                        let mut input = Mod2k::zero(1u128 << self.config.h2);
+                        eval.iter().for_each(|&val| {
+                            input = input + Mod2k::new(val, 1u128 << self.config.h2);
+                        });
+                        input
+                    })
+                    .collect::<Vec<Mod2k>>();
                 match &self.config.method {
                     CheckMethod::GC => {
                         let mut current_mu = Mod2k::zero(1u128 << self.config.h2);
@@ -180,9 +186,13 @@ impl CheckPhase {
                         let mut random_values = Vec::new();
                         for check_data in check_data_list.iter() {
                             match check_data {
-                                CheckData::LpIntervalFSS { fss_key, random_value } => {
+                                CheckData::LpIntervalFSS {
+                                    fss_key,
+                                    random_value,
+                                } => {
                                     fss_keys.push(fss_key.clone());
-                                    random_values.push(Mod2k::new(*random_value, 1u128 << self.config.h2));
+                                    random_values
+                                        .push(Mod2k::new(*random_value, 1u128 << self.config.h2));
                                 }
                                 _ => {
                                     return Err(CheckPhaseError::InvalidConfig(
@@ -191,7 +201,12 @@ impl CheckPhase {
                                 }
                             }
                         }
-                        self.batch_mu_bounded_testing_fss(&inputs, &fss_keys, &random_values, channel)
+                        self.batch_mu_bounded_testing_fss(
+                            &inputs,
+                            &fss_keys,
+                            &random_values,
+                            channel,
+                        )
                     }
                 }
             }
@@ -222,30 +237,41 @@ impl CheckPhase {
     pub fn batch_equality_testing_fss(
         &self,
         inputs: &[Vec<bool>],
-        fss_keys: &[DpfKey<1>],
+        fss_keys: &[DpfKey],
         random_values: &[Vec<bool>],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
         if inputs.len() != fss_keys.len() {
-            return Err(CheckPhaseError::InputLengthMismatch(
-                format!("Number of inputs ({}) must match number of FSS keys ({})", inputs.len(), fss_keys.len()),
-            ));
+            return Err(CheckPhaseError::InputLengthMismatch(format!(
+                "Number of inputs ({}) must match number of FSS keys ({})",
+                inputs.len(),
+                fss_keys.len()
+            )));
         }
         if inputs.len() != random_values.len() {
-            return Err(CheckPhaseError::InputLengthMismatch(
-                format!("Number of inputs ({}) must match number of random values ({})", inputs.len(), random_values.len()),
-            ));
+            return Err(CheckPhaseError::InputLengthMismatch(format!(
+                "Number of inputs ({}) must match number of random values ({})",
+                inputs.len(),
+                random_values.len()
+            )));
         }
 
-        let masked_values = inputs.iter().zip(random_values.iter()).map(|(input, rand)| {
-            input.iter().zip(rand.iter()).map(|(&input_bit, &rand_bit)| {
-                input_bit ^ rand_bit
-            }).collect::<Vec<bool>>()
-        }).collect::<Vec<Vec<bool>>>();
+        let masked_values = inputs
+            .iter()
+            .zip(random_values.iter())
+            .map(|(input, rand)| {
+                input
+                    .iter()
+                    .zip(rand.iter())
+                    .map(|(&input_bit, &rand_bit)| input_bit ^ rand_bit)
+                    .collect::<Vec<bool>>()
+            })
+            .collect::<Vec<Vec<bool>>>();
 
-        let masked_values_u8s = masked_values.iter().map(|masked_eval| {
-            bits_to_u8s(masked_eval)
-        }).collect::<Vec<Vec<u8>>>();
+        let masked_values_u8s = masked_values
+            .iter()
+            .map(|masked_eval| bits_to_u8s(masked_eval))
+            .collect::<Vec<Vec<u8>>>();
 
         let num_values = masked_values_u8s.len();
         let values_bytes_length = masked_values_u8s[0].len();
@@ -253,20 +279,25 @@ impl CheckPhase {
 
         let other_masked_values_u8s: Vec<Vec<u8>> = if self.config.is_garbler_side {
             for u8s in masked_values_u8s.iter() {
-                channel
-                    .write_bytes(u8s)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(u8s).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
 
             let mut out = Vec::with_capacity(num_values);
             for _ in 0..num_values {
                 let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
                 channel
                     .read_bytes(&mut other_masked_eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                    .map_err(|e| {
+                        CheckPhaseError::ChannelError(format!(
+                            "Failed to read other masked evals: {}",
+                            e
+                        ))
+                    })?;
                 out.push(other_masked_eval_bytes);
             }
             out
@@ -276,45 +307,70 @@ impl CheckPhase {
                 let mut other_masked_eval_bytes = vec![0u8; values_bytes_length];
                 channel
                     .read_bytes(&mut other_masked_eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
+                    .map_err(|e| {
+                        CheckPhaseError::ChannelError(format!(
+                            "Failed to read other masked evals: {}",
+                            e
+                        ))
+                    })?;
                 other_masked_values_u8s.push(other_masked_eval_bytes);
             }
 
             for u8s in masked_values_u8s.iter() {
-                channel
-                    .write_bytes(u8s)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(u8s).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
             other_masked_values_u8s
         };
 
-        let other_masked_values = other_masked_values_u8s.iter().map(|u8s| {
-            u8s_to_bits(u8s, values_bits_length)
-        }).collect::<Vec<Vec<bool>>>();
+        let other_masked_values = other_masked_values_u8s
+            .iter()
+            .map(|u8s| u8s_to_bits(u8s, values_bits_length))
+            .collect::<Vec<Vec<bool>>>();
 
-        let combined_masked_values = masked_values.iter().zip(other_masked_values.iter()).map(|(eval, other_eval)| {
-            eval.iter().zip(other_eval.iter()).map(|(&eval_bit, &other_bit)| {
-                eval_bit ^ other_bit
-            }).collect::<Vec<bool>>()
-        }).collect::<Vec<Vec<bool>>>();
+        let combined_masked_values = masked_values
+            .iter()
+            .zip(other_masked_values.iter())
+            .map(|(eval, other_eval)| {
+                eval.iter()
+                    .zip(other_eval.iter())
+                    .map(|(&eval_bit, &other_bit)| eval_bit ^ other_bit)
+                    .collect::<Vec<bool>>()
+            })
+            .collect::<Vec<Vec<bool>>>();
 
-        let result = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_eval, fss_key)| {
-            let fss_result = fss_key.eval_dpf(masked_eval, 1u128 << self.config.h3);
-            if self.config.is_garbler_side {
-                Mod2k::new((1u128 << self.config.h3) - fss_result[0], 1u128 << self.config.h3)
-            } else {
-                Mod2k::new(fss_result[0], 1u128 << self.config.h3)
-            }
-        }).collect::<Vec<Mod2k>>();
+        let result = combined_masked_values
+            .iter()
+            .zip(fss_keys.iter())
+            .map(|(masked_eval, fss_key)| {
+                let fss_result = fss_key
+                    .eval_dpf(masked_eval, 1u128 << self.config.h3)
+                    .map_err(|e| {
+                        CheckPhaseError::SharePhaseError(SharePhaseError::EvaluationError(
+                            e.to_string(),
+                        ))
+                    })?;
+                let value = if self.config.is_garbler_side {
+                    Mod2k::new(
+                        (1u128 << self.config.h3) - fss_result[0],
+                        1u128 << self.config.h3,
+                    )
+                } else {
+                    Mod2k::new(fss_result[0], 1u128 << self.config.h3)
+                };
+                Ok(value)
+            })
+            .collect::<Result<Vec<Mod2k>, CheckPhaseError>>()?;
 
         Ok(result)
     }
 
     pub fn batch_mu_bounded_testing_gc(
-        &self, 
+        &self,
         inputs: &[Mod2k],
         mu: &Mod2k,
         channel: &mut CommTrackingChannel,
@@ -333,7 +389,7 @@ impl CheckPhase {
             rng,
             self.config.is_garbler_side,
         )?;
-        
+
         Ok(ring_shares)
     }
 
@@ -344,28 +400,34 @@ impl CheckPhase {
         random_values: &[Mod2k],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
-        let masked_values = inputs.iter().zip(random_values.iter()).map(|(&input, &random_value)| {
-            input + random_value
-        }).collect::<Vec<Mod2k>>();
+        let masked_values = inputs
+            .iter()
+            .zip(random_values.iter())
+            .map(|(&input, &random_value)| input + random_value)
+            .collect::<Vec<Mod2k>>();
 
         let combined_masked_values = if self.config.is_garbler_side {
             for masked_eval in masked_values.iter() {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel
-                    .write_bytes(&eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(&eval_bytes).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
 
             let mut out = Vec::with_capacity(masked_values.len());
             for &masked_value in masked_values.iter() {
                 let mut received_bytes = [0u8; 16];
-                channel
-                    .read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
-                let other_masked_value = Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                channel.read_bytes(&mut received_bytes).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!(
+                        "Failed to read other masked evals: {}",
+                        e
+                    ))
+                })?;
+                let other_masked_value =
+                    Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
                 out.push(masked_value + other_masked_value);
             }
             out
@@ -373,36 +435,45 @@ impl CheckPhase {
             let mut combined_masked_values = Vec::with_capacity(masked_values.len());
             for &masked_value in masked_values.iter() {
                 let mut received_bytes = [0u8; 16];
-                channel
-                    .read_bytes(&mut received_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to read other masked evals: {}", e)))?;
-                let other_masked_value = Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
+                channel.read_bytes(&mut received_bytes).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!(
+                        "Failed to read other masked evals: {}",
+                        e
+                    ))
+                })?;
+                let other_masked_value =
+                    Mod2k::new(u128::from_le_bytes(received_bytes), 1u128 << self.config.h2);
                 combined_masked_values.push(masked_value + other_masked_value);
             }
 
             for masked_eval in masked_values.iter() {
                 let eval_bytes = masked_eval.val().to_le_bytes();
-                channel
-                    .write_bytes(&eval_bytes)
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e)))?;
+                channel.write_bytes(&eval_bytes).map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
+                })?;
             }
-            channel
-                .flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
             combined_masked_values
         };
 
         let out_modulus = 1u128 << self.config.h3;
-        let results = combined_masked_values.iter().zip(fss_keys.iter()).map(|(masked_value, (fss_key0, fss_key1))| {
-            let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
-            let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus) + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
+        let results = combined_masked_values
+            .iter()
+            .zip(fss_keys.iter())
+            .map(|(masked_value, (fss_key0, fss_key1))| {
+                let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
+                let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus)
+                    + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
 
-            if self.config.is_garbler_side {
-                Mod2k::new(out_modulus - fss_result[0], out_modulus)
-            } else {
-                Mod2k::new(fss_result[0], out_modulus)
-            }
-        }).collect::<Vec<Mod2k>>();
+                if self.config.is_garbler_side {
+                    Mod2k::new(out_modulus - fss_result[0], out_modulus)
+                } else {
+                    Mod2k::new(fss_result[0], out_modulus)
+                }
+            })
+            .collect::<Vec<Mod2k>>();
 
         Ok(results)
     }
@@ -425,43 +496,49 @@ impl CheckPhase {
             // Garbler side: generate random shares and send via batched OT
             let mut ring_shares = Vec::new();
             let mut ot_pairs = Vec::new();
-            
+
             for &boolean_share in boolean_shares {
                 let ring_share = Mod2k::random(modulus);
                 let r0 = Mod2k::zero(modulus) - ring_share;
                 let r1 = Mod2k::one(modulus) - ring_share;
-                
-                let r0_block: Block = r0.clone().try_into()
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e)))?;
-                let r1_block: Block = r1.clone().try_into()
-                    .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to convert r1 to Block: {:?}", e)))?;
-                
+
+                let r0_block: Block = r0.clone().try_into().map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to convert r0 to Block: {:?}", e))
+                })?;
+                let r1_block: Block = r1.clone().try_into().map_err(|e| {
+                    CheckPhaseError::ChannelError(format!("Failed to convert r1 to Block: {:?}", e))
+                })?;
+
                 let shares = if !boolean_share {
                     (r0_block, r1_block)
                 } else {
                     (r1_block, r0_block)
                 };
-                
+
                 ot_pairs.push(shares);
                 ring_shares.push(ring_share);
             }
 
-            let mut ot = OtSender::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e)))?;
+            let mut ot = OtSender::init(channel, rng).map_err(|e| {
+                CheckPhaseError::ChannelError(format!("OT sender init failed: {:?}", e))
+            })?;
             ot.send(channel, &ot_pairs, rng)
                 .map_err(|e| CheckPhaseError::ChannelError(format!("OT send failed: {:?}", e)))?;
-            channel.flush()
-                .map_err(|e| CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e)))?;
+            channel.flush().map_err(|e| {
+                CheckPhaseError::ChannelError(format!("Failed to flush after sending: {}", e))
+            })?;
 
             Ok(ring_shares)
         } else {
             // Receiver side: receive shares via batched OT
-            let mut ot = OtReceiver::init(channel, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receiver init failed: {:?}", e)))?;
-            
-            let out_blocks = ot.receive(channel, boolean_shares, rng)
-                .map_err(|e| CheckPhaseError::ChannelError(format!("OT receive failed: {:?}", e)))?;
-            
+            let mut ot = OtReceiver::init(channel, rng).map_err(|e| {
+                CheckPhaseError::ChannelError(format!("OT receiver init failed: {:?}", e))
+            })?;
+
+            let out_blocks = ot.receive(channel, boolean_shares, rng).map_err(|e| {
+                CheckPhaseError::ChannelError(format!("OT receive failed: {:?}", e))
+            })?;
+
             // Convert blocks to ModInts
             let mut ring_shares = Vec::new();
             for block in out_blocks {
@@ -469,7 +546,7 @@ impl CheckPhase {
                 let ring_share = Mod2k::new(raw_value, modulus);
                 ring_shares.push(ring_share);
             }
-            
+
             Ok(ring_shares)
         }
     }

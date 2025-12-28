@@ -1,5 +1,5 @@
 use crate::data_structures::prg;
-use crate::{msb_u32_to_bits, add_bitstrings, subtract_bitstrings};
+use crate::{add_bitstrings, msb_u32_to_bits, subtract_bitstrings};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -17,13 +17,12 @@ pub struct IbDCFKey {
     pub cor_words: Vec<CorWord>,
 }
 
-
 #[derive(Clone)]
 pub struct EvalState {
     level: usize,
     seed: prg::PrgSeed,
     pub bit: bool,
-    pub y_bit: bool
+    pub y_bit: bool,
 }
 
 trait TupleMapToExt<T, U> {
@@ -32,7 +31,7 @@ trait TupleMapToExt<T, U> {
 }
 
 type TupleMutIter<'a, T> =
-std::iter::Chain<std::iter::Once<(bool, &'a mut T)>, std::iter::Once<(bool, &'a mut T)>>;
+    std::iter::Chain<std::iter::Once<(bool, &'a mut T)>, std::iter::Once<(bool, &'a mut T)>>;
 
 trait TupleExt<T> {
     #[allow(unused)]
@@ -79,8 +78,12 @@ impl<T> TupleExt<T> for (T, T) {
     }
 }
 
-fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (prg::PrgSeed, prg::PrgSeed)) -> CorWord
-{
+fn gen_cor_word(
+    bit: bool,
+    side: bool,
+    bits: &mut (bool, bool),
+    seeds: &mut (prg::PrgSeed, prg::PrgSeed),
+) -> CorWord {
     let data = seeds.map(|s| s.expand());
     let keep = bit;
     let lose = !keep;
@@ -95,7 +98,7 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
         ),
         y_bits: (
             data.0.y_bits.0 ^ data.1.y_bits.0 ^ (bit & !side),
-            data.0.y_bits.1 ^ data.1.y_bits.1 ^ (!bit & side)
+            data.0.y_bits.1 ^ data.1.y_bits.1 ^ (!bit & side),
         ),
         // word: W::zero(),
     };
@@ -116,7 +119,11 @@ fn gen_cor_word(bit: bool, side : bool, bits: &mut (bool, bool), seeds: &mut (pr
     }
     cw
 }
-pub fn eval_str(keys : &Vec<(IbDCFKey, IbDCFKey)>, states: &Vec<(EvalState,EvalState)>, eval_string: &Vec<bool>) -> Vec<(EvalState,EvalState)> {
+pub fn eval_str(
+    keys: &Vec<(IbDCFKey, IbDCFKey)>,
+    states: &Vec<(EvalState, EvalState)>,
+    eval_string: &Vec<bool>,
+) -> Vec<(EvalState, EvalState)> {
     let dim = keys.len();
     let mut new_states = Vec::with_capacity(dim);
 
@@ -129,12 +136,9 @@ pub fn eval_str(keys : &Vec<(IbDCFKey, IbDCFKey)>, states: &Vec<(EvalState,EvalS
     new_states
 }
 
-
 /// All-prefix DPF implementation.
-impl IbDCFKey
-{
-
-    pub fn gen_ib_dcf(alpha_bits: &[bool], side : bool) -> (IbDCFKey, IbDCFKey) {
+impl IbDCFKey {
+    pub fn gen_ib_dcf(alpha_bits: &[bool], side: bool) -> (IbDCFKey, IbDCFKey) {
         let root_seeds = (prg::PrgSeed::random(), prg::PrgSeed::random());
         let root_bits = (false, true);
 
@@ -162,7 +166,10 @@ impl IbDCFKey
         )
     }
 
-    pub fn gen_interval(left_bits: &[bool], right_bits: &[bool]) -> ((IbDCFKey, IbDCFKey), (IbDCFKey, IbDCFKey)){
+    pub fn gen_interval(
+        left_bits: &[bool],
+        right_bits: &[bool],
+    ) -> ((IbDCFKey, IbDCFKey), (IbDCFKey, IbDCFKey)) {
         // let r = &[false; 512];
         // let l_minus_one = left_bits.to_vec();
         // let r_plus_one = right_bits.to_vec();
@@ -171,7 +178,10 @@ impl IbDCFKey
         ((left_key.0, right_key.0), (left_key.1, right_key.1))
     }
 
-    pub fn gen_l_inf_ball(alpha : Vec<Vec<bool>>, size: u32) -> (Vec<(IbDCFKey, IbDCFKey)>, Vec<(IbDCFKey, IbDCFKey)>){
+    pub fn gen_l_inf_ball(
+        alpha: Vec<Vec<bool>>,
+        size: u32,
+    ) -> (Vec<(IbDCFKey, IbDCFKey)>, Vec<(IbDCFKey, IbDCFKey)>) {
         let mut s0_keys = vec![];
         let mut s1_keys = vec![];
         let delta = msb_u32_to_bits(alpha[0].len() as u8, size);
@@ -186,7 +196,6 @@ impl IbDCFKey
         }
         (s0_keys, s1_keys)
     }
-
 
     pub fn eval_bit(&self, state: &EvalState, dir: bool) -> EvalState {
         let tau = state.seed.expand_dir(!dir, dir);
@@ -214,7 +223,7 @@ impl IbDCFKey
             level: 0,
             seed: self.root_seed.clone(),
             bit: self.key_idx,
-            y_bit: self.key_idx
+            y_bit: self.key_idx,
         }
     }
 
@@ -231,7 +240,6 @@ impl IbDCFKey
 
         state.y_bit ^ state.bit
     }
-
 
     pub fn domain_size(&self) -> usize {
         self.cor_words.len()

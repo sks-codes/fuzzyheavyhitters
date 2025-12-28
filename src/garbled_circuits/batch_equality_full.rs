@@ -1,22 +1,22 @@
 use crate::channel::CommTrackingChannel;
 use fancy_garbling::{
+    twopac::semihonest::{Evaluator, Garbler},
     AllWire, BinaryBundle, BinaryGadgets, Fancy, FancyArithmetic, FancyBinary, FancyInput,
     FancyReveal,
-    twopac::semihonest::{Evaluator, Garbler},
 };
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
 
-use std::fmt::Debug;
 use rand::Rng;
+use std::fmt::Debug;
 
 /// A structure that contains both the garbler and the evaluators
 /// wires for batch equality testing. This structure simplifies the API of the garbled circuit.
 struct BatchEQInputs<F> {
     pub garbler_wires: BinaryBundle<F>, // Flattened vector of all garbler wires
     pub evaluator_wires: BinaryBundle<F>, // Flattened vector of all evaluator wires
-    pub item_length: usize, // Length of each item in the batch
-    pub item_count: usize, // Number of items in the batch
+    pub item_length: usize,             // Length of each item in the batch
+    pub item_count: usize,              // Number of items in the batch
 }
 
 /// Batch equality test for garbler side
@@ -25,28 +25,34 @@ struct BatchEQInputs<F> {
 pub fn batch_gb_equality_test(
     rng: &mut AesRng,
     channel: &mut CommTrackingChannel,
-    inputs: &[Vec<bool>]
+    inputs: &[Vec<bool>],
 ) -> Vec<bool>
 // where
 //     C: AbstractChannel + Clone,
 {
-    let mut gb = Garbler::<CommTrackingChannel, AesRng, OtSender, AllWire>::new(channel.clone(), rng.clone()).unwrap();
-    let results: Vec<bool> = (0..inputs.len()).map(|_| rand::rng().random::<bool>()).collect();
+    let mut gb = Garbler::<CommTrackingChannel, AesRng, OtSender, AllWire>::new(
+        channel.clone(),
+        rng.clone(),
+    )
+    .unwrap();
+    let results: Vec<bool> = (0..inputs.len())
+        .map(|_| rand::rng().random::<bool>())
+        .collect();
     let wires = gb_set_batch_equality_inputs(&mut gb, inputs, &results);
     let eq_results = batch_fancy_equality(&mut gb, wires).unwrap();
     gb.outputs(eq_results.wires()).unwrap();
     let mut ack = [0u8; 1];
     channel.flush().unwrap();
     channel.read_bytes(&mut ack).unwrap();
-    
+
     results
 }
 
 /// The garbler's wire exchange method for batch equality
 fn gb_set_batch_equality_inputs<F, E>(
-    gb: &mut F, 
-    inputs: &[Vec<bool>], 
-    results: &[bool], 
+    gb: &mut F,
+    inputs: &[Vec<bool>],
+    results: &[bool],
 ) -> BatchEQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
@@ -58,13 +64,18 @@ where
     });
 
     // Single call to encode all garbler inputs
-    let garbler_wires = 
-        BinaryBundle::new(gb.encode_many(&garbler_circuit_inputs, &vec![2; garbler_circuit_inputs.len()]).unwrap());
+    let garbler_wires = BinaryBundle::new(
+        gb.encode_many(
+            &garbler_circuit_inputs,
+            &vec![2; garbler_circuit_inputs.len()],
+        )
+        .unwrap(),
+    );
 
     let item_length = inputs[0].len();
     let item_count = inputs.len();
     // Single call to receive all evaluator inputs
-    let evaluator_wires =  
+    let evaluator_wires =
         BinaryBundle::new(gb.receive_many(&vec![2; item_count * item_length]).unwrap());
 
     BatchEQInputs {
@@ -79,16 +90,17 @@ where
 pub fn batch_ev_equality_test<C>(
     rng: &mut AesRng,
     channel: &mut C,
-    inputs: &[Vec<bool>]
+    inputs: &[Vec<bool>],
 ) -> Vec<bool>
 where
     C: AbstractChannel + Clone,
 {
-    let mut ev = Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
+    let mut ev =
+        Evaluator::<C, AesRng, OtReceiver, AllWire>::new(channel.clone(), rng.clone()).unwrap();
     let wires = ev_set_batch_fancy_inputs(&mut ev, inputs);
     let eq_results = batch_fancy_equality(&mut ev, wires).unwrap();
     let outputs = ev.outputs(eq_results.wires()).unwrap().unwrap();
-    
+
     // Convert outputs to boolean results
     let results: Vec<bool> = outputs.iter().map(|&output| output == 1).collect();
 
@@ -99,10 +111,7 @@ where
 }
 
 /// The evaluator's wire exchange method for batch equality
-fn ev_set_batch_fancy_inputs<F, E>(
-    ev: &mut F, 
-    inputs: &[Vec<bool>], 
-) -> BatchEQInputs<F::Item>
+fn ev_set_batch_fancy_inputs<F, E>(ev: &mut F, inputs: &[Vec<bool>]) -> BatchEQInputs<F::Item>
 where
     F: FancyInput<Item = AllWire, Error = E>,
     E: Debug,
@@ -110,14 +119,21 @@ where
     let item_length = inputs[0].len();
     let item_count = inputs.len();
     // Single call to receive all garbler inputs
-    let garbler_wires = 
-        BinaryBundle::new(ev.receive_many(&vec![2; item_count * item_length + item_count]).unwrap());
-    let mut evaluator_circuit_inputs = Vec::new();   
+    let garbler_wires = BinaryBundle::new(
+        ev.receive_many(&vec![2; item_count * item_length + item_count])
+            .unwrap(),
+    );
+    let mut evaluator_circuit_inputs = Vec::new();
     inputs.iter().for_each(|input| {
         evaluator_circuit_inputs.extend(input.iter().map(|&x| x as u16));
     });
-    let evaluator_wires = 
-        BinaryBundle::new(ev.encode_many(&evaluator_circuit_inputs, &vec![2; evaluator_circuit_inputs.len()]).unwrap());
+    let evaluator_wires = BinaryBundle::new(
+        ev.encode_many(
+            &evaluator_circuit_inputs,
+            &vec![2; evaluator_circuit_inputs.len()],
+        )
+        .unwrap(),
+    );
 
     BatchEQInputs {
         garbler_wires,
@@ -148,8 +164,14 @@ where
         let evaluator_item_start = item_idx * item_length;
 
         let equality_result = f.bin_eq_bundles(
-            &BinaryBundle::new(garbler_wires.wires()[garbler_item_start..garbler_item_start+item_length].to_vec()),
-            &BinaryBundle::new(evaluator_wires.wires()[evaluator_item_start..evaluator_item_start+item_length].to_vec()),
+            &BinaryBundle::new(
+                garbler_wires.wires()[garbler_item_start..garbler_item_start + item_length]
+                    .to_vec(),
+            ),
+            &BinaryBundle::new(
+                evaluator_wires.wires()[evaluator_item_start..evaluator_item_start + item_length]
+                    .to_vec(),
+            ),
         )?;
 
         // XOR with the result mask for this batch

@@ -10,12 +10,12 @@ struct U256 {
 }
 
 impl U256 {
-    #[inline] 
+    #[inline]
     fn sub(self, other: U256) -> (U256, bool) {
         // Subtracting two U256, returns b2 = true if self < other
         let (lo, b1) = self.lo.overflowing_sub(other.lo);
         let (hi, b2) = self.hi.overflowing_sub(other.hi + (b1 as u128));
-        (U256 {hi, lo}, b2) 
+        (U256 { hi, lo }, b2)
     }
 
     #[inline]
@@ -25,14 +25,14 @@ impl U256 {
         // Should be fine for this particular interest of u128 modulo
         let (lo, c1) = self.lo.overflowing_add(other.lo);
         let hi = self.hi.wrapping_add(other.hi).wrapping_add(c1 as u128);
-        U256 {hi, lo}
+        U256 { hi, lo }
     }
 
     #[allow(dead_code)]
     fn add_u128(self, other: u128) -> U256 {
         let (lo, c0) = self.lo.overflowing_add(other);
         let hi = self.hi.wrapping_add(c0 as u128);
-        U256 {hi, lo}
+        U256 { hi, lo }
     }
 
     #[inline]
@@ -124,7 +124,7 @@ fn mul_u128_wide(a: u128, b: u128) -> U256 {
 
     let p00_lo = p00 & mask64;
     let p00_hi = p00 >> 64;
-    
+
     let mid_sum = p00_hi + mid_lo;
     let limb1 = mid_sum & mask64;
     let carry1 = mid_sum >> 64;
@@ -135,7 +135,7 @@ fn mul_u128_wide(a: u128, b: u128) -> U256 {
     hi = hi.wrapping_add(carry1);
     hi = hi.wrapping_add((mid_carry as u128) << 64);
 
-    U256 {hi, lo}
+    U256 { hi, lo }
 }
 
 #[inline]
@@ -163,7 +163,10 @@ fn mul_u256_high(a: U256, b: U256) -> U256 {
 
     let _ = limb0_hi;
 
-    U256 {hi: limb1_hi, lo: limb1_lo}
+    U256 {
+        hi: limb1_hi,
+        lo: limb1_lo,
+    }
 }
 
 #[inline]
@@ -171,7 +174,7 @@ fn div_u256_by_u128(n: U256, d: u128) -> (U256, u128) {
     // Used only ONCE for precompute Barrett Reduction context
     assert!(d != 0);
     assert!(d < MAX_MOD); // Prevent overflowing
-    let mut q = U256 {hi: 0, lo: 0};
+    let mut q = U256 { hi: 0, lo: 0 };
     let mut r: u128 = 0;
 
     for i in (0..128).rev() {
@@ -208,7 +211,11 @@ fn add_mod(a: u128, b: u128, m: u128) -> u128 {
 fn sub_mod(a: u128, b: u128, m: u128) -> u128 {
     assert!(a < m && b < m && m < MAX_MOD);
     let (d, borrow) = a.overflowing_sub(b);
-    if borrow { d.wrapping_add(m) } else { d }
+    if borrow {
+        d.wrapping_add(m)
+    } else {
+        d
+    }
 }
 
 // Barrett Context: fixed modulo and precomputed \mu
@@ -221,10 +228,13 @@ pub struct BarrettCtx {
 impl BarrettCtx {
     pub fn new(m: u128) -> Self {
         assert!(m > 1 && m & 1 == 1 && m < MAX_MOD);
-        let numer = U256 { hi: u128::MAX, lo: u128::MAX };
+        let numer = U256 {
+            hi: u128::MAX,
+            lo: u128::MAX,
+        };
         let (mu, _rem) = div_u256_by_u128(numer, m);
 
-        Self {m, mu}
+        Self { m, mu }
     }
 
     #[inline]
@@ -244,8 +254,12 @@ impl BarrettCtx {
 
         assert!(!borrow);
         let mut r = r256;
-        if r >= self.m { r -= self.m};
-        if r >= self.m { r -= self.m}; // should be enough
+        if r >= self.m {
+            r -= self.m
+        };
+        if r >= self.m {
+            r -= self.m
+        }; // should be enough
 
         r.to_u128_checked()
     }
@@ -268,19 +282,31 @@ impl<'a> Modp<'a> {
         let m = ctx.m;
         Self { ctx, v: x % m }
     }
-    pub fn zero(ctx: &'a BarrettCtx) -> Self { Self { ctx, v: 0 } }
-    pub fn one(ctx: &'a BarrettCtx) -> Self { Self::new(ctx, 1) }
+    pub fn zero(ctx: &'a BarrettCtx) -> Self {
+        Self { ctx, v: 0 }
+    }
+    pub fn one(ctx: &'a BarrettCtx) -> Self {
+        Self::new(ctx, 1)
+    }
 
-    pub fn value(&self) -> u128 { self.v }
-    pub fn modulus(&self) -> u128 { self.ctx.m }
+    pub fn value(&self) -> u128 {
+        self.v
+    }
+    pub fn modulus(&self) -> u128 {
+        self.ctx.m
+    }
 
     #[inline]
     pub fn pow(mut self, mut e: u128) -> Self {
         let mut acc = Modp::one(self.ctx);
         while e != 0 {
-            if (e & 1) == 1 { acc *= self; }
+            if (e & 1) == 1 {
+                acc *= self;
+            }
             e >>= 1;
-            if e != 0 { self *= self; }
+            if e != 0 {
+                self *= self;
+            }
         }
         acc
     }
@@ -288,7 +314,9 @@ impl<'a> Modp<'a> {
     /// Since m is a prime (your case): inv(a) = a^(m-2).
     #[inline]
     pub fn inv(self) -> Option<Self> {
-        if self.v == 0 { return None; }
+        if self.v == 0 {
+            return None;
+        }
         Some(self.pow(self.ctx.m - 2))
     }
 }
@@ -298,26 +326,49 @@ impl<'a> Add for Modp<'a> {
     #[inline]
     fn add(self, rhs: Self) -> Self {
         debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
-        Self { ctx: self.ctx, v: add_mod(self.v, rhs.v, self.ctx.m) }
+        Self {
+            ctx: self.ctx,
+            v: add_mod(self.v, rhs.v, self.ctx.m),
+        }
     }
 }
-impl<'a> AddAssign for Modp<'a> { #[inline] fn add_assign(&mut self, rhs: Self) { *self = *self + rhs; } }
+impl<'a> AddAssign for Modp<'a> {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
 
 impl<'a> Sub for Modp<'a> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
-        Self { ctx: self.ctx, v: sub_mod(self.v, rhs.v, self.ctx.m) }
+        Self {
+            ctx: self.ctx,
+            v: sub_mod(self.v, rhs.v, self.ctx.m),
+        }
     }
 }
-impl<'a> SubAssign for Modp<'a> { #[inline] fn sub_assign(&mut self, rhs: Self) { *self = *self - rhs; } }
+impl<'a> SubAssign for Modp<'a> {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
 
 impl<'a> Neg for Modp<'a> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        if self.v == 0 { self } else { Self { ctx: self.ctx, v: self.ctx.m - self.v } }
+        if self.v == 0 {
+            self
+        } else {
+            Self {
+                ctx: self.ctx,
+                v: self.ctx.m - self.v,
+            }
+        }
     }
 }
 
@@ -326,7 +377,15 @@ impl<'a> Mul for Modp<'a> {
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         debug_assert!(core::ptr::eq(self.ctx, rhs.ctx));
-        Self { ctx: self.ctx, v: self.ctx.mul_mod(self.v, rhs.v) }
+        Self {
+            ctx: self.ctx,
+            v: self.ctx.mul_mod(self.v, rhs.v),
+        }
     }
 }
-impl<'a> MulAssign for Modp<'a> { #[inline] fn mul_assign(&mut self, rhs: Self) { *self = *self * rhs; } }
+impl<'a> MulAssign for Modp<'a> {
+    #[inline]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}

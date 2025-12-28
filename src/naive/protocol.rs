@@ -1,18 +1,17 @@
 use crate::{
     channel::CommTrackingChannel,
-    fss::dpf::DpfKey,
-    fuzzy_match::share_types::ShareConfig, 
-    util::u128_to_bits_msb,
     data_structures::mod2k::Mod2k,
+    fss::dpf::DpfKey,
+    fuzzy_match::share_types::ShareConfig,
     garbled_circuits::greater_than_or_equal_threshold::{
-        multiple_gb_greater_than_ss,
-        multiple_ev_greater_than_ss,
+        multiple_ev_greater_than_ss, multiple_gb_greater_than_ss,
     },
+    util::u128_to_bits_msb,
 };
+use rayon::prelude::*;
+use rayon::ThreadPool;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
-use rayon::ThreadPool;
-use rayon::prelude::*;
 
 pub struct NaiveProtocol {
     share_config: ShareConfig,
@@ -22,30 +21,37 @@ pub struct NaiveProtocol {
 
 impl NaiveProtocol {
     pub fn new(share_config: ShareConfig, side: bool, threshold: u128) -> Self {
-        NaiveProtocol { share_config, side, threshold }
+        NaiveProtocol {
+            share_config,
+            side,
+            threshold,
+        }
     }
 
-    pub fn receive_client_shares (
-        &self, 
+    pub fn receive_client_shares(
+        &self,
         client_channel: &mut CommTrackingChannel,
-    ) -> Result<Vec<DpfKey<1>>, anyhow::Error> {
+    ) -> Result<Vec<DpfKey>, anyhow::Error> {
         let mut len_bytes = [0u8; 8];
-        client_channel.read_bytes(&mut len_bytes)
+        client_channel
+            .read_bytes(&mut len_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to read length of client shares: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
 
         let mut shares_data = vec![0u8; len];
-        client_channel.read_bytes(&mut shares_data)
+        client_channel
+            .read_bytes(&mut shares_data)
             .map_err(|e| anyhow::anyhow!("Failed to read client shares: {}", e))?;
 
         let bytes = &shares_data[..];
         let mut offset = 0;
         let mut dpf_keys = Vec::new();
-        let count = u64::from_le_bytes(bytes[offset..offset+8].try_into().unwrap()) as usize;
+        let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
         let modulus = 1u128 << self.share_config.h2;
         for _ in 0..count {
-            let (key, read_bytes) = DpfKey::<1>::from_bytes(&bytes[offset..], modulus);
+            let (key, read_bytes) = DpfKey::from_bytes(&bytes[offset..], modulus)
+                .map_err(|e| anyhow::anyhow!("Failed to deserialize DPF key: {}", e))?;
             dpf_keys.push(key);
             offset += read_bytes;
         }
@@ -54,7 +60,7 @@ impl NaiveProtocol {
 
     pub fn run_server_known_dictionary_parallel(
         &self,
-        client_shares: &[DpfKey<1>],
+        client_shares: &[DpfKey],
         query_points: &[Vec<u128>],
         thread_pool: &ThreadPool,
         other_server_channels: &mut [CommTrackingChannel],
@@ -67,7 +73,8 @@ impl NaiveProtocol {
                 .par_iter_mut()
                 .zip(query_points.par_iter())
                 .for_each(|(bits, point)| {
-                    let point_bits = point.iter()
+                    let point_bits = point
+                        .iter()
                         .map(|&x| u128_to_bits_msb(x, self.share_config.h1))
                         .collect::<Vec<Vec<bool>>>();
                     for i in 0..self.share_config.h1 {
@@ -83,17 +90,16 @@ impl NaiveProtocol {
         let mut server_bits = vec![false; query_points_bits.len()];
         let modulus = 1u128 << self.share_config.h2;
 
-
         thread_pool.install(|| {
             server_bits.par_chunks_mut(chunk_size)
                 .zip(query_points_bits.par_chunks(chunk_size))
                 .zip(other_server_channels.par_iter_mut())
-                .for_each(|((server_bits_chunk, query_points_bits_chunk), other_channel)| {
+                .try_for_each(|((server_bits_chunk, query_points_bits_chunk), other_channel)| -> Result<(), anyhow::Error> {
                     let mut count_shares: Vec<Mod2k> = Vec::with_capacity(server_bits_chunk.len());
                     for (_server_bit, query_bits) in server_bits_chunk.iter_mut().zip(query_points_bits_chunk.iter()) {
                         let mut acc = 0u128;
                         for client_share in client_shares.iter() {
-                            let eval = client_share.eval_dpf(query_bits, modulus);
+                            let eval = client_share.eval_dpf(query_bits, modulus)?;
                             acc = (acc + eval[0]) % modulus;
                         }
                         let acc_modint = Mod2k::new(acc, modulus);
@@ -112,8 +118,9 @@ impl NaiveProtocol {
                     for (i, server_bit) in server_bits_chunk.iter_mut().enumerate() {
                         *server_bit = comparison_result[i];
                     }
-                });
-        });
+                    Ok(())
+                })
+        })?;
         Ok(server_bits)
     }
 }

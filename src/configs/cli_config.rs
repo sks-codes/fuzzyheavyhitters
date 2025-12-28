@@ -1,14 +1,14 @@
 //! CLI Configuration for Fuzzy Heavy Hitters Protocol
-//! 
+//!
 //! This module defines configuration structures for the CLI application
 
-use serde::{Deserialize, Serialize};
 use crate::fuzzy_match::{
-    share_types::{ShareConfig, ShareMethod, DictionaryType, DistanceMetric},
     check_phase::{CheckConfig, CheckMethod, CheckProperty},
-    threshold_phase::{ThresholdConfig, ThresholdMethod},
     protocol::ProtocolConfig,
+    share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+    threshold_phase::{ThresholdConfig, ThresholdMethod},
 };
+use serde::{Deserialize, Serialize};
 
 /// CLI configuration that combines all protocol parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub struct ProtocolParameters {
     pub share_method: String,
     /// Dictionary type ("Known" or "Unknown")
     pub dictionary_type: String,
-    pub check_method: String, // ("GC", "FSS")
+    pub check_method: String,   // ("GC", "FSS")
     pub check_property: String, // ("Equality", "MuBounded")
     /// Threshold phase method ("GarbledCircuits" or "IntervalFSS")
     pub threshold_method: String,
@@ -208,7 +208,7 @@ impl CliConfig {
     pub fn from_file(path: &str) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config file {}: {}", path, e))?;
-        
+
         serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse config file {}: {}", path, e))
     }
@@ -217,7 +217,7 @@ impl CliConfig {
     pub fn to_file(&self, path: &str) -> Result<(), String> {
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
-        
+
         std::fs::write(path, content)
             .map_err(|e| format!("Failed to write config file {}: {}", path, e))
     }
@@ -237,11 +237,11 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
             d: 2,
             share_method: "OKVS".to_string(), // Can also be "IntervalFSS"
             dictionary_type: "Known".to_string(), // Can also be "Unknown"
-            check_method: "FSS".to_string(), // Can also be "GC"
+            check_method: "FSS".to_string(),  // Can also be "GC"
             check_property: "Equality".to_string(), // Can also be "MuBounded"
             threshold_method: "GC".to_string(), // Can also be "IntervalFSS"
             distance_metric: "Linf".to_string(), // Can also be "L1", "L2", "L3"
-            num_clients: 100, // Number of clients participating in the protocol
+            num_clients: 100,                 // Number of clients participating in the protocol
             sketch_modulus: 1362378130168812918549609490751, // A prime number of 100 bits
         },
         network: NetworkConfig {
@@ -259,7 +259,7 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
             output_file: Some("results.json".to_string()),
         },
     };
-    
+
     sample_config.to_file(output_path)?;
     println!("Sample configuration written to {}", output_path);
     Ok(())
