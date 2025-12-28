@@ -290,6 +290,32 @@ impl Sketch {
         // Sketch last layer first
         let last_layer_mod2k = incremental_evals_dpf[height - 1];
         let last_layer_shifted = shift_mod2k_vec_payload(&last_layer_mod2k, length, shift, 1u128 << self.config.h2);
+        // Check consistency between payloads of the last layer
+        let last_layer_payloads_rescaled: Vec<Vec<Mod2k>> = (0..length-1).map(|i| {
+            last_layer_shifted[0].iter().zip(payload_helper[i].iter()).map(|(x, y)| x * y).collect();
+        }).collect();
+        let last_layer_payloads_compare: Vec<Vec<Mod2k>> = (0..length-1).map(|i| {
+            (0..domain_size).map(|j| {
+                last_layer_shifted[j][i]
+            }).collect()
+        }).collect();
+        let last_layer_payloads_subtracted: Vec<Vec<Modp>> = (0..length-1).map(|i| {
+            self.subtract_shifted_mod2k_to_modp(last_layer_payloads_rescaled, last_layer_payloads_compare, 0, &self.barrett_ctx)
+        }).collect();
+
+        let domain_size = 1usize << self.config.h1;
+        let mut rs_u128: Vec<u128> = vec![0u128; domain_size];
+        prg.random_u128s(&mut rs_u128);
+        let rs: Vec<Modp> = rs_u128.iter().map(|x| Modp::new(&self.barrett_ctx, *x)).collect();
+        let mut rs_pow = vec![Modp::new(&self.barrett_ctx, 1); domain_size];
+        let last_layer_consistency_sketch = Vec::with_capacity(length-1); // Sketching vector for last layer consistency
+        for i in 0..length-1 {
+            rs_pow = element_wise_product_modp(&rs, &rs_pow);
+            last_layer_consistency_sketch.push(dot_product_modp(&self.barrett_ctx, &rs_pow, &last_layer_payloads_subtracted[i]));
+        }
+
+        // Sketch to check whether the last layer is DCF
+
 
         let mut sketches: Vec<Vec<(Modp, Modp)>> = vec![Vec::new(); component_count];
         if height > 0 {
@@ -581,7 +607,7 @@ fn shift_mod2k_vec(input: &[Mod2k], shift: isize, modulus: u128) -> Vec<Mod2k> {
     out
 }
 
-fn shift_mod2k_vec_payload(input: &[Vec<Mod2k>], length: usize, shift: isize, modulus: u128) -> Vec<Mod2k> {
+fn shift_mod2k_vec_payload(input: &[Vec<Mod2k>], length: usize, shift: isize, modulus: u128) -> Vec<Vec<Mod2k>> {
     // CAUTION: ONLY WORKS FOR DPF!!!
     let len = input.len();
     let mut out: Vec::with_capacity(len);
