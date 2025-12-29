@@ -243,7 +243,7 @@ impl RdcfEval {
         ))
     }
 
-    pub(crate) fn y(&self) -> &RingVec {
+    pub fn y(&self) -> &RingVec {
         &self.y
     }
 }

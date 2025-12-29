@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mosaic::{
     data_structures::ringvec::RingVec,
-    fss::ldcf::{LdcfEval, LdcfKey},
+    fss::rdcf::{RdcfEval, RdcfKey},
     util::{bits_to_u128_msb, u128_to_bits_msb},
 };
 
@@ -10,27 +10,27 @@ const BIT_LENGTH: usize = 5;
 const MODULUS: u128 = 1 << 20;
 
 #[test]
-fn ldcf_expand_prefix() -> Result<()> {
+fn rdcf_expand_prefix() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
     let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
 
-    let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
+    let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(&alpha_bits, &a, &b, MODULUS)?;
 
-    let mut evals0: Vec<LdcfEval> = vec![ldcf_key0.init_eval(MODULUS)?];
-    let mut evals1: Vec<LdcfEval> = vec![ldcf_key1.init_eval(MODULUS)?];
+    let mut evals0: Vec<RdcfEval> = vec![rdcf_key0.init_eval(MODULUS)?];
+    let mut evals1: Vec<RdcfEval> = vec![rdcf_key1.init_eval(MODULUS)?];
 
     for level in 1..BIT_LENGTH {
         let mut next_evals0 = Vec::with_capacity(evals0.len() * 2);
         for eval in evals0.iter() {
-            let (left, right) = ldcf_key0.expand_prefix(eval, MODULUS)?;
+            let (left, right) = rdcf_key0.expand_prefix(eval, MODULUS)?;
             next_evals0.push(left);
             next_evals0.push(right);
         }
         evals0 = next_evals0;
         let mut next_evals1 = Vec::with_capacity(evals1.len() * 2);
         for eval in evals1.iter() {
-            let (left, right) = ldcf_key1.expand_prefix(eval, MODULUS)?;
+            let (left, right) = rdcf_key1.expand_prefix(eval, MODULUS)?;
             next_evals1.push(left);
             next_evals1.push(right);
         }
@@ -40,16 +40,16 @@ fn ldcf_expand_prefix() -> Result<()> {
         let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
         for i in 0..domain_size {
             let res = evals0[i].y().clone() - evals1[i].y().clone();
-            if (i as u128) < prefix_alpha {
+            if (i as u128) <= prefix_alpha {
                 assert_eq!(
                     res, a,
-                    "[LDCF] Fail at level {level}, position {i}, prefix alpha: {:?}, expected {:?}, got {:?}",
+                    "[RDCF] Fail at level {level}, position {i}, prefix alpha: {:?}, expected {:?}, got {:?}",
                     prefix_alpha, a, res
                 );
             } else {
                 assert_eq!(
                     res, b,
-                    "[LDCF] Fail at level {level}, position {i}, prefix alpha: {:?}, expected {:?}, got {:?}",
+                    "[RDCF] Fail at level {level}, position {i}, prefix alpha: {:?}, expected {:?}, got {:?}",
                     prefix_alpha, b, res
                 );
             }
@@ -59,12 +59,12 @@ fn ldcf_expand_prefix() -> Result<()> {
 }
 
 #[test]
-fn ldcf_eval_ldcf() -> Result<()> {
+fn rdcf_eval_rdcf() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
     let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
 
-    let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
+    let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(&alpha_bits, &a, &b, MODULUS)?;
 
     for level in 1..BIT_LENGTH {
         let domain_size = 1usize << level;
@@ -72,19 +72,19 @@ fn ldcf_eval_ldcf() -> Result<()> {
         let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
         for x in 0..domain_size {
             let x_bits = u128_to_bits_msb(x as u128, level);
-            let res0 = ldcf_key0.eval_ldcf(&x_bits, MODULUS)?;
-            let res1 = ldcf_key1.eval_ldcf(&x_bits, MODULUS)?;
+            let res0 = rdcf_key0.eval_rdcf(&x_bits, MODULUS)?;
+            let res1 = rdcf_key1.eval_rdcf(&x_bits, MODULUS)?;
             let res = res0 - res1;
-            if (x as u128) < prefix_alpha {
+            if (x as u128) <= prefix_alpha {
                 assert_eq!(
                     res, a,
-                    "[LDCF] Fail at level {level}, position {x}, prefix alpha: {:?}, expected {:?}, got {:?}",
+                    "[RDCF] Fail at level {level}, position {x}, prefix alpha: {:?}, expected {:?}, got {:?}",
                     prefix_alpha, a, res
                 );
             } else {
                 assert_eq!(
                     res, b,
-                    "[LDCF] Fail at level {level}, position {x}, prefix alpha: {:?}, expected {:?}, got {:?}",
+                    "[RDCF] Fail at level {level}, position {x}, prefix alpha: {:?}, expected {:?}, got {:?}",
                     prefix_alpha, b, res
                 );
             }
@@ -95,22 +95,30 @@ fn ldcf_eval_ldcf() -> Result<()> {
 }
 
 #[test]
-fn ldcf_serialization() -> Result<()> {
+fn rdcf_serialization() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
     let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
 
-    let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
+    let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(&alpha_bits, &a, &b, MODULUS)?;
 
-    let ldcf_key0_bytes = ldcf_key0.to_bytes()?;
-    let (ldcf_key0_cmp, size) = LdcfKey::from_bytes(&ldcf_key0_bytes, MODULUS)?;
-    assert_eq!(ldcf_key0, ldcf_key0_cmp, "Wrong serialization for ldcf_key0!");
-    assert_eq!(size, ldcf_key0_bytes.len(), "Wrong deserialization length for ldcf_key0!");
+    let rdcf_key0_bytes = rdcf_key0.to_bytes()?;
+    let (rdcf_key0_cmp, size) = RdcfKey::from_bytes(&rdcf_key0_bytes, MODULUS)?;
+    assert_eq!(rdcf_key0, rdcf_key0_cmp, "Wrong serialization for rdcf_key0!");
+    assert_eq!(
+        size,
+        rdcf_key0_bytes.len(),
+        "Wrong deserialization length for rdcf_key0!"
+    );
 
-    let ldcf_key1_bytes = ldcf_key1.to_bytes()?;
-    let (ldcf_key1_cmp, _) = LdcfKey::from_bytes(&ldcf_key1_bytes, MODULUS)?;
-    assert_eq!(ldcf_key1, ldcf_key1_cmp, "Wrong serialization for ldcf_key1!");
-    assert_eq!(size, ldcf_key1_bytes.len(), "Wrong deserialization length for ldcf_key1!");
+    let rdcf_key1_bytes = rdcf_key1.to_bytes()?;
+    let (rdcf_key1_cmp, _) = RdcfKey::from_bytes(&rdcf_key1_bytes, MODULUS)?;
+    assert_eq!(rdcf_key1, rdcf_key1_cmp, "Wrong serialization for rdcf_key1!");
+    assert_eq!(
+        size,
+        rdcf_key1_bytes.len(),
+        "Wrong deserialization length for rdcf_key1!"
+    );
 
     Ok(())
 }
