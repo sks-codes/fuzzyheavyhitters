@@ -21,23 +21,29 @@ use std::convert::TryInto;
 /// FSS key batch for check phase - contains keys for one server
 #[derive(Clone, Debug)]
 pub struct FssKeyBatch {
-    pub keys: Vec<(LdcfKey<1>, RdcfKey<1>)>,
+    pub keys: Vec<(LdcfKey, RdcfKey)>,
     pub random_values: Vec<u128>,
 }
 
 impl FssKeyBatch {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
         out.extend_from_slice(&(self.keys.len() as u32).to_le_bytes());
         for (k0, k1) in &self.keys {
-            out.extend_from_slice(&k0.to_bytes());
-            out.extend_from_slice(&k1.to_bytes());
+            let k0_bytes = k0
+                .to_bytes()
+                .map_err(|e| format!("Failed to serialize LDCF key: {}", e))?;
+            out.extend_from_slice(&k0_bytes);
+            let k1_bytes = k1
+                .to_bytes()
+                .map_err(|e| format!("Failed to serialize RDCF key: {}", e))?;
+            out.extend_from_slice(&k1_bytes);
         }
         out.extend_from_slice(&(self.random_values.len() as u32).to_le_bytes());
         for v in &self.random_values {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        out
+        Ok(out)
     }
 
     pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize), String> {
@@ -49,9 +55,11 @@ impl FssKeyBatch {
         offset += 4;
         let mut keys = Vec::with_capacity(key_count);
         for _ in 0..key_count {
-            let (k0, key_used) = LdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
+            let (k0, key_used) = LdcfKey::from_bytes(&bytes[offset..], modulus)
+                .map_err(|e| format!("Failed to deserialize LDCF key: {}", e))?;
             offset += key_used;
-            let (k1, key_used) = RdcfKey::<1>::from_bytes(&bytes[offset..], modulus);
+            let (k1, key_used) = RdcfKey::from_bytes(&bytes[offset..], modulus)
+                .map_err(|e| format!("Failed to deserialize RDCF key: {}", e))?;
             offset += key_used;
             keys.push((k0, k1));
         }
@@ -415,7 +423,7 @@ impl FssDealer {
         channel: &mut CommTrackingChannel,
         batch: &FssKeyBatch,
     ) -> Result<(), String> {
-        let data = batch.to_bytes();
+        let data = batch.to_bytes()?;
         let len_bytes = (data.len() as u64).to_le_bytes();
         // println!("Writing FSS key batch of size {} bytes to channel", data.len());
         channel
@@ -435,7 +443,7 @@ impl FssDealer {
         channel: &mut CommTrackingChannel,
         batch: &FssKeyBatch,
     ) -> Result<(), String> {
-        let data = batch.to_bytes();
+        let data = batch.to_bytes()?;
         let len_bytes = (data.len() as u64).to_le_bytes();
         // println!("Writing Threshold key batch of size {} bytes to channel", data.len());
         channel
@@ -494,8 +502,8 @@ impl FssDealer {
         &self,
     ) -> Result<
         (
-            Vec<(LdcfKey<1>, RdcfKey<1>)>,
-            Vec<(LdcfKey<1>, RdcfKey<1>)>,
+            Vec<(LdcfKey, RdcfKey)>,
+            Vec<(LdcfKey, RdcfKey)>,
             Vec<(u128, u128)>,
         ),
         String,
@@ -513,68 +521,71 @@ impl FssDealer {
             random_pairs.push((r0, r1));
         }
 
-        // Use parallel processing for FSS key generation
-        let key_pairs: Vec<((LdcfKey<1>, RdcfKey<1>), (LdcfKey<1>, RdcfKey<1>))> = random_pairs
-            .par_iter()
-            .map(|&(r0, r1)| {
-                // Check if distance_threshold + r0 + r1 would wrap around
-                let sum = self.distance_threshold + (r0 + r1) % in_modulus;
-                let wraps_around = sum >= in_modulus;
-                let zero_payload =
-                    RingVec::new(vec![0], out_modulus).expect("Failed to create zero payload");
-                let one_payload =
-                    RingVec::new(vec![1], out_modulus).expect("Failed to create one payload");
-                if wraps_around {
-                    // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
-                    // Return 0 in the middle, 1 on left and right
-                    let interval_start = (sum + 1) % in_modulus;
-                    let interval_end = (r0 + r1 - 1) % in_modulus;
+        // Generate FSS keys (sequential for clarity with error handling)
+        let mut key_pairs: Vec<((LdcfKey, RdcfKey), (LdcfKey, RdcfKey))> =
+            Vec::with_capacity(random_pairs.len());
+        for &(r0, r1) in random_pairs.iter() {
+            // Check if distance_threshold + r0 + r1 would wrap around
+            let sum = self.distance_threshold + (r0 + r1) % in_modulus;
+            let wraps_around = sum >= in_modulus;
+            let zero_payload =
+                RingVec::new(vec![0], out_modulus).expect("Failed to create zero payload");
+            let one_payload =
+                RingVec::new(vec![1], out_modulus).expect("Failed to create one payload");
+            if wraps_around {
+                // Wrap-around case: interval [distance_threshold+r0+r1 mod modulus, r0+r1]
+                // Return 0 in the middle, 1 on left and right
+                let interval_start = (sum + 1) % in_modulus;
+                let interval_end = (r0 + r1 - 1) % in_modulus;
 
-                    let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
-                    let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
+                let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
+                let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
 
-                    let (key00, key10) = LdcfKey::<1>::gen_ldcf_key(
-                        &alpha_bits,
-                        &one_payload,
-                        &zero_payload,
-                        out_modulus,
-                    );
+                let (key00, key10) = LdcfKey::gen_ldcf_key(
+                    &alpha_bits,
+                    &one_payload,
+                    &zero_payload,
+                    out_modulus,
+                )
+                .map_err(|e| e.to_string())?;
 
-                    let (key01, key11) = RdcfKey::<1>::gen_rdcf_key(
-                        &beta_bits,
-                        &zero_payload,
-                        &one_payload,
-                        out_modulus,
-                    );
+            let (key01, key11) = RdcfKey::gen_rdcf_key(
+                &beta_bits,
+                &zero_payload,
+                &one_payload,
+                out_modulus,
+            )
+            .map_err(|e| e.to_string())?;
 
-                    ((key00, key01), (key10, key11))
-                } else {
-                    // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
-                    // Return 1 inside interval (distance <= threshold), 0 outside
-                    let interval_start = (r0 + r1) % in_modulus;
-                    let interval_end = sum;
+                key_pairs.push(((key00, key01), (key10, key11)));
+            } else {
+                // No wrap-around case: interval [r0+r1, distance_threshold+r0+r1]
+                // Return 1 inside interval (distance <= threshold), 0 outside
+                let interval_start = (r0 + r1) % in_modulus;
+                let interval_end = sum;
 
-                    let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
-                    let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
+                let alpha_bits = u128_to_bits_msb(interval_start, self.check_input_bit_length);
+                let beta_bits = u128_to_bits_msb(interval_end, self.check_input_bit_length);
 
-                    let (key00, key10) = LdcfKey::<1>::gen_ldcf_key(
-                        &alpha_bits,
-                        &zero_payload,
-                        &one_payload,
-                        out_modulus,
-                    );
+                let (key00, key10) = LdcfKey::gen_ldcf_key(
+                    &alpha_bits,
+                    &zero_payload,
+                    &one_payload,
+                    out_modulus,
+                )
+                .map_err(|e| e.to_string())?;
 
-                    let (key01, key11) = RdcfKey::<1>::gen_rdcf_key(
-                        &beta_bits,
-                        &zero_payload,
-                        &(zero_payload.clone() - one_payload.clone()),
-                        out_modulus,
-                    );
+            let (key01, key11) = RdcfKey::gen_rdcf_key(
+                &beta_bits,
+                &zero_payload,
+                &(zero_payload.clone() - one_payload.clone()),
+                out_modulus,
+            )
+            .map_err(|e| e.to_string())?;
 
-                    ((key00, key01), (key10, key11))
-                }
-            })
-            .collect();
+                key_pairs.push(((key00, key01), (key10, key11)));
+            }
+        }
 
         let (key0s, key1s) = key_pairs.into_iter().unzip();
         Ok((key0s, key1s, random_pairs))
@@ -586,8 +597,8 @@ impl FssDealer {
         &self,
     ) -> Result<
         (
-            Vec<(LdcfKey<1>, RdcfKey<1>)>,
-            Vec<(LdcfKey<1>, RdcfKey<1>)>,
+            Vec<(LdcfKey, RdcfKey)>,
+            Vec<(LdcfKey, RdcfKey)>,
             Vec<(u128, u128)>,
         ),
         String,
@@ -616,14 +627,16 @@ impl FssDealer {
             let beta_bits = u128_to_bits_msb(interval_end, self.check_output_bit_length);
 
             let (key00, key10) =
-                LdcfKey::<1>::gen_ldcf_key(&alpha_bits, &zero_payload, &one_payload, 2);
+                LdcfKey::gen_ldcf_key(&alpha_bits, &zero_payload, &one_payload, 2)
+                    .map_err(|e| e.to_string())?;
 
-            let (key01, key11) = RdcfKey::<1>::gen_rdcf_key(
+            let (key01, key11) = RdcfKey::gen_rdcf_key(
                 &beta_bits,
                 &zero_payload,
                 &(zero_payload.clone() - one_payload.clone()),
                 2,
-            );
+            )
+            .map_err(|e| e.to_string())?;
 
             Ok((vec![(key00, key01)], vec![(key10, key11)], random_pairs))
         } else {
@@ -636,10 +649,12 @@ impl FssDealer {
             let beta_bits = u128_to_bits_msb(interval_end, self.check_output_bit_length);
 
             let (key00, key10) =
-                LdcfKey::<1>::gen_ldcf_key(&alpha_bits, &one_payload, &zero_payload, 2);
+                LdcfKey::gen_ldcf_key(&alpha_bits, &one_payload, &zero_payload, 2)
+                    .map_err(|e| e.to_string())?;
 
             let (key01, key11) =
-                RdcfKey::<1>::gen_rdcf_key(&beta_bits, &zero_payload, &one_payload, 2);
+                RdcfKey::gen_rdcf_key(&beta_bits, &zero_payload, &one_payload, 2)
+                    .map_err(|e| e.to_string())?;
 
             Ok((vec![(key00, key01)], vec![(key10, key11)], random_pairs))
         }

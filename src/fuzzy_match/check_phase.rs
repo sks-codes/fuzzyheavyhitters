@@ -40,7 +40,7 @@ pub enum CheckData {
     },
     /// FSS key, random value, and threshold for Lp distance comparison with IntervalFSS
     LpIntervalFSS {
-        fss_key: (LdcfKey<1>, RdcfKey<1>),
+        fss_key: (LdcfKey, RdcfKey),
         random_value: u128,
     },
 }
@@ -396,7 +396,7 @@ impl CheckPhase {
     pub fn batch_mu_bounded_testing_fss(
         &self,
         inputs: &[Mod2k],
-        fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
+        fss_keys: &[(LdcfKey, RdcfKey)],
         random_values: &[Mod2k],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
@@ -462,18 +462,23 @@ impl CheckPhase {
         let results = combined_masked_values
             .iter()
             .zip(fss_keys.iter())
-            .map(|(masked_value, (fss_key0, fss_key1))| {
+            .map(|(masked_value, (fss_key0, fss_key1))| -> Result<Mod2k, CheckPhaseError> {
                 let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h2);
-                let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus)
-                    + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
+                let fss_ldcf = fss_key0
+                    .eval_ldcf(&masked_value_bits, out_modulus)
+                    .map_err(|e| CheckPhaseError::InvalidConfig(e.to_string()))?;
+                let fss_rdcf = fss_key1
+                    .eval_rdcf(&masked_value_bits, out_modulus)
+                    .map_err(|e| CheckPhaseError::InvalidConfig(e.to_string()))?;
 
-                if self.config.is_garbler_side {
-                    Mod2k::new(out_modulus - fss_result[0], out_modulus)
+                let sum = (fss_ldcf[0] + fss_rdcf[0]) % out_modulus;
+                Ok(if self.config.is_garbler_side {
+                    Mod2k::new(out_modulus - sum, out_modulus)
                 } else {
-                    Mod2k::new(fss_result[0], out_modulus)
-                }
+                    Mod2k::new(sum, out_modulus)
+                })
             })
-            .collect::<Vec<Mod2k>>();
+            .collect::<Result<Vec<Mod2k>, CheckPhaseError>>()?;
 
         Ok(results)
     }

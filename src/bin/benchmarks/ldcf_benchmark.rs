@@ -23,12 +23,17 @@ fn main() {
     let a = RingVec::new(vec![5u128; 2], modulus).expect("Failed to create RingVec");
     let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = LdcfKey::<2>::gen_ldcf_key(&alpha_bits, &a, &b, modulus);
+    let (key0, key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, modulus)
+        .expect("Failed to generate LDCF keys");
 
     // Benchmark Full Domain Evaluation
     let start = Instant::now();
-    let eval0 = key0.full_domain_eval(modulus, domain_size);
-    let eval1 = key1.full_domain_eval(modulus, domain_size);
+    let eval0 = key0
+        .full_domain_eval(modulus, domain_size)
+        .expect("Failed to eval key0");
+    let eval1 = key1
+        .full_domain_eval(modulus, domain_size)
+        .expect("Failed to eval key1");
     let duration = start.elapsed();
     println!("Full domain evaluation took: {:?}", duration);
 

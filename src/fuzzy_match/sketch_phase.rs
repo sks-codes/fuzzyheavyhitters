@@ -89,8 +89,12 @@ impl Sketch {
         let ldcf_key = key.ldcf_key();
         let rdcf_key = key.rdcf_key();
 
-        let ldcf_full_evals = ldcf_key.full_domain_incremental_eval(modulus, domain_size);
-        let rdcf_full_evals = rdcf_key.full_domain_incremental_eval(modulus, domain_size);
+        let ldcf_full_evals = ldcf_key
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+        let rdcf_full_evals = rdcf_key
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
 
         let ldcf_incremental_evals_mod2k: Vec<Vec<Mod2k>> = ldcf_full_evals
             .iter()

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use mosaic::{
     data_structures::ringvec::RingVec,
-    fss::dpf::{DpfEval, DpfKey},
+    fss::dpf::DpfKey,
+    fss::ldcf::{LdcfEval, LdcfKey},
     util::{bits_to_u128_msb, u128_to_bits_msb},
 };
 
@@ -10,15 +11,15 @@ const BIT_LENGTH: usize = 5;
 const MODULUS: u128 = 1 << 20;
 
 #[test]
-fn dpf_expand_prefix() -> Result<()> {
+fn ldcf_expand_prefix() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
     let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
 
-    let (dpf_key0, dpf_key1) = DpfKey::gen_dpf_key(&alpha_bits, &a, &b, MODULUS)?;
+    let (dpf_key0, dpf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
 
-    let mut evals0: Vec<DpfEval> = vec![dpf_key0.init_eval(MODULUS)?];
-    let mut evals1: Vec<DpfEval> = vec![dpf_key1.init_eval(MODULUS)?];
+    let mut evals0: Vec<LdcfEval> = vec![dpf_key0.init_eval(MODULUS)?];
+    let mut evals1: Vec<LdcfEval> = vec![dpf_key1.init_eval(MODULUS)?];
 
     for level in 1..BIT_LENGTH {
         let mut next_evals0 = Vec::with_capacity(evals0.len() * 2);
@@ -39,7 +40,7 @@ fn dpf_expand_prefix() -> Result<()> {
         let prefix_alpha_bits: Vec<bool> = alpha_bits[..level].to_vec();
         let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
         for i in 0..domain_size {
-            let res = evals0[i].result() - evals1[i].result();
+            let res = evals0[i].y().clone() - evals1[i].y().clone();
             if i as u128 == prefix_alpha {
                 assert_eq!(
                     res, a,

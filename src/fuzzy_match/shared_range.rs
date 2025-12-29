@@ -45,14 +45,20 @@ impl ShareData {
                 out.push(1u8); // tag for IntervalFSS
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 for interval in data {
-                    out.extend_from_slice(&interval.to_bytes());
+                    let bytes = interval
+                        .to_bytes()
+                        .expect("Failed to serialize IntervalFSSEval");
+                    out.extend_from_slice(&bytes);
                 }
             }
             ShareData::DistanceFSSL1 { data, eval } => {
                 out.push(2u8); // tag for DistanceFSSL1
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
+                    let bytes = eval_item
+                        .to_bytes()
+                        .expect("Failed to serialize DistanceFSSEval");
+                    out.extend_from_slice(&bytes);
                 }
                 out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
                 for v in eval {
@@ -64,7 +70,10 @@ impl ShareData {
                 out.push(3u8); // tag for DistanceFSSL2
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
+                    let bytes = eval_item
+                        .to_bytes()
+                        .expect("Failed to serialize DistanceFSSEval");
+                    out.extend_from_slice(&bytes);
                 }
                 out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
                 for v in eval {
@@ -76,7 +85,10 @@ impl ShareData {
                 out.push(4u8); // tag for DistanceFSSL3
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 for eval_item in data {
-                    out.extend_from_slice(&eval_item.to_bytes());
+                    let bytes = eval_item
+                        .to_bytes()
+                        .expect("Failed to serialize DistanceFSSEval");
+                    out.extend_from_slice(&bytes);
                 }
                 out.extend_from_slice(&(eval.len() as u32).to_le_bytes());
                 for v in eval {
@@ -127,7 +139,8 @@ impl ShareData {
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
                     let (key, used) =
-                        IntervalFSSEval::<1>::from_bytes(&bytes[offset..], modulus as u128);
+                        IntervalFSSEval::<1>::from_bytes(&bytes[offset..], modulus as u128)
+                            .expect("Failed to deserialize IntervalFSSEval");
                     offset += used;
                     data.push(key);
                 }
@@ -144,7 +157,8 @@ impl ShareData {
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
                     let (key, used) =
-                        DistanceFSSEval::<2>::from_bytes(&bytes[offset..], modulus as u128);
+                        DistanceFSSEval::<2>::from_bytes(&bytes[offset..], modulus as u128)
+                            .expect("Failed to deserialize DistanceFSSEval");
                     offset += used;
                     data.push(key);
                 }
@@ -173,7 +187,8 @@ impl ShareData {
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
                     let (key, used) =
-                        DistanceFSSEval::<3>::from_bytes(&bytes[offset..], modulus as u128);
+                        DistanceFSSEval::<3>::from_bytes(&bytes[offset..], modulus as u128)
+                            .expect("Failed to deserialize DistanceFSSEval");
                     offset += used;
                     data.push(key);
                 }
@@ -205,7 +220,8 @@ impl ShareData {
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
                     let (key, used) =
-                        DistanceFSSEval::<4>::from_bytes(&bytes[offset..], modulus as u128);
+                        DistanceFSSEval::<4>::from_bytes(&bytes[offset..], modulus as u128)
+                            .expect("Failed to deserialize DistanceFSSEval");
                     offset += used;
                     data.push(key);
                 }
@@ -299,7 +315,10 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
+                    let bytes = k
+                        .to_bytes()
+                        .expect("Failed to serialize IntervalFSSKey");
+                    out.extend_from_slice(&bytes);
                 }
             }
             SharedRange::DistanceFSSL1 { keys, role } => {
@@ -307,7 +326,8 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
+                    let bytes = k.to_bytes().expect("Failed to serialize DistanceFSSKey");
+                    out.extend_from_slice(&bytes);
                 }
             }
             SharedRange::DistanceFSSL2 { keys, role } => {
@@ -315,7 +335,8 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
+                    let bytes = k.to_bytes().expect("Failed to serialize DistanceFSSKey");
+                    out.extend_from_slice(&bytes);
                 }
             }
             SharedRange::DistanceFSSL3 { keys, role } => {
@@ -323,7 +344,8 @@ impl SharedRange {
                 out.push(*role as u8);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
-                    out.extend_from_slice(&k.to_bytes());
+                    let bytes = k.to_bytes().expect("Failed to serialize DistanceFSSKey");
+                    out.extend_from_slice(&bytes);
                 }
             }
         }
@@ -403,7 +425,8 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus);
+                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus)
+                        .expect("Failed to deserialize IntervalFSSKey");
                     offset += used_k;
                     keys.push(k);
                 }
@@ -421,7 +444,8 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<2>::from_bytes(&bytes[offset..], modulus);
+                    let (k, used_k) =
+                        DistanceFSSKey::<2>::from_bytes(&bytes[offset..], modulus).unwrap();
                     keys.push(k);
                     offset += used_k;
                 }
@@ -439,7 +463,8 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<3>::from_bytes(&bytes[offset..], modulus);
+                    let (k, used_k) =
+                        DistanceFSSKey::<3>::from_bytes(&bytes[offset..], modulus).unwrap();
                     keys.push(k);
                     offset += used_k;
                 }
@@ -457,7 +482,8 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = DistanceFSSKey::<4>::from_bytes(&bytes[offset..], modulus);
+                    let (k, used_k) =
+                        DistanceFSSKey::<4>::from_bytes(&bytes[offset..], modulus).unwrap();
                     keys.push(k);
                     offset += used_k;
                 }

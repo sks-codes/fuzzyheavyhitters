@@ -301,28 +301,40 @@ impl SharePhase {
             SharedRange::IntervalFSS { keys, role: _ } => Ok(ShareData::IntervalFSS {
                 data: keys
                     .iter()
-                    .map(|key| key.init_eval(modulus))
-                    .collect::<Vec<IntervalFSSEval<1>>>(),
+                    .map(|key| {
+                        key.init_eval(modulus)
+                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
+                    })
+                    .collect::<Result<Vec<IntervalFSSEval<1>>, _>>()?,
             }),
             SharedRange::DistanceFSSL1 { keys, role: _ } => Ok(ShareData::DistanceFSSL1 {
                 data: keys
                     .iter()
-                    .map(|key| key.init_eval(modulus))
-                    .collect::<Vec<DistanceFSSEval<2>>>(),
+                    .map(|key| {
+                        key.init_eval(modulus)
+                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
+                    })
+                    .collect::<Result<Vec<DistanceFSSEval<2>>, _>>()?,
                 eval: evals,
             }),
             SharedRange::DistanceFSSL2 { keys, role: _ } => Ok(ShareData::DistanceFSSL2 {
                 data: keys
                     .iter()
-                    .map(|key| key.init_eval(modulus))
-                    .collect::<Vec<DistanceFSSEval<3>>>(),
+                    .map(|key| {
+                        key.init_eval(modulus)
+                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
+                    })
+                    .collect::<Result<Vec<DistanceFSSEval<3>>, _>>()?,
                 eval: evals,
             }),
             SharedRange::DistanceFSSL3 { keys, role: _ } => Ok(ShareData::DistanceFSSL3 {
                 data: keys
                     .iter()
-                    .map(|key| key.init_eval(modulus))
-                    .collect::<Vec<DistanceFSSEval<4>>>(),
+                    .map(|key| {
+                        key.init_eval(modulus)
+                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
+                    })
+                    .collect::<Result<Vec<DistanceFSSEval<4>>, _>>()?,
                 eval: evals,
             }),
         }

@@ -180,7 +180,8 @@ impl SharePhase {
                 &mid_payload,
                 &right_payload,
                 modulus,
-            );
+            )
+            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
 
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
@@ -204,7 +205,9 @@ impl SharePhase {
         point_bits: &[bool],
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
-        let result = fss_key.eval_interval_fss(point_bits, modulus);
+        let result = fss_key
+            .eval_interval_fss(point_bits, modulus)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
         Ok(result[0])
     }
 
@@ -242,7 +245,8 @@ impl SharePhase {
                 &beta_bits,
                 max_distance,
                 modulus,
-            );
+            )
+            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
 
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
@@ -294,7 +298,8 @@ impl SharePhase {
                 &beta_bits,
                 max_distance,
                 modulus,
-            );
+            )
+            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
 
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
@@ -346,7 +351,8 @@ impl SharePhase {
                 &beta_bits,
                 max_distance,
                 modulus,
-            );
+            )
+            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
 
             keys_0.push(fss_key_0);
             keys_1.push(fss_key_1);
@@ -372,7 +378,9 @@ impl SharePhase {
         role: bool,
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
-        let result = fss_key.eval_distance_fss(point_bits, self.config.h1, modulus);
+        let result = fss_key
+            .eval_distance_fss(point_bits, self.config.h1, modulus)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
         if !role {
             Ok(result)
         } else {
@@ -429,7 +437,9 @@ impl SharePhase {
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
         (data0[dimension], data1[dimension]) =
-            interval_fss_key.expand_prefix(interval_fss_data, modulus);
+            interval_fss_key
+                .expand_prefix(interval_fss_data, modulus)
+                .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
 
         Ok((
             ShareData::IntervalFSS { data: data0 },
@@ -452,8 +462,9 @@ impl SharePhase {
 
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
-        (data0[dimension], data1[dimension]) =
-            key.expand_prefix(prefix, &data[dimension], input_len, modulus);
+        (data0[dimension], data1[dimension]) = key
+            .expand_prefix(prefix, &data[dimension], input_len, modulus)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
 
         let mut eval0 = eval.to_vec();
         eval0[dimension] = if !role {

@@ -24,7 +24,7 @@ pub enum ThresholdData {
     /// FSS key and random value for IntervalFSS privacy
     IntervalFSS {
         /// FSS key for this server
-        fss_key: (LdcfKey<1>, RdcfKey<1>),
+        fss_key: (LdcfKey, RdcfKey),
         /// Random value for this server (r0 for server 0, r1 for server 1)
         random_value: u128,
     },
@@ -115,7 +115,7 @@ impl ThresholdPhase {
         &self,
         match_results: &[Mod2k],
         random_values: &[Mod2k],
-        fss_keys: &[(LdcfKey<1>, RdcfKey<1>)],
+        fss_keys: &[(LdcfKey, RdcfKey)],
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
         let masked_values = match_results
@@ -183,13 +183,17 @@ impl ThresholdPhase {
         let threshold_exceeded = combined_masked_values
             .iter()
             .zip(fss_keys.iter())
-            .map(|(masked_value, (fss_key0, fss_key1))| {
+            .map(|(masked_value, (fss_key0, fss_key1))| -> Result<bool, ThresholdPhaseError> {
                 let masked_value_bits = u128_to_bits_msb(masked_value.val(), self.config.h3);
-                let fss_result = fss_key0.eval_ldcf(&masked_value_bits, out_modulus)
-                    + fss_key1.eval_rdcf(&masked_value_bits, out_modulus);
-                fss_result[0] == 1
+                let fss_result = fss_key0
+                    .eval_ldcf(&masked_value_bits, out_modulus)
+                    .map_err(|e| ThresholdPhaseError::ConversionError(e.to_string()))?;
+                let fss_rdcf = fss_key1
+                    .eval_rdcf(&masked_value_bits, out_modulus)
+                    .map_err(|e| ThresholdPhaseError::ConversionError(e.to_string()))?;
+                Ok((fss_result[0] + fss_rdcf[0]) % out_modulus == 1)
             })
-            .collect::<Vec<bool>>();
+            .collect::<Result<Vec<bool>, ThresholdPhaseError>>()?;
 
         Ok(threshold_exceeded)
     }

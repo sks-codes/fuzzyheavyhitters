@@ -30,13 +30,24 @@ fn main() {
     let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
     let c = RingVec::new(vec![10u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) =
-        IntervalFSSKey::<2>::gen_interval_fss_key(&alpha_bits, &beta_bits, &a, &b, &c, modulus);
+    let (key0, key1) = IntervalFSSKey::<2>::gen_interval_fss_key(
+        &alpha_bits,
+        &beta_bits,
+        &a,
+        &b,
+        &c,
+        modulus,
+    )
+    .expect("Failed to generate IntervalFSS keys");
 
     // Benchmark Full Domain Evaluation
     let start = Instant::now();
-    let eval0 = key0.full_domain_eval(modulus, domain_size);
-    let eval1 = key1.full_domain_eval(modulus, domain_size);
+    let eval0 = key0
+        .full_domain_eval(modulus, domain_size)
+        .expect("Failed to eval key0");
+    let eval1 = key1
+        .full_domain_eval(modulus, domain_size)
+        .expect("Failed to eval key1");
     let duration = start.elapsed();
     println!("Full domain evaluation took: {:?}", duration);
 
