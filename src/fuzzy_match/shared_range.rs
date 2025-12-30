@@ -13,7 +13,7 @@ pub enum ShareData {
         eval: Vec<u128>,
     },
     IntervalFSS {
-        data: Vec<IntervalFSSEval<1>>,
+        data: Vec<IntervalFSSEval>,
     },
     DistanceFSSL1 {
         data: Vec<DistanceFSSEval<2>>,
@@ -139,7 +139,7 @@ impl ShareData {
                 let mut data = Vec::with_capacity(num_of_data);
                 for _ in 0..num_of_data {
                     let (key, used) =
-                        IntervalFSSEval::<1>::from_bytes(&bytes[offset..], modulus as u128)
+                        IntervalFSSEval::from_bytes(&bytes[offset..], modulus as u128)
                             .expect("Failed to deserialize IntervalFSSEval");
                     offset += used;
                     data.push(key);
@@ -259,7 +259,7 @@ pub enum SharedRange {
         p: Option<u32>,
     },
     IntervalFSS {
-        keys: Vec<IntervalFSSKey<1>>, // One key pair per dimension
+        keys: Vec<IntervalFSSKey>, // One key pair per dimension
         role: bool,
     },
     DistanceFSSL1 {
@@ -425,7 +425,7 @@ impl SharedRange {
                 offset += 4;
                 let mut keys = Vec::with_capacity(key_count);
                 for _ in 0..key_count {
-                    let (k, used_k) = IntervalFSSKey::<1>::from_bytes(&bytes[offset..], modulus)
+                    let (k, used_k) = IntervalFSSKey::from_bytes(&bytes[offset..], modulus)
                         .expect("Failed to deserialize IntervalFSSKey");
                     offset += used_k;
                     keys.push(k);

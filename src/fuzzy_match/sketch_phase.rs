@@ -22,7 +22,7 @@ use crate::{
 use anyhow::{anyhow, ensure, Result};
 
 pub struct Sketch {
-    pub(super) config: SketchConfig,
+    config: SketchConfig,
     #[allow(dead_code)]
     barrett_ctx: BarrettCtx,
 }
@@ -76,7 +76,7 @@ impl Sketch {
     #[allow(dead_code)]
     fn sketch_interval_fss_one_dimension(
         &self,
-        key: IntervalFSSKey<1>,
+        key: IntervalFSSKey,
         _role: bool,
         sketch_helper: SketchHelper,
         prg: &mut PRG,

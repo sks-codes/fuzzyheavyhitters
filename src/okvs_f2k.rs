@@ -57,7 +57,7 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
         r2: &[u8; 16],
     ) -> Self {
         assert!(
-            band_width < columns,
+            band_width <= columns,
             "Band width must be less than or equal to the number of columns"
         );
         assert!(
@@ -90,7 +90,7 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
         let mut start = vec![0usize; n];
         let mut band = vec![vec![false; self.band_width]; n];
         start.iter_mut().enumerate().for_each(|(i, start_i)| {
-            *start_i = self.hash_to_index(&key[i], &self.r1, self.columns - self.band_width);
+            *start_i = self.hash_to_index(&key[i], &self.r1, self.columns - self.band_width + 1);
         });
 
         band.iter_mut().enumerate().for_each(|(i, band_i)| {
@@ -126,11 +126,11 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
             .for_each(|(i, start_pos_i)| {
                 *start_pos_i = (
                     i,
-                    self.hash_to_index(&keys[i], &self.r1, self.columns - self.band_width),
+                    self.hash_to_index(&keys[i], &self.r1, self.columns - self.band_width + 1),
                 );
             });
 
-        radix_sort(&mut start_pos, self.columns - self.band_width - 1);
+        radix_sort(&mut start_pos, self.columns - self.band_width);
 
         matrix.iter_mut().enumerate().for_each(|(i, matrix_i)| {
             *matrix_i = self.hash_to_band(&keys[start_pos[i].0], &self.r2);
@@ -236,6 +236,7 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
 
         hasher.update(r1);
         let hash = hasher.finalize();
+        println!("Column: {}", column);
         let index =
             u128::from_le_bytes(hash.as_bytes()[0..16].try_into().unwrap()) % (column as u128);
         index as usize

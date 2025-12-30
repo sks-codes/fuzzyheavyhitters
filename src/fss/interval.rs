@@ -8,12 +8,12 @@ use crate::{
 use anyhow::Result;
 
 #[derive(Clone, Debug)]
-pub struct IntervalFSSEval<const N: usize> {
+pub struct IntervalFSSEval {
     ldcf_eval: LdcfEval,
     rdcf_eval: RdcfEval,
 }
 
-impl<const N: usize> IntervalFSSEval<N> {
+impl IntervalFSSEval {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         bytes.extend(self.ldcf_eval.to_bytes());
@@ -51,12 +51,12 @@ impl<const N: usize> IntervalFSSEval<N> {
 }
 
 #[derive(Clone, Debug)]
-pub struct IntervalFSSKey<const N: usize> {
+pub struct IntervalFSSKey {
     ldcf_key: LdcfKey,
     rdcf_key: RdcfKey,
 }
 
-impl<const N: usize> IntervalFSSKey<N> {
+impl IntervalFSSKey {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         bytes.extend(self.ldcf_key.to_bytes()?);
@@ -88,7 +88,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         b: &RingVec,
         c: &RingVec,
         modulus: u128,
-    ) -> Result<(IntervalFSSKey<N>, IntervalFSSKey<N>)> {
+    ) -> Result<(IntervalFSSKey, IntervalFSSKey)> {
         let right_left_payload = c.clone() - b.clone();
         let left_left_payload = a.clone() + right_left_payload.clone();
         let (ldcf_key0, ldcf_key1) =
@@ -114,10 +114,10 @@ impl<const N: usize> IntervalFSSKey<N> {
 
     pub fn eval_bit(
         &self,
-        state: &IntervalFSSEval<N>,
+        state: &IntervalFSSEval,
         modulus: u128,
         dir: bool,
-    ) -> Result<IntervalFSSEval<N>> {
+    ) -> Result<IntervalFSSEval> {
         let ldcf_eval = self.ldcf_key.eval_bit(&state.ldcf_eval(), modulus, dir)?;
         let rdcf_eval = self.rdcf_key.eval_bit(&state.rdcf_eval(), modulus, dir)?;
         Ok(IntervalFSSEval {
@@ -128,9 +128,9 @@ impl<const N: usize> IntervalFSSKey<N> {
 
     pub fn expand_prefix(
         &self,
-        state: &IntervalFSSEval<N>,
+        state: &IntervalFSSEval,
         modulus: u128,
-    ) -> Result<(IntervalFSSEval<N>, IntervalFSSEval<N>)> {
+    ) -> Result<(IntervalFSSEval, IntervalFSSEval)> {
         let (ldcf_eval0, ldcf_eval1) = self.ldcf_key.expand_prefix(&state.ldcf_eval(), modulus)?;
         let (rdcf_eval0, rdcf_eval1) = self.rdcf_key.expand_prefix(&state.rdcf_eval(), modulus)?;
 
@@ -146,7 +146,7 @@ impl<const N: usize> IntervalFSSKey<N> {
         ))
     }
 
-    pub fn init_eval(&self, modulus: u128) -> Result<IntervalFSSEval<N>> {
+    pub fn init_eval(&self, modulus: u128) -> Result<IntervalFSSEval> {
         let ldcf_eval = self.ldcf_key.init_eval(modulus)?;
         let rdcf_eval = self.rdcf_key.init_eval(modulus)?;
         Ok(IntervalFSSEval {

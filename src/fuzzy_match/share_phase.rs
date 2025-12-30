@@ -34,6 +34,8 @@ impl SharePhase {
 
     /// Share a range [x-delta, x+delta] using the configured method
     /// Input x is a d-dimensional vector, output will be 2 SharedRange (one for each server)
+    /// For Linf: share0 = share1 if inside interval, share0 != share1 otherwise
+    /// For Lp: SUM share0+share1 mod = distance
     pub fn share_range(
         &self,
         x: &[u128],
@@ -57,26 +59,12 @@ impl SharePhase {
             }
         }
 
-        let left_bound = x
-            .iter()
-            .map(|&xi| {
-                if xi < delta {
-                    0 // Clamp to 0 if below delta
-                } else {
-                    xi - delta
-                }
-            })
+        let left_bound = x.iter()
+            .map(|&xi| xi.saturating_sub(delta))
             .collect::<Vec<u128>>();
 
-        let right_bound = x
-            .iter()
-            .map(|&xi| {
-                if xi + delta > max_input {
-                    max_input
-                } else {
-                    xi + delta
-                }
-            })
+        let right_bound = x.iter()
+            .map(|&xi| xi.saturating_add(delta).min(max_input))
             .collect::<Vec<u128>>();
 
         match &self.config.method {
@@ -305,7 +293,7 @@ impl SharePhase {
                         key.init_eval(modulus)
                             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
                     })
-                    .collect::<Result<Vec<IntervalFSSEval<1>>, _>>()?,
+                    .collect::<Result<Vec<IntervalFSSEval>, _>>()?,
             }),
             SharedRange::DistanceFSSL1 { keys, role: _ } => Ok(ShareData::DistanceFSSL1 {
                 data: keys

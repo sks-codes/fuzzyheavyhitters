@@ -173,7 +173,7 @@ impl SharePhase {
             let alpha_bits = u128_to_bits_msb(alpha, self.config.h1);
             let beta_bits = u128_to_bits_msb(beta, self.config.h1);
 
-            let (fss_key_0, fss_key_1) = IntervalFSSKey::<1>::gen_interval_fss_key(
+            let (fss_key_0, fss_key_1) = IntervalFSSKey::gen_interval_fss_key(
                 &alpha_bits,
                 &beta_bits,
                 &left_payload,
@@ -201,7 +201,7 @@ impl SharePhase {
 
     pub(super) fn evaluate_interval_fss_at_single_dimension(
         &self,
-        fss_key: &IntervalFSSKey<1>,
+        fss_key: &IntervalFSSKey,
         point_bits: &[bool],
     ) -> Result<u128, SharePhaseError> {
         let modulus = 1u128 << self.config.h2;
@@ -426,8 +426,8 @@ impl SharePhase {
 
     pub(super) fn expand_prefix_interval_fss(
         &self,
-        keys: &Vec<IntervalFSSKey<1>>,
-        data: &[IntervalFSSEval<1>],
+        keys: &Vec<IntervalFSSKey>,
+        data: &[IntervalFSSEval],
         dimension: usize,
     ) -> Result<(ShareData, ShareData), SharePhaseError> {
         let modulus = 1u128 << self.config.h2;

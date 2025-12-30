@@ -30,7 +30,7 @@ fn main() {
     let b = RingVec::new(vec![3u128; 2], modulus).expect("Failed to create RingVec");
     let c = RingVec::new(vec![10u128; 2], modulus).expect("Failed to create RingVec");
 
-    let (key0, key1) = IntervalFSSKey::<2>::gen_interval_fss_key(
+    let (key0, key1) = IntervalFSSKey::gen_interval_fss_key(
         &alpha_bits,
         &beta_bits,
         &a,
