@@ -1,5 +1,4 @@
 use crate::data_structures::modp::Modp;
-use crate::fuzzy_match::sketch_helper::SketchHelper;
 use crate::{
     configs::cli_config::ProtocolParameters,
     fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareMethod},
@@ -58,8 +57,8 @@ pub enum SketchValues<'a> {
         consistency: Vec<(Modp<'a>, Modp<'a>)>,
     },
     Linf {
-        ldcf: Box<SketchHelper>, // SketchHelper::Dcf for LDCF
-        rdcf: Box<SketchHelper>, // SketchHelper::Dcf for RDCF
+        ldcf: Box<SketchValues<'a>>, // SketchValues::Dcf for LDCF
+        rdcf: Box<SketchValues<'a>>, // SketchValues::Dcf for RDCF
         consistency: Modp<'a>,
     },
     DcfPayload {
@@ -70,10 +69,10 @@ pub enum SketchValues<'a> {
     },
     Lp {
         p: usize,
-        ldcf0: Box<SketchHelper>, // SketchHelper::DcfPayload for LDCF
-        ldcf1: Box<SketchHelper>, // SketchHelper::DcfPayload for LDCF
-        rdcf0: Box<SketchHelper>, // SketchHelper::DcfPayload for RDCF
-        rdcf1: Box<SketchHelper>, // SketchHelper::DcfPayload for RDCF
+        ldcf0: Box<SketchValues<'a>>, // SketchValues::DcfPayload for LDCF
+        ldcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for LDCF
+        rdcf0: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
+        rdcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
         consistency: Modp<'a>,
     },
 }

@@ -37,23 +37,16 @@ impl Sketch {
         }
     }
 
-    #[allow(dead_code)]
-    fn sketch_interval_fss(
-        &self,
-        _shared_ranges: &[SharedRange],
-        _sketch_data: &[SketchData],
-        _seed: [u8; AES_KEY_SIZE],
-        _other_server_channels: &mut [CommTrackingChannel],
-    ) -> Result<bool> {
-        Ok(true)
-    }
-
-    #[allow(dead_code)]
-    fn sketch_distance_fss<const N: usize>(
-        &self,
-        _shared_ranges: &[SharedRange],
-    ) -> Result<bool, SharePhaseError> {
-        unimplemented!()
+    pub fn sketch<'a>(&'a self, shared_range: &SharedRange, sketch_helper: &SketchHelper, prg: &mut PRG) -> Result<Vec<SketchValues<'a>>> {
+        match &self.config.method {
+            ShareMethod::FSS => {
+                match &self.config.metric {
+                    DistanceMetric::LInfinity => self.sketch_linf(shared_range, sketch_helper, prg),
+                    DistanceMetric::Lp { p } => self.sketch_lp(*p as usize, shared_range, sketch_helper, prg),
+                }
+            },
+            _ => Err(anyhow!("Sketch not supported for this method. Only support ShareMethod::FSS")),
+        }
     }
 
     pub fn get_sketch_helper(&self) -> Result<SketchHelper> {
@@ -68,19 +61,49 @@ impl Sketch {
             _ => Err(anyhow!("Unsupported sketch helper configuration")),
         }
     }
+}
 
-    pub fn sketch(&self) -> Result<Vec<Vec<Modp<'_>>>> {
+// Helpers for the sketching phase
+impl Sketch {
+    #[allow(dead_code)]
+    fn sketch_linf<'a>(
+        &'a self,
+        shared_range: &SharedRange,
+        sketch_helper: &SketchHelper,
+        prg: &mut PRG,
+    ) -> Result<Vec<SketchValues<'a>>> {
+        match shared_range {
+            SharedRange::IntervalFSS { keys, role: _ } => {
+                let mut sketch_values = Vec::new();
+                for key in keys {
+                    let sketch_value = self.sketch_linf_one_dimension(key, sketch_helper, prg)
+                        .map_err(|e| anyhow!("Error when sketch linf one dimension: {e}"))?;
+                    sketch_values.push(sketch_value);
+                }
+                Ok(sketch_values)
+            },
+            _ => Err(anyhow!("Wrong shared_range type, needed SharedRange::IntervalFSS")),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn sketch_lp<'a>(
+        &'a self,
+        p: usize,
+        shared_range: &SharedRange,
+        sketch_helper: &SketchHelper,
+        prg: &mut PRG,
+    ) -> Result<Vec<SketchValues<'a>>> {
         unimplemented!()
     }
 
     #[allow(dead_code)]
-    fn sketch_interval_fss_one_dimension(
-        &self,
-        key: IntervalFSSKey,
-        _role: bool,
-        sketch_helper: SketchHelper,
+    fn sketch_linf_one_dimension<'a>(
+        &'a self,
+        key: &IntervalFSSKey,
+        sketch_helper: &SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<Vec<Modp<'_>>>> {
+    ) -> Result<SketchValues<'a>> {
         // We do not parallelize at this level. We only parallelize through multiple key pairs
         let domain_size = 1usize << self.config.h1;
         let modulus = 1u128 << self.config.h2;
@@ -105,73 +128,50 @@ impl Sketch {
             .map(|evals| evals.iter().map(|x| Mod2k::new(x[0], modulus)).collect())
             .collect();
 
-        // Checking whether each level is ldcf
         let (sketch_helper_ldcf, sketch_helper_rdcf) = match sketch_helper {
             SketchHelper::IntervalFSS {
                 sketch_helper_ldcf,
                 sketch_helper_rdcf,
-            } => (sketch_helper_ldcf, sketch_helper_rdcf),
+            } => (&**sketch_helper_ldcf, &**sketch_helper_rdcf),
             _ => {
                 return Err(anyhow!("Sketch helper for interval fss type mismatch!"));
             }
         };
-        let z_ldcf = self.sketch_incremental_dcf(
+
+        // Sketch LDCF
+        let sketch_value_ldcf = self.sketch_incremental_dcf(
             &ldcf_incremental_evals_mod2k,
             self.config.h1,
             true,
-            *sketch_helper_ldcf,
+            sketch_helper_ldcf,
             prg,
         )?;
-        let z_rdcf = self.sketch_incremental_dcf(
+
+        // Sketch RDCF
+        let sketch_value_rdcf = self.sketch_incremental_dcf(
             &rdcf_incremental_evals_mod2k,
             self.config.h1,
             false,
-            *sketch_helper_rdcf,
+            sketch_helper_rdcf,
             prg,
         )?;
 
         // Checking whether last level of ldcf is shifted by 2*delta from last level of rdcf
-        let z_shift_inc = self.sketch_shift_consistency(
-            &ldcf_incremental_evals_mod2k[self.config.h1 - 1],
-            &rdcf_incremental_evals_mod2k[self.config.h1 - 1],
-            2 * delta as usize,
-            domain_size,
-            prg,
-        )?;
+        let ldcf_last_layer = &ldcf_incremental_evals_mod2k[self.config.h1 - 1]; // Critical point x - delta - 1
+        let rdcf_last_layer = &rdcf_incremental_evals_mod2k[self.config.h1 - 1]; // Critical point x + delta
+        let subtracted = self.subtract_shifted_mod2k_to_modp(
+            rdcf_last_layer, 
+            ldcf_last_layer, 
+            (2 * delta + 1) as usize, 
+            &self.barrett_ctx);
+        let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+        let z_consistency = dot_product_modp(&self.barrett_ctx, &subtracted, &rs);
 
-        let ctx = &self.barrett_ctx;
-        let flatten_pairs = |vals: &[(Modp, Modp)]| -> Vec<Modp> {
-            vals.iter()
-                .flat_map(|(a, b)| [Modp::new(ctx, a.value()), Modp::new(ctx, b.value())])
-                .collect()
-        };
-
-        let ld_pairs = match z_ldcf {
-            SketchValues::Dcf {
-                last_layer,
-                mut consistency,
-            } => {
-                let mut all = Vec::with_capacity(consistency.len() + 1);
-                all.push(last_layer);
-                all.append(&mut consistency);
-                flatten_pairs(&all)
-            }
-            _ => return Err(anyhow!("Unexpected sketch helper result for LDCF")),
-        };
-        let rd_pairs = match z_rdcf {
-            SketchValues::Dcf {
-                last_layer,
-                mut consistency,
-            } => {
-                let mut all = Vec::with_capacity(consistency.len() + 1);
-                all.push(last_layer);
-                all.append(&mut consistency);
-                flatten_pairs(&all)
-            }
-            _ => return Err(anyhow!("Unexpected sketch helper result for RDCF")),
-        };
-
-        Ok(vec![ld_pairs, rd_pairs, vec![z_shift_inc]])
+        Ok(SketchValues::Linf {
+            ldcf: Box::new(sketch_value_ldcf),
+            rdcf: Box::new(sketch_value_rdcf),
+            consistency: z_consistency,
+        })
     }
 
     #[allow(dead_code)]
@@ -179,7 +179,7 @@ impl Sketch {
         &self,
         key: DistanceFSSKey<2>,
         role: bool,
-        sketch_helper: SketchHelper,
+        sketch_helper: &SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<Modp<'_>>> {
         let _ = (key, role, sketch_helper, prg);
@@ -262,7 +262,7 @@ impl Sketch {
         incremental_evals: &[Vec<Mod2k>],
         height: usize,
         ldcf_or_rdcf: bool,
-        sketch_helper: SketchHelper,
+        sketch_helper: &SketchHelper,
         prg: &mut PRG,
     ) -> Result<SketchValues<'a>> {
         ensure!(
