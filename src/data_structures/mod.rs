@@ -11,5 +11,4 @@ pub mod modp;
 pub mod pair;
 pub mod prg;
 pub mod ringvec;
-pub mod ringvec_new;
 pub mod u256;

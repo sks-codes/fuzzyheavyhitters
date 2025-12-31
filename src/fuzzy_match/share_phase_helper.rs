@@ -238,12 +238,13 @@ impl SharePhase {
             let center_bits = u128_to_bits_msb(center, self.config.h1);
 
             // Create Distance FSS keys for both servers
-            let (fss_key_0, fss_key_1) = DistanceFSSKey::<2>::gen_distance_fss_key(
+            let (fss_key_0, fss_key_1) = DistanceFSSKey::gen_distance_fss_key(
                 center,
                 &center_bits,
                 &alpha_bits,
                 &beta_bits,
                 max_distance,
+                1,
                 modulus,
             )
             .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
@@ -253,11 +254,11 @@ impl SharePhase {
         }
 
         Ok((
-            SharedRange::DistanceFSSL1 {
+            SharedRange::DistanceFSS {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL1 {
+            SharedRange::DistanceFSS {
                 keys: keys_1,
                 role: true,
             },
@@ -291,12 +292,13 @@ impl SharePhase {
             let center_bits = u128_to_bits_msb(center, self.config.h1);
 
             // Create Distance FSS keys for both servers
-            let (fss_key_0, fss_key_1) = DistanceFSSKey::<3>::gen_distance_fss_key(
+            let (fss_key_0, fss_key_1) = DistanceFSSKey::gen_distance_fss_key(
                 center,
                 &center_bits,
                 &alpha_bits,
                 &beta_bits,
                 max_distance,
+                2,
                 modulus,
             )
             .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
@@ -306,11 +308,11 @@ impl SharePhase {
         }
 
         Ok((
-            SharedRange::DistanceFSSL2 {
+            SharedRange::DistanceFSS {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL2 {
+            SharedRange::DistanceFSS {
                 keys: keys_1,
                 role: true,
             },
@@ -344,12 +346,13 @@ impl SharePhase {
             let center_bits = u128_to_bits_msb(center, self.config.h1);
 
             // Create Distance FSS keys for both servers
-            let (fss_key_0, fss_key_1) = DistanceFSSKey::<4>::gen_distance_fss_key(
+            let (fss_key_0, fss_key_1) = DistanceFSSKey::gen_distance_fss_key(
                 center,
                 &center_bits,
                 &alpha_bits,
                 &beta_bits,
                 max_distance,
+                3,
                 modulus,
             )
             .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
@@ -359,11 +362,11 @@ impl SharePhase {
         }
 
         Ok((
-            SharedRange::DistanceFSSL3 {
+            SharedRange::DistanceFSS {
                 keys: keys_0,
                 role: false,
             },
-            SharedRange::DistanceFSSL3 {
+            SharedRange::DistanceFSS {
                 keys: keys_1,
                 role: true,
             },
@@ -371,9 +374,9 @@ impl SharePhase {
     }
 
     /// Generic method for evaluating Distance FSS
-    pub(super) fn evaluate_distance_fss<const N: usize>(
+    pub(super) fn evaluate_distance_fss(
         &self,
-        fss_key: &DistanceFSSKey<N>,
+        fss_key: &DistanceFSSKey,
         point_bits: &[bool],
         role: bool,
     ) -> Result<u128, SharePhaseError> {
@@ -447,11 +450,11 @@ impl SharePhase {
         ))
     }
 
-    pub(super) fn expand_prefix_distance_fss<const N: usize>(
+    pub(super) fn expand_prefix_distance_fss(
         &self,
-        keys: &Vec<DistanceFSSKey<N>>,
+        keys: &Vec<DistanceFSSKey>,
         prefix: &[bool],
-        data: &[DistanceFSSEval<N>],
+        data: &[DistanceFSSEval],
         eval: &[u128],
         dimension: usize,
         role: bool,
@@ -463,57 +466,47 @@ impl SharePhase {
         let mut data0 = data.to_vec();
         let mut data1 = data.to_vec();
         (data0[dimension], data1[dimension]) = key
-            .expand_prefix(prefix, &data[dimension], input_len, modulus)
+            .expand_prefix(&data[dimension], modulus)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+
+        let mut left_prefix = prefix.to_vec();
+        left_prefix.push(false);
+        let mut right_prefix = prefix.to_vec();
+        right_prefix.push(true);
 
         let mut eval0 = eval.to_vec();
         eval0[dimension] = if !role {
-            data0[dimension].result
+            key.eval_distance_fss(&left_prefix, input_len, modulus)
+                .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?
         } else {
-            (modulus - data0[dimension].result) % modulus
+            (modulus
+                - key
+                    .eval_distance_fss(&left_prefix, input_len, modulus)
+                    .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?)
+                % modulus
         };
 
         let mut eval1 = eval.to_vec();
         eval1[dimension] = if !role {
-            data1[dimension].result
+            key.eval_distance_fss(&right_prefix, input_len, modulus)
+                .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?
         } else {
-            (modulus - data1[dimension].result) % modulus
+            (modulus
+                - key
+                    .eval_distance_fss(&right_prefix, input_len, modulus)
+                    .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?)
+                % modulus
         };
 
-        match N {
-            2 => Ok((
-                ShareData::DistanceFSSL1 {
-                    data: unsafe { std::mem::transmute(data0) },
-                    eval: eval0,
-                },
-                ShareData::DistanceFSSL1 {
-                    data: unsafe { std::mem::transmute(data1) },
-                    eval: eval1,
-                },
-            )),
-            3 => Ok((
-                ShareData::DistanceFSSL2 {
-                    data: unsafe { std::mem::transmute(data0) },
-                    eval: eval0,
-                },
-                ShareData::DistanceFSSL2 {
-                    data: unsafe { std::mem::transmute(data1) },
-                    eval: eval1,
-                },
-            )),
-            4 => Ok((
-                ShareData::DistanceFSSL3 {
-                    data: unsafe { std::mem::transmute(data0) },
-                    eval: eval0,
-                },
-                ShareData::DistanceFSSL3 {
-                    data: unsafe { std::mem::transmute(data1) },
-                    eval: eval1,
-                },
-            )),
-            _ => Err(SharePhaseError::EvaluationError(
-                "Invalid share data type for distance FSS expansion".to_string(),
-            )),
-        }
+        Ok((
+            ShareData::DistanceFSS {
+                data: data0,
+                eval: eval0,
+            },
+            ShareData::DistanceFSS {
+                data: data1,
+                eval: eval1,
+            },
+        ))
     }
 }

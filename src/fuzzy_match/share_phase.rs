@@ -191,19 +191,9 @@ impl SharePhase {
                     self.evaluate_interval_fss_at_single_dimension(&keys[dimension], point_bits)?;
                 Ok(result)
             }
-            SharedRange::DistanceFSSL1 { keys, role } => {
+            SharedRange::DistanceFSS { keys, role } => {
                 let result =
-                    self.evaluate_distance_fss::<2>(&keys[dimension], point_bits, *role)?;
-                Ok(result)
-            }
-            SharedRange::DistanceFSSL2 { keys, role } => {
-                let result =
-                    self.evaluate_distance_fss::<3>(&keys[dimension], point_bits, *role)?;
-                Ok(result)
-            }
-            SharedRange::DistanceFSSL3 { keys, role } => {
-                let result =
-                    self.evaluate_distance_fss::<4>(&keys[dimension], point_bits, *role)?;
+                    self.evaluate_distance_fss(&keys[dimension], point_bits, *role)?;
                 Ok(result)
             }
         }
@@ -238,28 +228,12 @@ impl SharePhase {
                     "Expected IntervalFSS share data for IntervalFSS shared range".to_string(),
                 )),
             },
-            SharedRange::DistanceFSSL1 { keys, role } => match share_data {
-                ShareData::DistanceFSSL1 { data, eval } => {
-                    self.expand_prefix_distance_fss::<2>(keys, prefix, data, eval, dimension, *role)
+            SharedRange::DistanceFSS { keys, role } => match share_data {
+                ShareData::DistanceFSS { data, eval } => {
+                    self.expand_prefix_distance_fss(keys, prefix, data, eval, dimension, *role)
                 }
                 _ => Err(SharePhaseError::InvalidShareData(
-                    "Expected DistanceFSS share data for DistanceFSSL1 shared range".to_string(),
-                )),
-            },
-            SharedRange::DistanceFSSL2 { keys, role } => match share_data {
-                ShareData::DistanceFSSL2 { data, eval } => {
-                    self.expand_prefix_distance_fss::<3>(keys, prefix, data, eval, dimension, *role)
-                }
-                _ => Err(SharePhaseError::InvalidShareData(
-                    "Expected DistanceFSS share data for DistanceFSSL2 shared range".to_string(),
-                )),
-            },
-            SharedRange::DistanceFSSL3 { keys, role } => match share_data {
-                ShareData::DistanceFSSL3 { data, eval } => {
-                    self.expand_prefix_distance_fss::<4>(keys, prefix, data, eval, dimension, *role)
-                }
-                _ => Err(SharePhaseError::InvalidShareData(
-                    "Expected DistanceFSS share data for DistanceFSSL3 shared range".to_string(),
+                    "Expected DistanceFSS share data for DistanceFSS shared range".to_string(),
                 )),
             },
         }
@@ -295,34 +269,14 @@ impl SharePhase {
                     })
                     .collect::<Result<Vec<IntervalFSSEval>, _>>()?,
             }),
-            SharedRange::DistanceFSSL1 { keys, role: _ } => Ok(ShareData::DistanceFSSL1 {
+            SharedRange::DistanceFSS { keys, role: _ } => Ok(ShareData::DistanceFSS {
                 data: keys
                     .iter()
                     .map(|key| {
                         key.init_eval(modulus)
                             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
                     })
-                    .collect::<Result<Vec<DistanceFSSEval<2>>, _>>()?,
-                eval: evals,
-            }),
-            SharedRange::DistanceFSSL2 { keys, role: _ } => Ok(ShareData::DistanceFSSL2 {
-                data: keys
-                    .iter()
-                    .map(|key| {
-                        key.init_eval(modulus)
-                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
-                    })
-                    .collect::<Result<Vec<DistanceFSSEval<3>>, _>>()?,
-                eval: evals,
-            }),
-            SharedRange::DistanceFSSL3 { keys, role: _ } => Ok(ShareData::DistanceFSSL3 {
-                data: keys
-                    .iter()
-                    .map(|key| {
-                        key.init_eval(modulus)
-                            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))
-                    })
-                    .collect::<Result<Vec<DistanceFSSEval<4>>, _>>()?,
+                    .collect::<Result<Vec<DistanceFSSEval>, _>>()?,
                 eval: evals,
             }),
         }

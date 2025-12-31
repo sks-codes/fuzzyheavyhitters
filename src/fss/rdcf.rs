@@ -12,6 +12,28 @@ use std::convert::TryInto;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
+fn serialize_ringvec(vec: &RingVec) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&vec.len().to_le_bytes());
+    out.extend_from_slice(&vec.to_bytes()?);
+    Ok(out)
+}
+
+fn deserialize_ringvec(bytes: &[u8], modulus: u128) -> Result<(RingVec, usize)> {
+    let len_size = std::mem::size_of::<usize>();
+    ensure!(
+        bytes.len() >= len_size,
+        "Not enough bytes to read RingVec length"
+    );
+    let len = usize::from_le_bytes(
+        bytes[..len_size]
+            .try_into()
+            .context("Failed to read RingVec length")?,
+    );
+    let (vec, used) = RingVec::from_bytes(&bytes[len_size..], modulus, len)?;
+    Ok((vec, len_size + used))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RdcfCW {
     pub seed: [u8; AES_BLOCK_SIZE],
@@ -60,14 +82,14 @@ impl RdcfCW {
         bits_byte |= (self.seed_bit.0 as u8) << 0;
         bits_byte |= (self.seed_bit.1 as u8) << 1;
         out.push(bits_byte);
-        out.extend_from_slice(&self.ys.0.to_bytes());
-        out.extend_from_slice(&self.ys.1.to_bytes());
+        out.extend_from_slice(&serialize_ringvec(&self.ys.0)?);
+        out.extend_from_slice(&serialize_ringvec(&self.ys.1)?);
         let y_bits_ringvec = RingVec::new(
             vec![self.y_bits.0.val, self.y_bits.1.val],
             self.ys.0.modulus(),
         )
         .context("Failed to create RingVec from y_bits")?;
-        out.extend_from_slice(&y_bits_ringvec.to_bytes());
+        out.extend_from_slice(&serialize_ringvec(&y_bits_ringvec)?);
         Ok(out)
     }
 
@@ -89,15 +111,15 @@ impl RdcfCW {
         offset += 1;
         let seed_bits = (bits_byte & 0x1 != 0, bits_byte & 0x2 != 0);
 
-        let (ys0, used0) = RingVec::from_bytes(&bytes[offset..], modulus)
+        let (ys0, used0) = deserialize_ringvec(&bytes[offset..], modulus)
             .context("Failed to create RingVec from ys0")?;
         offset += used0;
 
-        let (ys1, used1) = RingVec::from_bytes(&bytes[offset..], modulus)
+        let (ys1, used1) = deserialize_ringvec(&bytes[offset..], modulus)
             .context("Failed to create RingVec from ys1")?;
         offset += used1;
 
-        let (y_bits_ringvec, used_y_bits) = RingVec::from_bytes(&bytes[offset..], modulus)
+        let (y_bits_ringvec, used_y_bits) = deserialize_ringvec(&bytes[offset..], modulus)
             .context("Failed to create RingVec from y_bits")?;
         offset += used_y_bits;
 
@@ -194,14 +216,14 @@ pub struct RdcfEval {
 }
 
 impl RdcfEval {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.level.to_le_bytes());
         out.extend_from_slice(&self.seed);
         out.push(self.bit as u8);
-        out.extend_from_slice(&self.y.to_bytes());
+        out.extend_from_slice(&serialize_ringvec(&self.y)?);
         out.extend_from_slice(&self.y_bit.to_bytes());
-        out
+        Ok(out)
     }
 
     pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize)> {
@@ -225,7 +247,7 @@ impl RdcfEval {
         offset += AES_BLOCK_SIZE;
         let bit = bytes[offset] != 0;
         offset += 1;
-        let (y, used_y) = RingVec::from_bytes(&bytes[offset..], modulus)
+        let (y, used_y) = deserialize_ringvec(&bytes[offset..], modulus)
             .context("Failed to create RingVec from y")?;
         offset += used_y;
         let (y_bit, used_y_bit) = Mod2k::from_bytes(&bytes[offset..], modulus);

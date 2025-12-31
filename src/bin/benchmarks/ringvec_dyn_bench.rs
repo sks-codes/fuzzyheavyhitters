@@ -1,7 +1,4 @@
-use mosaic::{
-    data_structures::ringvec::RingVec,        // existing static version
-    data_structures::ringvec_new::DynRingVec, // new dynamic version
-};
+use mosaic::data_structures::ringvec::RingVec;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -28,13 +25,6 @@ fn bench_compare<const N: usize>(iterations: usize, modulus_bits: usize) {
         .map(|_| RingVec::random_with_len(N, modulus).expect("Failed to generate vecs_b_static"))
         .collect();
 
-    let vecs_a_dyn: Vec<DynRingVec> = (0..iterations)
-        .map(|_| DynRingVec::random(N, modulus))
-        .collect();
-    let vecs_b_dyn: Vec<DynRingVec> = (0..iterations)
-        .map(|_| DynRingVec::random(N, modulus))
-        .collect();
-
     // --- Static RingVec ---
     let start_add = Instant::now();
     let mut acc_add = RingVec::zero_with_len(N, modulus).expect("Failed to create add accumulator");
@@ -58,60 +48,26 @@ fn bench_compare<const N: usize>(iterations: usize, modulus_bits: usize) {
     let dur_mul = start_mul.elapsed();
     black_box(&acc_mul);
 
-    // --- Dynamic DynRingVec ---
-    let start_add_d = Instant::now();
-    let mut acc_add_d = DynRingVec::zero(N, modulus);
-    for i in 0..iterations {
-        acc_add_d = vecs_a_dyn[i].add(&vecs_b_dyn[i]);
-    }
-    let dur_add_d = start_add_d.elapsed();
-    black_box(&acc_add_d);
-    let start_sub_d = Instant::now();
-    let mut acc_sub_d = DynRingVec::zero(N, modulus);
-    for i in 0..iterations {
-        acc_sub_d = vecs_a_dyn[i].sub(&vecs_b_dyn[i]);
-    }
-    let dur_sub_d = start_sub_d.elapsed();
-    black_box(&acc_sub_d);
-    let start_mul_d = Instant::now();
-    let mut acc_mul_d = DynRingVec::zero(N, modulus);
-    for i in 0..iterations {
-        acc_mul_d = vecs_a_dyn[i].mul(&vecs_b_dyn[i]);
-    }
-    let dur_mul_d = start_mul_d.elapsed();
-    black_box(&acc_mul_d);
-
-    println!("Compare RingVec(static array u128) vs DynRingVec(runtime width) N={} bits={} iterations={}", N, modulus_bits, iterations);
+    println!("RingVec(static array u128) N={} bits={} iterations={}", N, modulus_bits, iterations);
     println!(
-        " static add {:?} (avg {:?}) | dyn add {:?} (avg {:?})",
+        " add {:?} (avg {:?})",
         dur_add,
-        dur_add / iterations as u32,
-        dur_add_d,
-        dur_add_d / iterations as u32
+        dur_add / iterations as u32
     );
     println!(
-        " static sub {:?} (avg {:?}) | dyn sub {:?} (avg {:?})",
+        " sub {:?} (avg {:?})",
         dur_sub,
-        dur_sub / iterations as u32,
-        dur_sub_d,
-        dur_sub_d / iterations as u32
+        dur_sub / iterations as u32
     );
     println!(
-        " static mul {:?} (avg {:?}) | dyn mul {:?} (avg {:?})",
+        " mul {:?} (avg {:?})",
         dur_mul,
-        dur_mul / iterations as u32,
-        dur_mul_d,
-        dur_mul_d / iterations as u32
+        dur_mul / iterations as u32
     );
 
     // Serialization cost comparison (single example vector)
-    let bytes_static = vecs_a_static[0].to_bytes();
-    let bytes_dyn = vecs_a_dyn[0].to_bytes();
-    println!(
-        " static serialized bytes: {} | dyn serialized bytes: {}",
-        bytes_static.len(),
-        bytes_dyn.len()
-    );
+    let bytes_static = vecs_a_static[0].to_bytes().unwrap();
+    println!(" serialized bytes: {}", bytes_static.len());
 }
 
 fn main() {

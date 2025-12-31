@@ -176,7 +176,8 @@ impl MosaicProtocol {
                 let data = self.share_phase.share_data_init(shared_range).unwrap();
                 data.to_bytes(eval_len)
             })
-            .collect::<Vec<Vec<u8>>>();
+            .collect::<Result<Vec<Vec<u8>>, _>>()
+            .map_err(|e| e.to_string())?;
         let mut current_data = vec![empty_string_data];
         let mut current_prefixes: Vec<Vec<Vec<bool>>> = vec![vec![vec![]; dimension]];
 
@@ -189,28 +190,25 @@ impl MosaicProtocol {
         for prefix_length in 1..=max_bit_length {
             for dim in 0..dimension {
                 let start = std::time::Instant::now();
-                let mut new_data = thread_pool.install(|| {
-                    current_data
-                        .par_iter()
-                        .zip(current_prefixes.par_iter())
-                        .flat_map(|(data, prefix)| {
-                            let mut data0 = Vec::with_capacity(client_shares_list.len());
-                            let mut data1 = Vec::with_capacity(client_shares_list.len());
-                            for (idx, shared_range) in client_shares_list.iter().enumerate() {
-                                let (data_dim, _) =
-                                    ShareData::from_bytes(&data[idx], eval_len, eval_modulus);
-                                let (eval0, eval1) = self
-                                    .share_phase
-                                    .expand_prefix(shared_range, &data_dim, &prefix[dim], dim)
-                                    .unwrap();
+                let mut new_data: Vec<Vec<Vec<u8>>> = Vec::new();
+                for (data, prefix) in current_data.iter().zip(current_prefixes.iter()) {
+                    let mut data0 = Vec::with_capacity(client_shares_list.len());
+                    let mut data1 = Vec::with_capacity(client_shares_list.len());
+                    for (idx, shared_range) in client_shares_list.iter().enumerate() {
+                        let (data_dim, _) =
+                            ShareData::from_bytes(&data[idx], eval_len, eval_modulus)
+                                .map_err(|e| e.to_string())?;
+                        let (eval0, eval1) = self
+                            .share_phase
+                            .expand_prefix(shared_range, &data_dim, &prefix[dim], dim)
+                            .map_err(|e| e.to_string())?;
 
-                                data0.push(eval0.to_bytes(eval_len));
-                                data1.push(eval1.to_bytes(eval_len));
-                            }
-                            vec![data0, data1]
-                        })
-                        .collect::<Vec<Vec<Vec<u8>>>>()
-                });
+                        data0.push(eval0.to_bytes(eval_len).map_err(|e| e.to_string())?);
+                        data1.push(eval1.to_bytes(eval_len).map_err(|e| e.to_string())?);
+                    }
+                    new_data.push(data0);
+                    new_data.push(data1);
+                }
                 println!("Time to collect new data: {:?}", start.elapsed());
                 println!("Number of new data stored: {}", new_data.len());
                 println!(
@@ -231,22 +229,23 @@ impl MosaicProtocol {
                                 .iter()
                                 .map(|bytes| {
                                     let (share_data, _) =
-                                        ShareData::from_bytes(bytes, eval_len, eval_modulus);
-                                    match share_data {
-                                        ShareData::OKVS { eval } => eval.clone(),
+                                        ShareData::from_bytes(bytes, eval_len, eval_modulus)
+                                            .map_err(|e| e.to_string())?;
+                                    let evals = match share_data {
+                                        ShareData::OKVS { eval } => eval,
                                         ShareData::IntervalFSS { data } => data
                                             .iter()
                                             .map(|eval| eval.result()[0])
                                             .collect::<Vec<u128>>(),
-                                        ShareData::DistanceFSSL1 { eval, .. } => eval.clone(),
-                                        ShareData::DistanceFSSL2 { eval, .. } => eval.clone(),
-                                        ShareData::DistanceFSSL3 { eval, .. } => eval.clone(),
-                                    }
+                                        ShareData::DistanceFSS { eval, .. } => eval,
+                                    };
+                                    Ok(evals)
                                 })
-                                .collect::<Vec<Vec<u128>>>()
+                                .collect::<Result<Vec<Vec<u128>>, String>>()
                         })
-                        .collect::<Vec<Vec<Vec<u128>>>>()
+                        .collect::<Result<Vec<Vec<Vec<u128>>>, String>>()
                 });
+                let new_eval = new_eval?;
 
                 println!(
                     "Time to expand prefixes for all clients: {:?}",

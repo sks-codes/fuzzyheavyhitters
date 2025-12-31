@@ -1,6 +1,4 @@
 use crate::{
-    aes::AES_KEY_SIZE,
-    channel::CommTrackingChannel,
     data_structures::{
         mod2k::Mod2k,
         modp::{BarrettCtx, Modp},
@@ -13,7 +11,6 @@ use crate::{
         share_phase::SharePhaseError,
         share_types::{DistanceMetric, ShareMethod},
         shared_range::SharedRange,
-        shared_sketch::SketchData,
         sketch_helper::SketchHelper,
         sketch_types::{SketchConfig, SketchValues},
     },
@@ -77,11 +74,11 @@ impl Sketch {
                 let mut sketch_values = Vec::new();
                 for key in keys {
                     let sketch_value = self.sketch_linf_one_dimension(key, sketch_helper, prg)
-                        .map_err(|e| anyhow!("Error when sketch linf one dimension: {e}"))?;
+                        .map_err(|_e| anyhow!("Error when sketch linf one dimension"))?;
                     sketch_values.push(sketch_value);
                 }
                 Ok(sketch_values)
-            },
+            }
             _ => Err(anyhow!("Wrong shared_range type, needed SharedRange::IntervalFSS")),
         }
     }
@@ -94,7 +91,13 @@ impl Sketch {
         sketch_helper: &SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<SketchValues<'a>>> {
-        unimplemented!()
+        let _ = (p, sketch_helper, prg);
+        match shared_range {
+            SharedRange::DistanceFSS { .. } => {
+                Err(anyhow!("DistanceFSS sketching not implemented"))
+            }
+            _ => Err(anyhow!("Wrong shared_range type for lp sketch")),
+        }
     }
 
     #[allow(dead_code)]
@@ -177,7 +180,7 @@ impl Sketch {
     #[allow(dead_code)]
     fn sketch_distance_fss_lp_one_dimension(
         &self,
-        key: DistanceFSSKey<2>,
+        key: DistanceFSSKey,
         role: bool,
         sketch_helper: &SketchHelper,
         prg: &mut PRG,

@@ -1,8 +1,6 @@
 pub enum SketchMethod {
     IntervalFSS,
-    DistanceFSSL1,
-    DistanceFSSL2,
-    DistanceFSSL3,
+    DistanceFSS,
 }
 
 pub enum SketchData {
@@ -26,7 +24,7 @@ pub fn generate_sketch_data(
         SketchMethod::IntervalFSS => {
             generate_interval_fss_sketch_data(num_clients, d, sketch_modulus)
         }
-        _ => unimplemented!("Sketch method not implemented yet"),
+        SketchMethod::DistanceFSS => unimplemented!("DistanceFSS sketch not implemented yet"),
     }
 }
 

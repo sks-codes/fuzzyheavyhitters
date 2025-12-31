@@ -41,18 +41,19 @@ fn distance_fss_expand_prefix() -> Result<()> {
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
     let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
 
-    let (key0, key1) = DistanceFSSKey::<{ P + 1 }>::gen_distance_fss_key(
+    let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
         X,
         &x_bits,
         &alpha_bits,
         &beta_bits,
         MAX_DISTANCE,
+        P,
         MODULUS,
     )?;
 
-    let mut evals0: Vec<(Vec<bool>, DistanceFSSEval<{ P + 1 }>)> =
+    let mut evals0: Vec<(Vec<bool>, DistanceFSSEval)> =
         vec![(Vec::new(), key0.init_eval(MODULUS)?)];
-    let mut evals1: Vec<(Vec<bool>, DistanceFSSEval<{ P + 1 }>)> =
+    let mut evals1: Vec<(Vec<bool>, DistanceFSSEval)> =
         vec![(Vec::new(), key1.init_eval(MODULUS)?)];
 
     for level in 1..BIT_LENGTH {
@@ -60,7 +61,7 @@ fn distance_fss_expand_prefix() -> Result<()> {
         let mut next1 = Vec::with_capacity(evals1.len() * 2);
 
         for (prefix, eval) in evals0.iter() {
-            let (left, right) = key0.expand_prefix(prefix, eval, BIT_LENGTH, MODULUS)?;
+            let (left, right) = key0.expand_prefix(eval, MODULUS)?;
             let mut left_prefix = prefix.clone();
             left_prefix.push(false);
             let mut right_prefix = prefix.clone();
@@ -70,7 +71,7 @@ fn distance_fss_expand_prefix() -> Result<()> {
         }
 
         for (prefix, eval) in evals1.iter() {
-            let (left, right) = key1.expand_prefix(prefix, eval, BIT_LENGTH, MODULUS)?;
+            let (left, right) = key1.expand_prefix(eval, MODULUS)?;
             let mut left_prefix = prefix.clone();
             left_prefix.push(false);
             let mut right_prefix = prefix.clone();
@@ -86,7 +87,15 @@ fn distance_fss_expand_prefix() -> Result<()> {
         for i in 0..domain_size {
             let prefix_bits = &evals0[i].0;
             let prefix_val = bits_to_u128_msb(prefix_bits);
-            let res = (evals0[i].1.result + MODULUS - evals1[i].1.result % MODULUS) % MODULUS;
+            let res0 = evals0[i]
+                .1
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, P)?
+                % MODULUS;
+            let res1 = evals1[i]
+                .1
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, P)?
+                % MODULUS;
+            let res = (res0 + MODULUS - res1) % MODULUS;
             let expected = expected_distance(prefix_val, level);
             assert_eq!(
                 res, expected,
@@ -103,12 +112,13 @@ fn distance_fss_eval() -> Result<()> {
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
     let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
 
-    let (key0, key1) = DistanceFSSKey::<{ P + 1 }>::gen_distance_fss_key(
+    let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
         X,
         &x_bits,
         &alpha_bits,
         &beta_bits,
         MAX_DISTANCE,
+        P,
         MODULUS,
     )?;
 
@@ -144,22 +154,23 @@ fn distance_fss_serialization() -> Result<()> {
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
     let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
 
-    let (key0, key1) = DistanceFSSKey::<{ P + 1 }>::gen_distance_fss_key(
+    let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
         X,
         &x_bits,
         &alpha_bits,
         &beta_bits,
         MAX_DISTANCE,
+        P,
         MODULUS,
     )?;
 
     let key0_bytes = key0.to_bytes()?;
-    let (key0_cmp, size0) = DistanceFSSKey::<{ P + 1 }>::from_bytes(&key0_bytes, MODULUS)?;
+    let (key0_cmp, size0) = DistanceFSSKey::from_bytes(&key0_bytes, MODULUS)?;
     assert_eq!(size0, key0_bytes.len(), "Wrong deserialization length for distance fss key0!");
     assert_eq!(key0_cmp, key0, "Wrong serialization round-trip for distance fss key0!");
 
     let key1_bytes = key1.to_bytes()?;
-    let (key1_cmp, size1) = DistanceFSSKey::<{ P + 1 }>::from_bytes(&key1_bytes, MODULUS)?;
+    let (key1_cmp, size1) = DistanceFSSKey::from_bytes(&key1_bytes, MODULUS)?;
     assert_eq!(size1, key1_bytes.len(), "Wrong deserialization length for distance fss key1!");
     assert_eq!(key1_cmp, key1, "Wrong serialization round-trip for distance fss key1!");
 

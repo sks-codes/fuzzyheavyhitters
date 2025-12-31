@@ -16,8 +16,8 @@ pub struct IntervalFSSEval {
 impl IntervalFSSEval {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
-        bytes.extend(self.ldcf_eval.to_bytes());
-        bytes.extend(self.rdcf_eval.to_bytes());
+        bytes.extend(self.ldcf_eval.to_bytes()?);
+        bytes.extend(self.rdcf_eval.to_bytes()?);
         Ok(bytes)
     }
 

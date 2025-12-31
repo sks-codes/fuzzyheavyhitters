@@ -56,16 +56,16 @@ fn bench_for<const N: usize>(iterations: usize, modulus_bits: usize) {
     let start_ser = Instant::now();
     let mut ser_bytes_total: usize = 0;
     for v in &vecs_a {
-        ser_bytes_total += v.to_bytes().len();
+        ser_bytes_total += v.to_bytes().unwrap().len();
     }
     let dur_ser = start_ser.elapsed();
 
     // Deserialize (from_bytes)
-    let bytes_example = vecs_a[0].to_bytes();
+    let bytes_example = vecs_a[0].to_bytes().unwrap();
     let start_de = Instant::now();
     let mut de_count = 0usize;
     for _ in 0..iterations {
-        let (_v, _used) = RingVec::from_bytes(&bytes_example, modulus).unwrap();
+        let (_v, _used) = RingVec::from_bytes(&bytes_example, modulus, N).unwrap();
         de_count += 1;
     }
     let dur_de = start_de.elapsed();

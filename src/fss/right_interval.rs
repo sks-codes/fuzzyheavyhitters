@@ -15,6 +15,32 @@ use std::convert::TryInto;
 
 thread_local!(static FIXED_KEY_STREAM: RefCell<FixedKeyPrgStream> = RefCell::new(FixedKeyPrgStream::new()));
 
+fn serialize_ringvec(vec: &RingVec) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&vec.len().to_le_bytes());
+    let bytes = vec
+        .to_bytes()
+        .expect("Failed to serialize RingVec for interval FSS");
+    out.extend_from_slice(&bytes);
+    out
+}
+
+fn deserialize_ringvec(bytes: &[u8], modulus: u128) -> (RingVec, usize) {
+    let len_size = std::mem::size_of::<usize>();
+    assert!(
+        bytes.len() >= len_size,
+        "Not enough bytes to read RingVec length"
+    );
+    let len = usize::from_le_bytes(
+        bytes[..len_size]
+            .try_into()
+            .expect("Failed to parse RingVec length"),
+    );
+    let (vec, used) = RingVec::from_bytes(&bytes[len_size..], modulus, len)
+        .expect("Failed to deserialize RingVec");
+    (vec, len_size + used)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RIntervalFSSCW<const N: usize> {
     pub seeds: ([u8; AES_BLOCK_SIZE], [u8; AES_BLOCK_SIZE]),
@@ -59,10 +85,10 @@ impl<const N: usize> RIntervalFSSCW<N> {
         bits_byte |= (self.bits.1 .1.first as u8) << 6;
         bits_byte |= (self.bits.1 .1.second as u8) << 7;
         out.push(bits_byte);
-        out.extend(self.ys.0 .0.to_bytes());
-        out.extend(self.ys.0 .1.to_bytes());
-        out.extend(self.ys.1 .0.to_bytes());
-        out.extend(self.ys.1 .1.to_bytes());
+        out.extend(serialize_ringvec(&self.ys.0 .0));
+        out.extend(serialize_ringvec(&self.ys.0 .1));
+        out.extend(serialize_ringvec(&self.ys.1 .0));
+        out.extend(serialize_ringvec(&self.ys.1 .1));
         // y_bits (4 ModInt)
         let mut y_bits_list = Vec::new();
         y_bits_list.push(self.y_bits.0 .0.first.val());
@@ -75,7 +101,7 @@ impl<const N: usize> RIntervalFSSCW<N> {
         y_bits_list.push(self.y_bits.1 .1.second.val());
         let y_bits_ringvec = RingVec::new(y_bits_list, self.ys.0 .0.modulus())
             .expect("Failed to create RingVec from y_bits");
-        out.extend(y_bits_ringvec.to_bytes());
+        out.extend(serialize_ringvec(&y_bits_ringvec));
         out
     }
 
@@ -101,21 +127,16 @@ impl<const N: usize> RIntervalFSSCW<N> {
         );
 
         // ys
-        let (ys00, used00) =
-            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys00");
+        let (ys00, used00) = deserialize_ringvec(&bytes[offset..], modulus);
         offset += used00;
-        let (ys01, used01) =
-            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys01");
+        let (ys01, used01) = deserialize_ringvec(&bytes[offset..], modulus);
         offset += used01;
-        let (ys10, used10) =
-            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys10");
+        let (ys10, used10) = deserialize_ringvec(&bytes[offset..], modulus);
         offset += used10;
-        let (ys11, used11) =
-            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse ys11");
+        let (ys11, used11) = deserialize_ringvec(&bytes[offset..], modulus);
         offset += used11;
         // y_bits
-        let (y_bits_ringvec, used_y_bits) =
-            RingVec::from_bytes(&bytes[offset..], modulus).expect("Failed to parse y_bits");
+        let (y_bits_ringvec, used_y_bits) = deserialize_ringvec(&bytes[offset..], modulus);
         offset += used_y_bits;
         assert_eq!(ys00.len(), N, "Unexpected ys00 length");
         assert_eq!(ys01.len(), N, "Unexpected ys01 length");

@@ -1,6 +1,15 @@
-use crate::data_structures::ringvec::RingVec;
-use crate::fss::ldcf::{LdcfEval, LdcfKey};
-use crate::fss::rdcf::{RdcfEval, RdcfKey};
+use std::convert::TryInto;
+
+use crate::{
+    data_structures::{
+        ringvec::RingVec,
+        mod2k::Mod2k,
+    },
+    fss::{
+        ldcf::{LdcfEval, LdcfKey},
+        rdcf::{RdcfEval, RdcfKey}
+    },
+};
 use anyhow::{ensure, Result};
 
 pub(crate) const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
@@ -14,28 +23,33 @@ pub(crate) const BINOMIAL_COEFFICIENTS: [[u128; 6]; 6] = [
 
 // N here is P+1, where P is the distance Lp norm
 #[derive(Clone, Debug, PartialEq)]
-pub struct DistanceFSSKey<const N: usize> {
+pub struct DistanceFSSKey {
+    p: usize,
     left_fss: (LdcfKey, LdcfKey),
     right_fss: (RdcfKey, RdcfKey),
 }
 
 #[derive(Clone, Debug)]
-pub struct DistanceFSSEval<const N: usize> {
+pub struct DistanceFSSEval {
     left_eval: (LdcfEval, LdcfEval),
     right_eval: (RdcfEval, RdcfEval),
-    pub result: u128,
 }
 
-impl<const N: usize> DistanceFSSEval<N> {
+impl DistanceFSSEval {
+    pub fn payload_len(&self) -> usize {
+        self.left_eval.0.y().len()
+    }
+
+    pub fn degree(&self) -> usize {
+        self.payload_len().saturating_sub(1)
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
-        out.extend_from_slice(&self.left_eval.0.to_bytes());
-        out.extend_from_slice(&self.left_eval.1.to_bytes());
-        out.extend_from_slice(&self.right_eval.0.to_bytes());
-        out.extend_from_slice(&self.right_eval.1.to_bytes());
-        let modulus = self.left_eval.0.y().modulus();
-        let num_bits = 128 - modulus.leading_zeros();
-        out.extend_from_slice(&self.result.to_le_bytes()[..((num_bits + 7) / 8) as usize]);
+        out.extend_from_slice(&self.left_eval.0.to_bytes()?);
+        out.extend_from_slice(&self.left_eval.1.to_bytes()?);
+        out.extend_from_slice(&self.right_eval.0.to_bytes()?);
+        out.extend_from_slice(&self.right_eval.1.to_bytes()?);
         Ok(out)
     }
 
@@ -49,31 +63,62 @@ impl<const N: usize> DistanceFSSEval<N> {
         offset += used_right0;
         let (right_eval1, used_right1) = RdcfEval::from_bytes(&bytes[offset..], modulus)?;
         offset += used_right1;
-        let num_bits = 128 - modulus.leading_zeros();
-        let result_bytes = (num_bits + 7) / 8;
-        ensure!(
-            bytes.len() >= offset + result_bytes as usize,
-            "Insufficient bytes for DistanceFSSEval result"
-        );
-        let mut result_array = [0u8; 16];
-        result_array[..result_bytes as usize]
-            .copy_from_slice(&bytes[offset..offset + result_bytes as usize]);
-        let result = u128::from_le_bytes(result_array);
-        offset += result_bytes as usize;
         Ok((
             Self {
                 left_eval: (left_eval0, left_eval1),
                 right_eval: (right_eval0, right_eval1),
-                result,
             },
             offset,
         ))
     }
+
+    pub fn eval(&self, prefix: &[bool], input_len: usize, modulus: u128, p: usize) -> Result<u128> {
+        let left_eval = self.left_eval.0.y() + self.left_eval.1.y();
+        let right_eval = self.right_eval.0.y() + self.right_eval.1.y();
+
+        ensure!(left_eval.len() == p+1, 
+            "Size mismatch for left_eval of distance fss, left_eval.len() = {}, p+1 = {}", left_eval.len(), p+1);
+        ensure!(right_eval.len() == p+1, 
+            "Size mismatch for right_eval of distance fss, right_eval.len() = {}, p+1 = {}", right_eval.len(), p+1);
+
+        let mut x = 0;
+        for i in 0..prefix.len() {
+            if prefix[i] {
+                x = (x << 1) ^ 1;
+            } else {
+                x = x << 1;
+            }
+        }
+        let mut left_x = x.clone();
+        for _ in prefix.len()..input_len {
+            left_x = (left_x << 1) ^ 1;
+        }
+        let mut right_x = x.clone();
+        for _ in prefix.len()..input_len {
+            right_x = right_x << 1;
+        }
+
+        let mut result = 0u128;
+        let modulus_mask = modulus - 1;
+        let mut pow_left_x = 1u128;
+        for i in 0..p+1 {
+            result = (result + pow_left_x * left_eval[p - i]) & modulus_mask;
+            pow_left_x = (pow_left_x * left_x) & modulus_mask;
+        }
+        let mut pow_right_x = 1u128;
+        for i in 0..p+1 {
+            result = (result + pow_right_x * right_eval[p - i]) & modulus_mask;
+            pow_right_x = (pow_right_x * right_x) & modulus_mask;
+        }
+
+        Ok(result)
+    }
 }
 
-impl<const N: usize> DistanceFSSKey<N> {
+impl DistanceFSSKey {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
+        out.extend_from_slice(&(self.p as u32).to_ne_bytes());
         out.extend_from_slice(&self.left_fss.0.to_bytes()?);
         out.extend_from_slice(&self.left_fss.1.to_bytes()?);
         out.extend_from_slice(&self.right_fss.0.to_bytes()?);
@@ -83,6 +128,8 @@ impl<const N: usize> DistanceFSSKey<N> {
 
     pub fn from_bytes(bytes: &[u8], modulus: u128) -> Result<(Self, usize)> {
         let mut offset = 0;
+        let p = u32::from_ne_bytes(bytes[offset..offset+4].try_into()?) as usize;
+        offset += 4;
         let (left_fss0, used_left0) = LdcfKey::from_bytes(&bytes[offset..], modulus)?;
         offset += used_left0;
         let (left_fss1, used_left1) = LdcfKey::from_bytes(&bytes[offset..], modulus)?;
@@ -93,6 +140,7 @@ impl<const N: usize> DistanceFSSKey<N> {
         offset += used_right1;
         Ok((
             Self {
+                p: p,
                 left_fss: (left_fss0, left_fss1),
                 right_fss: (right_fss0, right_fss1),
             },
@@ -104,43 +152,44 @@ impl<const N: usize> DistanceFSSKey<N> {
         x_bits: &[bool],
         left_bits: &[bool],
         right_bits: &[bool],
-        max_distance: u128,
+        delta: u128,
+        p: usize,
         modulus: u128,
     ) -> Result<(Self, Self)> {
-        ensure!(
-            N <= 6,
-            "N must be less than or equal to 6 for distance FSS key generation"
-        );
-        let mut x_powers = [0u128; N];
+        let delta_mod2k = Mod2k::new(delta, modulus);
+        let max_distance_mod2k = delta_mod2k.pow(p as u128) + 1;
+        let max_distance = max_distance_mod2k.val();
+
+        let mut x_powers = vec![0u128; p+1];
         x_powers[0] = 1;
-        for i in 1..N {
+        for i in 1..p+1 {
             x_powers[i] = (x_powers[i - 1] * x) % modulus;
         }
-        for i in 0..N {
-            x_powers[i] = (x_powers[i] * BINOMIAL_COEFFICIENTS[N - 1][i]) % modulus;
+        for i in 0..p+1 {
+            x_powers[i] = (x_powers[i] * BINOMIAL_COEFFICIENTS[p][i]) % modulus;
         }
         let zero_payload =
-            RingVec::zero_with_len(N, modulus).expect("Failed to create zero payload");
-        for i in 0..N {
+            RingVec::zero_with_len(p+1, modulus).expect("Failed to create zero payload");
+        for i in 0..p+1 {
             if (i & 1) == 1 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
         }
         let right_payload =
             RingVec::new(x_powers.to_vec(), modulus).expect("Failed to create right payload");
-        for i in 0..N {
+        for i in 0..p+1 {
             if (i & 1) == 1 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
-            if ((N - i) & 1) == 0 {
+            if ((p+1 - i) & 1) == 0 {
                 x_powers[i] = (modulus - x_powers[i]) % modulus;
             }
         }
         let left_payload =
             RingVec::new(x_powers.to_vec(), modulus).expect("Failed to create left payload");
         let mut out_payload =
-            RingVec::zero_with_len(N, modulus).expect("Failed to create output payload");
-        out_payload[N - 1] = max_distance;
+            RingVec::zero_with_len(p+1, modulus).expect("Failed to create output payload");
+        out_payload[p] = max_distance;
 
         let out_minus_left = out_payload.clone() - left_payload.clone();
         let (key00, key10) =
@@ -157,10 +206,12 @@ impl<const N: usize> DistanceFSSKey<N> {
 
         Ok((
             Self {
+                p: p,
                 left_fss: (key00, key01),
                 right_fss: (key02, key03),
             },
             Self {
+                p: p,
                 left_fss: (key10, key11),
                 right_fss: (key12, key13),
             },
@@ -169,87 +220,23 @@ impl<const N: usize> DistanceFSSKey<N> {
 
     pub fn expand_prefix(
         &self,
-        prefix: &[bool],
-        state: &DistanceFSSEval<N>,
-        input_len: usize,
+        state: &DistanceFSSEval,
         modulus: u128,
-    ) -> Result<(DistanceFSSEval<N>, DistanceFSSEval<N>)> {
+    ) -> Result<(DistanceFSSEval, DistanceFSSEval)> {
         let left_eval0 = self.left_fss.0.expand_prefix(&state.left_eval.0, modulus)?;
         let left_eval1 = self.left_fss.1.expand_prefix(&state.left_eval.1, modulus)?;
         let right_eval0 = self.right_fss.0.expand_prefix(&state.right_eval.0, modulus)?;
         let right_eval1 = self.right_fss.1.expand_prefix(&state.right_eval.1, modulus)?;
 
-        let left_eval = (
-            left_eval0.0.y() + left_eval1.0.y(),
-            left_eval0.1.y() + left_eval1.1.y(),
-        );
-        let right_eval = (
-            right_eval0.0.y() + right_eval1.0.y(),
-            right_eval0.1.y() + right_eval1.1.y(),
-        );
-        let mut x = 0;
-        for i in 0..prefix.len() {
-            if prefix[i] {
-                x = (x << 1) ^ 1;
-            } else {
-                x = x << 1;
-            }
-        }
-        let x0 = x << 1;
-        let mut left_x0 = x0.clone();
-        for _ in prefix.len() + 1..input_len {
-            left_x0 = (left_x0 << 1) ^ 1;
-        }
-        let mut right_x0 = x0.clone();
-        for _ in prefix.len() + 1..input_len {
-            right_x0 = right_x0 << 1;
-        }
-
-        let mut result0 = 0u128;
-        let modulus_mask = modulus - 1;
-        let mut pow_left_x0 = 1u128;
-        for i in 0..N {
-            result0 = (result0 + pow_left_x0 * left_eval.0[N - 1 - i]) & modulus_mask;
-            pow_left_x0 = (pow_left_x0 * left_x0) & modulus_mask;
-        }
-        let mut pow_right_x0 = 1u128;
-        for i in 0..N {
-            result0 = (result0 + pow_right_x0 * right_eval.0[N - 1 - i]) & modulus_mask;
-            pow_right_x0 = (pow_right_x0 * right_x0) & modulus_mask;
-        }
-
-        let x1 = (x << 1) | 1;
-        let mut left_x1 = x1.clone();
-        for _ in prefix.len() + 1..input_len {
-            left_x1 = (left_x1 << 1) ^ 1;
-        }
-        let mut right_x1 = x1.clone();
-        for _ in prefix.len() + 1..input_len {
-            right_x1 = right_x1 << 1;
-        }
-        let mut result1 = 0u128;
-        let modulus_mask = modulus - 1;
-        let mut pow_left_x1 = 1u128;
-        for i in 0..N {
-            result1 = (result1 + pow_left_x1 * left_eval.1[N - 1 - i]) & modulus_mask;
-            pow_left_x1 = (pow_left_x1 * left_x1) & modulus_mask;
-        }
-        let mut pow_right_x1 = 1u128;
-        for i in 0..N {
-            result1 = (result1 + pow_right_x1 * right_eval.1[N - 1 - i]) & modulus_mask;
-            pow_right_x1 = (pow_right_x1 * right_x1) & modulus_mask;
-        }
 
         Ok((
             DistanceFSSEval {
                 left_eval: (left_eval0.0, left_eval1.0),
                 right_eval: (right_eval0.0, right_eval1.0),
-                result: result0,
             },
             DistanceFSSEval {
                 left_eval: (left_eval0.1, left_eval1.1),
                 right_eval: (right_eval0.1, right_eval1.1),
-                result: result1,
             },
         ))
     }
@@ -280,19 +267,19 @@ impl<const N: usize> DistanceFSSKey<N> {
         let mut result = 0u128;
         let modulus_mask = modulus - 1;
         let mut pow_left_x = 1u128;
-        for i in 0..N {
-            result = (result + pow_left_x * left_eval[N - 1 - i]) & modulus_mask;
+        for i in 0..self.p+1 {
+            result = (result + pow_left_x * left_eval[self.p - i]) & modulus_mask;
             pow_left_x = (pow_left_x * left_x) & modulus_mask;
         }
         let mut pow_right_x = 1u128;
-        for i in 0..N {
-            result = (result + pow_right_x * right_eval[N - 1 - i]) & modulus_mask;
+        for i in 0..self.p+1 {
+            result = (result + pow_right_x * right_eval[self.p - i]) & modulus_mask;
             pow_right_x = (pow_right_x * right_x) & modulus_mask;
         }
         Ok(result)
     }
 
-    pub fn init_eval(&self, modulus: u128) -> Result<DistanceFSSEval<N>> {
+    pub fn init_eval(&self, modulus: u128) -> Result<DistanceFSSEval> {
         Ok(DistanceFSSEval {
             left_eval: (
                 self.left_fss.0.init_eval(modulus)?,
@@ -302,7 +289,6 @@ impl<const N: usize> DistanceFSSKey<N> {
                 self.right_fss.0.init_eval(modulus)?,
                 self.right_fss.1.init_eval(modulus)?,
             ),
-            result: 0u128,
         })
     }
 
@@ -320,5 +306,9 @@ impl<const N: usize> DistanceFSSKey<N> {
 
     pub fn right_fss1(&self) -> &RdcfKey {
         &self.right_fss.1
+    }
+
+    pub fn p(&self) -> usize {
+        self.p
     }
 }
