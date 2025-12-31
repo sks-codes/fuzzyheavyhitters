@@ -63,7 +63,6 @@ pub enum SketchValues<'a> {
     },
     DcfPayload {
         length: usize,
-        last_layer: Vec<(Modp<'a>, Modp<'a>)>,
         last_layer_consistency: Vec<Modp<'a>>, // TRICKY!!! Currently only work if one of the payload is constant.
         consistency: Vec<Vec<(Modp<'a>, Modp<'a>)>>,
     },
@@ -73,6 +72,6 @@ pub enum SketchValues<'a> {
         ldcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for LDCF
         rdcf0: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
         rdcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
-        consistency: Modp<'a>,
+        reference_dpf: (Modp<'a>, Modp<'a>),
     },
 }

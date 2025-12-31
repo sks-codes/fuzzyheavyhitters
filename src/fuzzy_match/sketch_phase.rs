@@ -58,11 +58,14 @@ impl Sketch {
             _ => Err(anyhow!("Unsupported sketch helper configuration")),
         }
     }
+
+    pub fn get_payload_helper(&self) -> Result<Vec<Vec<Mod2k>>> {
+        unimplemented!()
+    }
 }
 
 // Helpers for the sketching phase
 impl Sketch {
-    #[allow(dead_code)]
     fn sketch_linf<'a>(
         &'a self,
         shared_range: &SharedRange,
@@ -74,7 +77,7 @@ impl Sketch {
                 let mut sketch_values = Vec::new();
                 for key in keys {
                     let sketch_value = self.sketch_linf_one_dimension(key, sketch_helper, prg)
-                        .map_err(|_e| anyhow!("Error when sketch linf one dimension"))?;
+                        .map_err(|e| anyhow!("Error when sketch linf one dimension: {}", e))?;
                     sketch_values.push(sketch_value);
                 }
                 Ok(sketch_values)
@@ -83,7 +86,6 @@ impl Sketch {
         }
     }
 
-    #[allow(dead_code)]
     fn sketch_lp<'a>(
         &'a self,
         p: usize,
@@ -91,10 +93,15 @@ impl Sketch {
         sketch_helper: &SketchHelper,
         prg: &mut PRG,
     ) -> Result<Vec<SketchValues<'a>>> {
-        let _ = (p, sketch_helper, prg);
         match shared_range {
-            SharedRange::DistanceFSS { .. } => {
-                Err(anyhow!("DistanceFSS sketching not implemented"))
+            SharedRange::DistanceFSS { keys, role: _ } => {
+                let mut sketch_values = Vec::new();
+                for key in keys {
+                    let sketch_value = self.sketch_lp_one_dimension(key, p, sketch_helper, prg)
+                        .map_err(|e| anyhow!("Error when sketch lp one dimension: {}", e))?;
+                    sketch_values.push(sketch_value);
+                }
+                Ok(sketch_values)
             }
             _ => Err(anyhow!("Wrong shared_range type for lp sketch")),
         }
@@ -131,14 +138,11 @@ impl Sketch {
             .map(|evals| evals.iter().map(|x| Mod2k::new(x[0], modulus)).collect())
             .collect();
 
-        let (sketch_helper_ldcf, sketch_helper_rdcf) = match sketch_helper {
+        let sketch_helper_dcf = match sketch_helper {
             SketchHelper::IntervalFSS {
-                sketch_helper_ldcf,
-                sketch_helper_rdcf,
-            } => (&**sketch_helper_ldcf, &**sketch_helper_rdcf),
-            _ => {
-                return Err(anyhow!("Sketch helper for interval fss type mismatch!"));
-            }
+                sketch_helper_dcf
+            } => &**sketch_helper_dcf,
+            _ => return Err(anyhow!("Sketch helper for interval fss type mismatch!")),
         };
 
         // Sketch LDCF
@@ -146,7 +150,7 @@ impl Sketch {
             &ldcf_incremental_evals_mod2k,
             self.config.h1,
             true,
-            sketch_helper_ldcf,
+            sketch_helper_dcf,
             prg,
         )?;
 
@@ -155,7 +159,7 @@ impl Sketch {
             &rdcf_incremental_evals_mod2k,
             self.config.h1,
             false,
-            sketch_helper_rdcf,
+            sketch_helper_dcf,
             prg,
         )?;
 
@@ -178,15 +182,141 @@ impl Sketch {
     }
 
     #[allow(dead_code)]
-    fn sketch_distance_fss_lp_one_dimension(
-        &self,
-        key: DistanceFSSKey,
-        role: bool,
+    fn sketch_lp_one_dimension<'a>(
+        &'a self,
+        key: &DistanceFSSKey,
+        p: usize,
         sketch_helper: &SketchHelper,
         prg: &mut PRG,
-    ) -> Result<Vec<Modp<'_>>> {
-        let _ = (key, role, sketch_helper, prg);
-        Ok(Vec::new())
+    ) -> Result<SketchValues<'a>> {
+        let domain_size = 1usize << self.config.h1;
+        let modulus = 1u128 << self.config.h2;
+        let delta = self.config.delta;
+
+        let ldcf_key0 = key.left_fss0();
+        let ldcf_key1 = key.left_fss1();
+        let rdcf_key0 = key.right_fss0();
+        let rdcf_key1 = key.right_fss1();
+
+        let ldcf0_full_evals = ldcf_key0
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+        let ldcf1_full_evals = ldcf_key1
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+        let rdcf0_full_evals = rdcf_key0
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+        let rdcf1_full_evals = rdcf_key1
+            .full_domain_incremental_eval(modulus, domain_size)
+            .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+
+        let ldcf0_incremental_evals_mod2k: Vec<Vec<Vec<Mod2k>>> = ldcf0_full_evals
+            .iter()
+            .map(|evals| evals.iter().map(|x| 
+                (0..x.len()).map(|i| Mod2k::new(x[i], modulus)).collect()
+            ).collect())
+            .collect();
+        let ldcf1_incremental_evals_mod2k: Vec<Vec<Vec<Mod2k>>> = ldcf1_full_evals
+            .iter()
+            .map(|evals| evals.iter().map(|x| 
+                (0..x.len()).map(|i| Mod2k::new(x[i], modulus)).collect()
+            ).collect())
+            .collect();
+        let rdcf0_incremental_evals_mod2k: Vec<Vec<Vec<Mod2k>>> = rdcf0_full_evals
+            .iter()
+            .map(|evals| evals.iter().map(|x| 
+                (0..x.len()).map(|i| Mod2k::new(x[i], modulus)).collect()
+            ).collect())
+            .collect();
+        let rdcf1_incremental_evals_mod2k: Vec<Vec<Vec<Mod2k>>> = rdcf1_full_evals
+            .iter()
+            .map(|evals| evals.iter().map(|x| 
+                (0..x.len()).map(|i| Mod2k::new(x[i], modulus)).collect()
+            ).collect())
+            .collect();
+
+        // Extract reference dpf from the last layer of ldcf1 and sketch it
+        let reference_dcf: Vec<Mod2k> = (0..domain_size).map(|i| {
+            ldcf1_incremental_evals_mod2k[self.config.h1 - 1][i][0]
+        }).collect();
+        let mut reference_dpf: Vec<Mod2k> = (0..domain_size-1).map(|i| {
+            reference_dcf[i] - reference_dcf[i+1]
+        }).collect();
+        reference_dpf.push(Mod2k::zero(modulus));
+        // Now sketch it
+        // Get sketch helper and sketch each ldcf, rdcf relative to the reference
+        let sketch_helper_dcf = match sketch_helper {
+            SketchHelper::DistanceFSS { 
+                sketch_helper_dcf, ..
+            } => &**sketch_helper_dcf,
+            _ => return Err(anyhow!("Sketch helper for distance fss type mismatch!")),
+        };
+
+        let (scale0, scale1) = sketch_helper_dcf.get_helper_vector(&self.barrett_ctx, domain_size)
+            .map_err(|e| anyhow!("Failed to get helper vector: {}", e))?;
+        let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
+            &reference_dpf,
+            domain_size,
+            &scale0,
+            &scale1,
+            &self.barrett_ctx,
+        )?;
+
+        let z0 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector0, &evals_unit_vector0);
+        let z1 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector1, &evals_unit_vector1);
+
+        let sketch_value_ldcf0 = self.sketch_incremental_dcf_shift_payload(
+            &ldcf0_incremental_evals_mod2k, 
+            p+1, 
+            self.config.h1, 
+            -(self.config.delta as isize), // right shift by delta
+            true, 
+            &reference_dpf,
+            &sketch_helper.get_payload_helper_ldcf0()?,
+            prg
+        ).map_err(|e| anyhow!("Failed to sketch incremental ldcf0: {}", e))?;
+        let sketch_value_ldcf1 = self.sketch_incremental_dcf_shift_payload(
+            &ldcf1_incremental_evals_mod2k, 
+            p+1, 
+            self.config.h1, 
+            0, // no shift
+            true, 
+            &reference_dpf,
+            &sketch_helper.get_payload_helper_ldcf1()?,
+            prg
+        ).map_err(|e| anyhow!("Failed to sketch incremental ldcf1: {}", e))?;
+        let sketch_value_rdcf0 = self.sketch_incremental_dcf_shift_payload(
+            &rdcf0_incremental_evals_mod2k, 
+            p+1, 
+            self.config.h1, 
+            1, // left shift by 1
+            true, 
+            &reference_dpf,
+            &sketch_helper.get_payload_helper_rdcf0()?,
+            prg
+        ).map_err(|e| anyhow!("Failed to sketch incremental rdcf0: {}", e))?;
+        let sketch_value_rdcf1 = self.sketch_incremental_dcf_shift_payload(
+            &rdcf1_incremental_evals_mod2k, 
+            p+1, 
+            self.config.h1, 
+            self.config.delta as isize + 1, // left shift by delta+1
+            true, 
+            &reference_dpf,
+            &sketch_helper.get_payload_helper_rdcf1()?,
+            prg
+        ).map_err(|e| anyhow!("Failed to sketch incremental rdcf1: {}", e))?;
+
+        Ok(SketchValues::Lp 
+        { 
+            p, 
+            ldcf0: Box::new(sketch_value_ldcf0), 
+            ldcf1: Box::new(sketch_value_ldcf1), 
+            rdcf0: Box::new(sketch_value_rdcf0), 
+            rdcf1: Box::new(sketch_value_rdcf1), 
+            reference_dpf: (z0, z1) 
+        }
+        )
     }
 
     #[allow(dead_code)]
@@ -258,7 +388,9 @@ impl Sketch {
             element_wise_product_modp(&evals_modp, scale1),
         ))
     }
+}
 
+impl Sketch {
     #[allow(dead_code)]
     fn sketch_incremental_dcf<'a>(
         &'a self,
@@ -286,7 +418,8 @@ impl Sketch {
 
         // Only sketch DCF property at the last layer.
         let last_layer_sketch = {
-            let (scale0, scale1) = sketch_helper.get_helper_vector(barrett_ctx, domain_size);
+            let (scale0, scale1) = sketch_helper.get_helper_vector(barrett_ctx, domain_size)
+                .map_err(|e| anyhow!("Failed to get helper vector: {}", e))?;
             let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
                 &incremental_evals_dpf[height - 1],
                 domain_size,
@@ -341,7 +474,7 @@ impl Sketch {
         height: usize,
         shift: isize,
         ldcf_or_rdcf: bool,
-        sketch_helper: SketchHelper,
+        reference_dpf: &[Mod2k],
         payload_helper: &[Vec<Mod2k>],
         prg: &mut PRG,
     ) -> Result<SketchValues<'a>> {
@@ -385,10 +518,10 @@ impl Sketch {
         let last_layer_shifted = shift_mod2k_vec_payload(last_layer, length, shift, modulus);
         let last_layer_payloads_subtracted: Vec<Vec<Modp>> = (0..length.saturating_sub(1))
             .map(|i| {
-                let rescaled: Vec<Mod2k> = last_layer_shifted
+                let rescaled: Vec<Mod2k> = reference_dpf 
                     .iter()
-                    .zip(payload_helper[i].iter())
-                    .map(|(components, helper)| components[i] * *helper)
+                    .zip(payload_helper.iter())
+                    .map(|(&x, helper)| x * helper[i])
                     .collect();
                 let compare: Vec<Mod2k> = last_layer_shifted
                     .iter()
@@ -406,24 +539,6 @@ impl Sketch {
             rs_pow = element_wise_product_modp(&rs, &rs_pow);
             last_layer_consistency_sketch.push(dot_product_modp(barrett_ctx, &rs_pow, subtracted));
         }
-
-        // Sketch to check whether the last layer is DCF (use first component as base)
-        if !matches!(sketch_helper, SketchHelper::Dcf { .. }) {
-            return Err(anyhow!("Sketch helper for payload sketch must be Dcf"));
-        }
-        let base_last_layer: Vec<Mod2k> = last_layer
-            .iter()
-            .map(|row| *row.get(0).unwrap_or(&Mod2k::zero(modulus)))
-            .collect();
-        let (scale0, scale1) = sketch_helper.get_helper_vector(barrett_ctx, domain_size);
-        let (evals_unit_vector0, evals_unit_vector1) =
-            self.dpf_to_unit_vector(&base_last_layer, domain_size, &scale0, &scale1, barrett_ctx)?;
-
-        let rs_last = sample_modp_vec(domain_size, barrett_ctx, prg);
-        let last_layer_sketch = vec![(
-            dot_product_modp(barrett_ctx, &rs_last, &evals_unit_vector0),
-            dot_product_modp(barrett_ctx, &rs_last, &evals_unit_vector1),
-        )];
 
         // Sketch consistency between levels for each payload component
         let mut consistency_sketches: Vec<Vec<(Modp, Modp)>> = Vec::new();
@@ -488,7 +603,6 @@ impl Sketch {
 
         Ok(SketchValues::DcfPayload {
             length,
-            last_layer: last_layer_sketch,
             last_layer_consistency: last_layer_consistency_sketch,
             consistency: consistency_sketches,
         })
@@ -675,11 +789,7 @@ impl Sketch {
         let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
         let case_2_const = case_2_const_inv.inv().unwrap();
         Ok(SketchHelper::IntervalFSS {
-            sketch_helper_ldcf: Box::new(SketchHelper::Dcf {
-                barrett_ctx: barrett_ctx,
-                inv_value: case_2_const.value(),
-            }),
-            sketch_helper_rdcf: Box::new(SketchHelper::Dcf {
+            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
                 barrett_ctx: barrett_ctx,
                 inv_value: case_2_const.value(),
             }),
@@ -687,6 +797,11 @@ impl Sketch {
     }
 
     fn get_sketch_helper_lp(&self, p: u32) -> Result<SketchHelper> {
+        let barrett_ctx = BarrettCtx::new(self.config.q);
+        let modulus = 1u128 << self.config.h2;
+        let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
+        let case_2_const = case_2_const_inv.inv().unwrap();
+
         let modulus = 1u128 << self.config.h2;
         let domain_size = 1usize << self.config.h1;
         let _delta = self.config.delta;
@@ -758,55 +873,16 @@ impl Sketch {
             &element_wise_subtract_mod2k_vec(&out_payload, &right_payload),
         );
 
-        let to_case_helpers = |v: &[Vec<Mod2k>]| -> (Vec<Vec<u128>>, Vec<Vec<u128>>) {
-            let mut case1_full = Vec::with_capacity(v.len());
-            let mut case2_full = Vec::with_capacity(v.len());
-            for component in v {
-                let mut case1 = Vec::with_capacity(component.len());
-                let mut case2 = Vec::with_capacity(component.len());
-                for val in component {
-                    let as_modp = Modp::new(&barrett_ctx, val.val());
-                    let inv_case1 = as_modp
-                        .inv()
-                        .expect("helper value should be invertible in Modp");
-                    let inv_case2 = (as_modp - modulus_modp)
-                        .inv()
-                        .expect("shifted helper value should be invertible in Modp");
-                    case1.push(inv_case1.value());
-                    case2.push(inv_case2.value());
-                }
-                case1_full.push(case1);
-                case2_full.push(case2);
-            }
-            (case1_full, case2_full)
-        };
 
-        let (ldcf_0_case1, ldcf_0_case2) = to_case_helpers(&ldcf_0_helper);
-        let (ldcf_1_case1, ldcf_1_case2) = to_case_helpers(&ldcf_1_helper);
-        let (rdcf_0_case1, rdcf_0_case2) = to_case_helpers(&rdcf_0_helper);
-        let (rdcf_1_case1, rdcf_1_case2) = to_case_helpers(&rdcf_1_helper);
-
-        Ok(SketchHelper::DistanceFSSPayload {
-            sketch_helper_ldcf0: Box::new(SketchHelper::DcfPayload {
-                barrett_ctx,
-                cases0_full: ldcf_0_case1,
-                cases1_full: ldcf_0_case2,
+        Ok(SketchHelper::DistanceFSS {
+            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
+                barrett_ctx: barrett_ctx,
+                inv_value: case_2_const.value(),
             }),
-            sketch_helper_ldcf1: Box::new(SketchHelper::DcfPayload {
-                barrett_ctx,
-                cases0_full: ldcf_1_case1,
-                cases1_full: ldcf_1_case2,
-            }),
-            sketch_helper_rdcf0: Box::new(SketchHelper::DcfPayload {
-                barrett_ctx,
-                cases0_full: rdcf_0_case1,
-                cases1_full: rdcf_0_case2,
-            }),
-            sketch_helper_rdcf1: Box::new(SketchHelper::DcfPayload {
-                barrett_ctx,
-                cases0_full: rdcf_1_case1,
-                cases1_full: rdcf_1_case2,
-            }),
+            payload_helper_ldcf0: ldcf_0_helper,
+            payload_helper_ldcf1: ldcf_1_helper,
+            payload_helper_rdcf0: rdcf_0_helper,
+            payload_helper_rdcf1: rdcf_1_helper,
         })
     }
 }
