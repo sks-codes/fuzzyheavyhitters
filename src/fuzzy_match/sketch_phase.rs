@@ -128,6 +128,7 @@ impl SketchPhase {
         let rdcf_full_evals = rdcf_key
             .full_domain_incremental_eval(modulus, domain_size)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
+        println!("I'm at here rn");
 
         let ldcf_incremental_evals_mod2k: Vec<Vec<Mod2k>> = ldcf_full_evals
             .iter()

@@ -95,6 +95,74 @@ fn rdcf_eval_rdcf() -> Result<()> {
 }
 
 #[test]
+fn rdcf_full_domain_eval() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
+    let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
+
+    let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(&alpha_bits, &a, &b, MODULUS)?;
+
+    let rdcf_evals0 = rdcf_key0.full_domain_eval(MODULUS, BIT_LENGTH)?;
+    let rdcf_evals1 = rdcf_key1.full_domain_eval(MODULUS, BIT_LENGTH)?;
+
+    let domain_size = 1 << BIT_LENGTH;
+    for x in 0..domain_size {
+        let res = rdcf_evals0[x].clone() - rdcf_evals1[x].clone();
+        if (x as u128) <= ALPHA {
+            assert_eq!(
+                res, a,
+                "[RDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                x, ALPHA, a, res
+            );
+        } else {
+            assert_eq!(
+                res, b,
+                "[RDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                x, ALPHA, b, res
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn rdcf_full_domain_incremental_eval() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
+    let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
+
+    let (rdcf_key0, rdcf_key1) = RdcfKey::gen_rdcf_key(&alpha_bits, &a, &b, MODULUS)?;
+
+    let rdcf_evals0 = rdcf_key0.full_domain_incremental_eval(MODULUS, BIT_LENGTH)?;
+    let rdcf_evals1 = rdcf_key1.full_domain_incremental_eval(MODULUS, BIT_LENGTH)?;
+
+    for level in 1..BIT_LENGTH+1 {
+        let domain_size = 1 << level;
+        let prefix_alpha_bits: Vec<bool> = alpha_bits[..level].to_vec();
+        let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
+        for x in 0..domain_size {
+            let res = rdcf_evals0[level][x].clone() - rdcf_evals1[level][x].clone();
+            if (x as u128) <= prefix_alpha {
+                assert_eq!(
+                    res, a,
+                    "[RDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                    x, ALPHA, a, res
+                );
+            } else {
+                assert_eq!(
+                    res, b,
+                    "[RDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                    x, ALPHA, b, res
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+
+#[test]
 fn rdcf_serialization() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");

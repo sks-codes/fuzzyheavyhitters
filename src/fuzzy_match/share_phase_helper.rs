@@ -3,10 +3,7 @@ use blake3;
 use std::cmp::{max, min};
 
 use crate::{
-    data_structures::{
-        ringvec::RingVec,
-        mod2k::Mod2k,
-    },
+    data_structures::ringvec::RingVec,
     fss::{
         distance::{DistanceFSSEval, DistanceFSSKey},
         interval::{IntervalFSSEval, IntervalFSSKey},
@@ -227,8 +224,6 @@ impl SharePhase {
         let mut keys_1 = Vec::new();
 
         let modulus = 1u128 << self.config.h2;
-        let max_distance_mod2k = Mod2k::new(delta, modulus).pow(p as u128) + 1;
-        let max_distance = max_distance_mod2k.val();
 
         for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
             if alpha > beta || alpha > center || beta < center {

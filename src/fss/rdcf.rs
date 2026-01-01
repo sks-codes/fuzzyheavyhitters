@@ -746,9 +746,9 @@ impl RdcfKey {
         self.cor_words.len()
     }
 
-    pub fn full_domain_eval(&self, modulus: u128, domain_size: usize) -> Result<Vec<RingVec>> {
-        let mut states = vec![self.init_eval(modulus)?; 1 << domain_size];
-        for level in 0..domain_size {
+    pub fn full_domain_eval(&self, modulus: u128, height: usize) -> Result<Vec<RingVec>> {
+        let mut states = vec![self.init_eval(modulus)?; 1 << height];
+        for level in 0..height {
             for i in (0..(1 << level)).rev() {
                 (states[i << 1], states[i << 1 | 1]) =
                     self.expand_prefix(&states[i], modulus)?;
@@ -762,12 +762,12 @@ impl RdcfKey {
     pub fn full_domain_incremental_eval(
         &self,
         modulus: u128,
-        domain_size: usize,
+        height: usize,
     ) -> Result<Vec<Vec<RingVec>>> {
-        let mut states = vec![self.init_eval(modulus)?; 1 << domain_size];
+        let mut states = vec![self.init_eval(modulus)?; 1 << height];
         let mut results: Vec<Vec<RingVec>> = Vec::new();
         results.push(states[..1].iter().map(|x| x.y.clone()).collect());
-        for level in 0..domain_size {
+        for level in 0..height {
             for i in (0..(1 << level)).rev() {
                 (states[i << 1], states[i << 1 | 1]) =
                     self.expand_prefix(&states[i], modulus)?;

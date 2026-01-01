@@ -51,6 +51,7 @@ impl From<ProtocolParameters> for SketchConfig {
     }
 }
 
+#[derive(Debug)]
 pub enum SketchValues<'a> {
     Dcf {
         last_layer: (Modp<'a>, Modp<'a>),

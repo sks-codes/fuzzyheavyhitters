@@ -20,7 +20,7 @@ fn ldcf_expand_prefix() -> Result<()> {
     let mut evals0: Vec<LdcfEval> = vec![ldcf_key0.init_eval(MODULUS)?];
     let mut evals1: Vec<LdcfEval> = vec![ldcf_key1.init_eval(MODULUS)?];
 
-    for level in 1..BIT_LENGTH {
+    for level in 1..BIT_LENGTH+1 {
         let mut next_evals0 = Vec::with_capacity(evals0.len() * 2);
         for eval in evals0.iter() {
             let (left, right) = ldcf_key0.expand_prefix(eval, MODULUS)?;
@@ -66,7 +66,7 @@ fn ldcf_eval_ldcf() -> Result<()> {
 
     let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
 
-    for level in 1..BIT_LENGTH {
+    for level in 1..BIT_LENGTH+1 {
         let domain_size = 1usize << level;
         let prefix_alpha_bits: Vec<bool> = alpha_bits[..level].to_vec();
         let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
@@ -91,6 +91,73 @@ fn ldcf_eval_ldcf() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[test]
+fn ldcf_full_domain_eval() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
+    let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
+
+    let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
+
+    let ldcf_evals0 = ldcf_key0.full_domain_eval(MODULUS, BIT_LENGTH)?;
+    let ldcf_evals1 = ldcf_key1.full_domain_eval(MODULUS, BIT_LENGTH)?;
+
+    let domain_size = 1 << BIT_LENGTH;
+    for x in 0..domain_size {
+        let res = ldcf_evals0[x].clone() - ldcf_evals1[x].clone();
+        if (x as u128) < ALPHA {
+            assert_eq!(
+                res, a,
+                "[LDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                x, ALPHA, a, res
+            );
+        } else {
+            assert_eq!(
+                res, b,
+                "[LDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                x, ALPHA, b, res
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn ldcf_full_domain_incremental_eval() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let a = RingVec::new(vec![1, 2], MODULUS).expect("Cannot create ringvec a");
+    let b = RingVec::new(vec![3, 4], MODULUS).expect("Cannot create ringvec b");
+
+    let (ldcf_key0, ldcf_key1) = LdcfKey::gen_ldcf_key(&alpha_bits, &a, &b, MODULUS)?;
+
+    let ldcf_evals0 = ldcf_key0.full_domain_incremental_eval(MODULUS, BIT_LENGTH)?;
+    let ldcf_evals1 = ldcf_key1.full_domain_incremental_eval(MODULUS, BIT_LENGTH)?;
+
+    for level in 1..BIT_LENGTH+1 {
+        let domain_size = 1 << level;
+        let prefix_alpha_bits: Vec<bool> = alpha_bits[..level].to_vec();
+        let prefix_alpha = bits_to_u128_msb(&prefix_alpha_bits);
+        for x in 0..domain_size {
+            let res = ldcf_evals0[level][x].clone() - ldcf_evals1[level][x].clone();
+            if (x as u128) < prefix_alpha {
+                assert_eq!(
+                    res, a,
+                    "[LDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                    x, ALPHA, a, res
+                );
+            } else {
+                assert_eq!(
+                    res, b,
+                    "[LDCF Full Domain Eval] Fail at position {}, alpha: {:?}, expected {:?}, got {:?}",
+                    x, ALPHA, b, res
+                );
+            }
+        }
+    }
     Ok(())
 }
 
