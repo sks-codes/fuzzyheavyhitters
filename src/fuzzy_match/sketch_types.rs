@@ -54,7 +54,8 @@ impl From<ProtocolParameters> for SketchConfig {
 #[derive(Debug)]
 pub enum SketchValues<'a> {
     Dcf {
-        last_layer: (Modp<'a>, Modp<'a>),
+        last_layer_case0: (Modp<'a>, Modp<'a>),
+        last_layer_case1: (Modp<'a>, Modp<'a>),
         consistency: Vec<(Modp<'a>, Modp<'a>)>,
     },
     Linf {

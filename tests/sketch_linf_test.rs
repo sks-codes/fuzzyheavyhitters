@@ -1,9 +1,14 @@
 use mosaic::{
-    data_structures::ringvec::RingVec, fss::interval::IntervalFSSKey, fuzzy_match::{
-        share_phase::SharePhase, share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod}, sketch_phase::SketchPhase, sketch_types::SketchConfig
+    data_structures::ringvec::RingVec, fss::interval::IntervalFSSKey, 
+    fuzzy_match::{
+        share_phase::SharePhase, 
+        share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod}, 
+        shared_range::SharedRange,
+        sketch_phase::SketchPhase, 
+        sketch_types::{SketchConfig, SketchValues},
     }, randomness::prg::PRG, util::u128_to_bits_msb
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 const H1: usize = 5;
 const H2: usize = 10;
@@ -53,15 +58,172 @@ fn sketch_interval_fss_test() -> Result<()> {
 
     let sketch_helper = sketch_phase.get_sketch_helper()?;
 
+    let full_incremental_eval_ldcf0 = match range0.clone() {
+        SharedRange::IntervalFSS { keys, .. } => keys[0].ldcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
+        _ => return Err(anyhow!("wrong shared_range")),
+    };
+    let full_incremental_eval_ldcf1 = match range1.clone() {
+        SharedRange::IntervalFSS { keys, .. } => keys[0].ldcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
+        _ => return Err(anyhow!("wrong shared_range")),
+    };
+
+    let full_incremental_eval_rdcf0 = match range0.clone() {
+        SharedRange::IntervalFSS { keys, .. } => keys[0].rdcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
+        _ => return Err(anyhow!("wrong shared_range")),
+    };
+    let full_incremental_eval_rdcf1 = match range1.clone() {
+        SharedRange::IntervalFSS { keys, .. } => keys[0].rdcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
+        _ => return Err(anyhow!("wrong shared_range")),
+    };
+
+    for level in 1..H1+1 {
+        let mut res = Vec::new();
+        for i in 0..1<<level {
+            res.push(full_incremental_eval_ldcf0[level][i][0]);
+        }
+        println!("ldcf0 layer {}: {:?}", level, res);
+    }
+
+    for level in 1..H1+1 {
+        let mut res = Vec::new();
+        for i in 0..1<<level {
+            res.push(full_incremental_eval_ldcf1[level][i][0]);
+        }
+        println!("ldcf1 layer {}: {:?}", level, res);
+    }
+
+    for level in 1..H1+1 {
+        let mut res = Vec::new();
+        for i in 0..1<<level {
+            res.push(full_incremental_eval_rdcf0[level][i][0]);
+        }
+        println!("rdcf0 layer {}: {:?}", level, res);
+    }
+
+    for level in 1..H1+1 {
+        let mut res = Vec::new();
+        for i in 0..1<<level {
+            res.push(full_incremental_eval_rdcf1[level][i][0]);
+        }
+        println!("rdcf1 layer {}: {:?}", level, res);
+    }
+
     let seed = [0u8; 16];
     let mut prg0 = PRG::new(Some(&seed), 0);
     let sketch0 = sketch_phase.sketch(&range0, &sketch_helper, &mut prg0)?;
-    println!("lmao");
 
     let mut prg1 = PRG::new(Some(&seed), 0);
     let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
 
-    // println!("{:?}", sketch0);
+    for (sketch_value0, sketch_value1) in sketch0.iter().zip(sketch1.iter()) {
+        let (ldcf0, rdcf0, consistency0) = match sketch_value0 {
+            SketchValues::Linf { ldcf, rdcf, consistency } => 
+                (&**ldcf, &**rdcf, consistency), 
+            _ => return Err(anyhow!("Wrong returned sketch value for sketch_value0")),
+        };
+        let (ldcf1, rdcf1, consistency1) = match sketch_value1 {
+            SketchValues::Linf { ldcf, rdcf, consistency } => 
+                (&**ldcf, &**rdcf, consistency), 
+            _ => return Err(anyhow!("Wrong returned sketch value for sketch_value1")),
+        };
+
+        // Check if ldcf sketch is correct
+        let (last_layer_ldcf0_case0, last_layer_ldcf0_case1, consistency_ldcf0) = match ldcf0 {
+            SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => 
+                (last_layer_case0, last_layer_case1, consistency),
+            _ => return Err(anyhow!("Wrong returned sketch value for ldcf0")),
+        };
+        let (last_layer_ldcf1_case0, last_layer_ldcf1_case1, consistency_ldcf1) = match ldcf1 {
+            SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => 
+                (last_layer_case0, last_layer_case1, consistency),
+            _ => return Err(anyhow!("Wrong returned sketch value for ldcf1")),
+        };
+
+        let z_ast = last_layer_ldcf0_case0.0 - last_layer_ldcf1_case0.0;
+
+        // println!("z_ast: {:?}", z_ast);
+
+        let z2_ast = last_layer_ldcf0_case0.1 - last_layer_ldcf1_case0.1;
+
+        let z_bullet= last_layer_ldcf0_case1.0 - last_layer_ldcf1_case1.1;
+        let z2_bullet= last_layer_ldcf0_case1.1 - last_layer_ldcf1_case1.1;
+
+        let z_case0 = z_ast * z_ast - z2_ast;
+        let z_case1 = z_bullet * z_bullet - z2_bullet;
+        let z_ldcf = z_case0 * z_case1;
+
+        assert_eq!(z_ldcf.value(), 0, "Wrong sketch for last layer ldcf");
+
+        let mut layer = 1usize;
+        for ((z0_ldcf0, z1_ldcf0), (z0_ldcf1, z1_ldcf1)) in consistency_ldcf0.iter().zip(consistency_ldcf1.iter()) {
+            println!("z0_ldcf0: {:?}", z0_ldcf0);
+            println!("z1_ldcf0: {:?}", z1_ldcf0);
+            println!("z0_ldcf1: {:?}", z0_ldcf1);
+            println!("z1_ldcf1: {:?}", z1_ldcf1);
+            let z0 = *z0_ldcf0 - *z0_ldcf1;
+            let z1 = *z1_ldcf0 - *z1_ldcf1;
+            let z = z0 * z1;
+            println!("z0: {:?}", z0);
+            println!("z1: {:?}", z1);
+            assert_eq!(z.value(), 0, "Wrong consistency check at level {} of ldcf", layer);
+            layer += 1;
+        }
+
+        // Check if rdcf sketch is correct
+        let (last_layer_rdcf0_case0, last_layer_rdcf0_case1, consistency_rdcf0) = match rdcf0 {
+            SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => 
+                (last_layer_case0, last_layer_case1, consistency),
+            _ => return Err(anyhow!("Wrong returned sketch value for rdcf0")),
+        };
+        let (last_layer_rdcf1_case0, last_layer_rdcf1_case1, consistency_rdcf1) = match rdcf1 {
+            SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => 
+                (last_layer_case0, last_layer_case1, consistency),
+            _ => return Err(anyhow!("Wrong returned sketch value for rdcf1")),
+        };
+
+        let z_ast = last_layer_rdcf0_case0.0 - last_layer_rdcf1_case0.0;
+
+        // println!("z_ast: {:?}", z_ast);
+
+        let z2_ast = last_layer_rdcf0_case0.1 - last_layer_rdcf1_case0.1;
+
+        let z_bullet= last_layer_rdcf0_case1.0 - last_layer_rdcf1_case1.1;
+        let z2_bullet= last_layer_rdcf0_case1.1 - last_layer_rdcf1_case1.1;
+
+        let z_case0 = z_ast * z_ast - z2_ast;
+        let z_case1 = z_bullet * z_bullet - z2_bullet;
+        let z_rdcf = z_case0 * z_case1;
+
+        assert_eq!(z_rdcf.value(), 0, "Wrong sketch for last layer rdcf");
+
+        let mut layer = 1usize;
+        for ((z0_rdcf0, z1_rdcf0), (z0_rdcf1, z1_rdcf1)) in consistency_rdcf0.iter().zip(consistency_rdcf1.iter()) {
+            println!("z0_rdcf0: {:?}", z0_rdcf0);
+            println!("z1_rdcf0: {:?}", z1_rdcf0);
+            println!("z0_rdcf1: {:?}", z0_rdcf1);
+            println!("z1_rdcf1: {:?}", z1_rdcf1);
+            let z0 = *z0_rdcf0 - *z0_rdcf1;
+            let z1 = *z1_rdcf0 - *z1_rdcf1;
+            let z = z0 * z1;
+            println!("z0: {:?}", z0);
+            println!("z1: {:?}", z1);
+            assert_eq!(z.value(), 0, "Wrong consistency check at level {} of rdcf", layer);
+            layer += 1;
+        }
+
+
+        // println!("z_case0: {:?}", z_case0);
+        // println!("z_case1: {:?}", z_case1);
+
+        // Sketch shift consistency
+        let consistency = *consistency0 - *consistency1;
+        assert_eq!(consistency.value(), 0, "Wrong shift consistency");
+    }
 
     Ok(())
 }
+
+/*
+[Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 97 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 649 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 355 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 0 }]
+[Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 97 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 649 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 355 }, Modp { ctx: BarrettCtx { m: 892270022585185806328177, mu: U256 { hi: 381367028262401, lo: 278199558304884313758889181833495774535 } }, v: 0 }]
+ */
