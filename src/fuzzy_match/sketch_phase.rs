@@ -18,13 +18,13 @@ use crate::{
 };
 use anyhow::{anyhow, ensure, Result};
 
-pub struct Sketch {
+pub struct SketchPhase {
     config: SketchConfig,
     #[allow(dead_code)]
     barrett_ctx: BarrettCtx,
 }
 
-impl Sketch {
+impl SketchPhase {
     pub fn new<C: Into<SketchConfig>>(config: C) -> Self {
         let config = config.into();
         let barrett_ctx = BarrettCtx::new(config.q);
@@ -65,7 +65,7 @@ impl Sketch {
 }
 
 // Helpers for the sketching phase
-impl Sketch {
+impl SketchPhase {
     fn sketch_linf<'a>(
         &'a self,
         shared_range: &SharedRange,
@@ -390,7 +390,7 @@ impl Sketch {
     }
 }
 
-impl Sketch {
+impl SketchPhase {
     #[allow(dead_code)]
     fn sketch_incremental_dcf<'a>(
         &'a self,
@@ -659,7 +659,7 @@ impl Sketch {
     }
 }
 
-impl Sketch {
+impl SketchPhase {
     fn incremental_dcf_to_incremental_dpf(
         &self,
         incremental_evals: &[Vec<Mod2k>],
@@ -782,7 +782,7 @@ fn shift_mod2k_vec_payload(
 }
 
 // This is the bulk of implmentations for get_sketch_helper
-impl Sketch {
+impl SketchPhase {
     fn get_sketch_helper_linf(&self) -> Result<SketchHelper> {
         let barrett_ctx = BarrettCtx::new(self.config.q);
         let modulus = 1u128 << self.config.h2;

@@ -1,6 +1,6 @@
 use mosaic::{
     data_structures::ringvec::RingVec, fss::interval::IntervalFSSKey, fuzzy_match::{
-        share_types::{DictionaryType, DistanceMetric, ShareMethod}, sketch_phase::Sketch, sketch_types::SketchConfig
+        share_types::{DictionaryType, DistanceMetric, ShareMethod}, sketch_phase::SketchPhase, sketch_types::SketchConfig
     }, util::u128_to_bits_msb
 };
 use anyhow::Result;
@@ -44,6 +44,6 @@ fn sketch_interval_fss_test() -> Result<()> {
     // Generate evals for interval fss
     let (fss_key0, fss_key1) = generate_fss_key()?;
     let sketch_config = init_sketch_config()?;
-    let sketch_phase = Sketch::new(sketch_config);
+    let sketch_phase = SketchPhase::new(sketch_config);
     Ok(())    
 }

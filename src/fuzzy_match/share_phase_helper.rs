@@ -3,7 +3,10 @@ use blake3;
 use std::cmp::{max, min};
 
 use crate::{
-    data_structures::ringvec::RingVec,
+    data_structures::{
+        ringvec::RingVec,
+        mod2k::Mod2k,
+    },
     fss::{
         distance::{DistanceFSSEval, DistanceFSSKey},
         interval::{IntervalFSSEval, IntervalFSSKey},
@@ -212,17 +215,20 @@ impl SharePhase {
     }
 
     /// Share using Distance FSS method for L1 distance (p=1, N=2)
-    pub(super) fn share_with_distance_fss_l1(
+    pub(super) fn share_with_distance_fss(
         &self,
         x: &[u128], // The original d-dimensional vector
         left_bound: &[u128],
         right_bound: &[u128],
-        max_distance: u128,
+        delta: u128,
+        p: usize,
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
 
         let modulus = 1u128 << self.config.h2;
+        let max_distance_mod2k = Mod2k::new(delta, modulus).pow(p as u128) + 1;
+        let max_distance = max_distance_mod2k.val();
 
         for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
             if alpha > beta || alpha > center || beta < center {
@@ -243,116 +249,8 @@ impl SharePhase {
                 &center_bits,
                 &alpha_bits,
                 &beta_bits,
-                max_distance,
-                1,
-                modulus,
-            )
-            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
-
-            keys_0.push(fss_key_0);
-            keys_1.push(fss_key_1);
-        }
-
-        Ok((
-            SharedRange::DistanceFSS {
-                keys: keys_0,
-                role: false,
-            },
-            SharedRange::DistanceFSS {
-                keys: keys_1,
-                role: true,
-            },
-        ))
-    }
-
-    /// Share using Distance FSS method for L2 distance (p=2, N=3)
-    pub(super) fn share_with_distance_fss_l2(
-        &self,
-        x: &[u128], // The original d-dimensional vector
-        left_bound: &[u128],
-        right_bound: &[u128],
-        max_distance: u128,
-    ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
-        let mut keys_0 = Vec::new();
-        let mut keys_1 = Vec::new();
-
-        let modulus = 1u128 << self.config.h2;
-
-        for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
-            if alpha > beta || alpha > center || beta < center {
-                return Err(SharePhaseError::InvalidRange(format!(
-                    "Left bound {} cannot be greater than right bound {}",
-                    alpha, beta
-                )));
-            }
-
-            // Convert bounds to bits representation
-            let alpha_bits = u128_to_bits_msb(alpha, self.config.h1);
-            let beta_bits = u128_to_bits_msb(beta, self.config.h1);
-            let center_bits = u128_to_bits_msb(center, self.config.h1);
-
-            // Create Distance FSS keys for both servers
-            let (fss_key_0, fss_key_1) = DistanceFSSKey::gen_distance_fss_key(
-                center,
-                &center_bits,
-                &alpha_bits,
-                &beta_bits,
-                max_distance,
-                2,
-                modulus,
-            )
-            .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;
-
-            keys_0.push(fss_key_0);
-            keys_1.push(fss_key_1);
-        }
-
-        Ok((
-            SharedRange::DistanceFSS {
-                keys: keys_0,
-                role: false,
-            },
-            SharedRange::DistanceFSS {
-                keys: keys_1,
-                role: true,
-            },
-        ))
-    }
-
-    /// Share using Distance FSS method for L3 distance (p=3, N=4)
-    pub(super) fn share_with_distance_fss_l3(
-        &self,
-        x: &[u128], // The original d-dimensional vector
-        left_bound: &[u128],
-        right_bound: &[u128],
-        max_distance: u128,
-    ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
-        let mut keys_0 = Vec::new();
-        let mut keys_1 = Vec::new();
-
-        let modulus = 1u128 << self.config.h2;
-
-        for ((&alpha, &beta), &center) in left_bound.iter().zip(right_bound.iter()).zip(x.iter()) {
-            if alpha > beta || alpha > center || beta < center {
-                return Err(SharePhaseError::InvalidRange(format!(
-                    "Left bound {} cannot be greater than right bound {}",
-                    alpha, beta
-                )));
-            }
-
-            // Convert bounds to bits representation
-            let alpha_bits = u128_to_bits_msb(alpha, self.config.h1);
-            let beta_bits = u128_to_bits_msb(beta, self.config.h1);
-            let center_bits = u128_to_bits_msb(center, self.config.h1);
-
-            // Create Distance FSS keys for both servers
-            let (fss_key_0, fss_key_1) = DistanceFSSKey::gen_distance_fss_key(
-                center,
-                &center_bits,
-                &alpha_bits,
-                &beta_bits,
-                max_distance,
-                3,
+                delta,
+                p,
                 modulus,
             )
             .map_err(|e| SharePhaseError::IntervalFSSError(e.to_string()))?;

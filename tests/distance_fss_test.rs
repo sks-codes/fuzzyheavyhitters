@@ -7,17 +7,16 @@ use mosaic::{
 const ALPHA: u128 = 6;
 const BETA: u128 = 26;
 const X: u128 = 18;
-const P: usize = 1; // N = P + 1
 const BIT_LENGTH: usize = 5;
 const MODULUS: u128 = 1 << 20;
-const MAX_DISTANCE: u128 = 1000;
+const DELTA: u128 = 8;
 
-fn expected_distance(prefix: u128, level: usize) -> u128 {
+fn expected_distance(prefix: u128, level: usize, max_distance: u128, p: usize) -> u128 {
     let alpha_prefix = bits_to_u128_msb(&u128_to_bits_msb(ALPHA, BIT_LENGTH)[..level]);
     let beta_prefix = bits_to_u128_msb(&u128_to_bits_msb(BETA, BIT_LENGTH)[..level]);
     let x_prefix = bits_to_u128_msb(&u128_to_bits_msb(X, BIT_LENGTH)[..level]);
     if prefix < alpha_prefix || prefix > beta_prefix {
-        return MAX_DISTANCE % MODULUS;
+        return max_distance % MODULUS;
     }
 
     let remaining = BIT_LENGTH - level;
@@ -26,28 +25,30 @@ fn expected_distance(prefix: u128, level: usize) -> u128 {
 
     if prefix < x_prefix {
         debug_assert!(X >= t_max);
-        (X - t_max).pow(P as u32) % MODULUS
+        (X - t_max).pow(p as u32) % MODULUS
     } else if prefix > x_prefix {
         debug_assert!(t_min >= X);
-        (t_min - X).pow(P as u32) % MODULUS
+        (t_min - X).pow(p as u32) % MODULUS
     } else {
         0
     }
 }
 
 #[test]
-fn distance_fss_expand_prefix() -> Result<()> {
+fn distance_fss_expand_prefix_l1() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
     let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
+    let p = 1usize;
+    let max_distance = DELTA.pow(p as u32) + 1;
 
     let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
         X,
         &x_bits,
         &alpha_bits,
         &beta_bits,
-        MAX_DISTANCE,
-        P,
+        DELTA,
+        p,
         MODULUS,
     )?;
 
@@ -89,14 +90,14 @@ fn distance_fss_expand_prefix() -> Result<()> {
             let prefix_val = bits_to_u128_msb(prefix_bits);
             let res0 = evals0[i]
                 .1
-                .eval(prefix_bits, BIT_LENGTH, MODULUS, P)?
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, p)?
                 % MODULUS;
             let res1 = evals1[i]
                 .1
-                .eval(prefix_bits, BIT_LENGTH, MODULUS, P)?
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, p)?
                 % MODULUS;
             let res = (res0 + MODULUS - res1) % MODULUS;
-            let expected = expected_distance(prefix_val, level);
+            let expected = expected_distance(prefix_val, level, max_distance, p);
             assert_eq!(
                 res, expected,
                 "[DistanceFSS] Fail at level {level}, position {i}, prefix {prefix_val}, expected {expected}, got {res}"
@@ -107,18 +108,94 @@ fn distance_fss_expand_prefix() -> Result<()> {
 }
 
 #[test]
-fn distance_fss_eval() -> Result<()> {
+fn distance_fss_expand_prefix_l2() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
     let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
+    let p = 2usize;
+    let max_distance = DELTA.pow(p as u32) + 1;
 
     let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
         X,
         &x_bits,
         &alpha_bits,
         &beta_bits,
-        MAX_DISTANCE,
-        P,
+        DELTA,
+        p,
+        MODULUS,
+    )?;
+
+    let mut evals0: Vec<(Vec<bool>, DistanceFSSEval)> =
+        vec![(Vec::new(), key0.init_eval(MODULUS)?)];
+    let mut evals1: Vec<(Vec<bool>, DistanceFSSEval)> =
+        vec![(Vec::new(), key1.init_eval(MODULUS)?)];
+
+    for level in 1..BIT_LENGTH {
+        let mut next0 = Vec::with_capacity(evals0.len() * 2);
+        let mut next1 = Vec::with_capacity(evals1.len() * 2);
+
+        for (prefix, eval) in evals0.iter() {
+            let (left, right) = key0.expand_prefix(eval, MODULUS)?;
+            let mut left_prefix = prefix.clone();
+            left_prefix.push(false);
+            let mut right_prefix = prefix.clone();
+            right_prefix.push(true);
+            next0.push((left_prefix, left));
+            next0.push((right_prefix, right));
+        }
+
+        for (prefix, eval) in evals1.iter() {
+            let (left, right) = key1.expand_prefix(eval, MODULUS)?;
+            let mut left_prefix = prefix.clone();
+            left_prefix.push(false);
+            let mut right_prefix = prefix.clone();
+            right_prefix.push(true);
+            next1.push((left_prefix, left));
+            next1.push((right_prefix, right));
+        }
+
+        evals0 = next0;
+        evals1 = next1;
+
+        let domain_size = 1usize << level;
+        for i in 0..domain_size {
+            let prefix_bits = &evals0[i].0;
+            let prefix_val = bits_to_u128_msb(prefix_bits);
+            let res0 = evals0[i]
+                .1
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, p)?
+                % MODULUS;
+            let res1 = evals1[i]
+                .1
+                .eval(prefix_bits, BIT_LENGTH, MODULUS, p)?
+                % MODULUS;
+            let res = (res0 + MODULUS - res1) % MODULUS;
+            let expected = expected_distance(prefix_val, level, max_distance, p);
+            assert_eq!(
+                res, expected,
+                "[DistanceFSS] Fail at level {level}, position {i}, prefix {prefix_val}, expected {expected}, got {res}"
+            );
+        }
+    }
+    Ok(())
+}
+
+
+#[test]
+fn distance_fss_eval_l1() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
+    let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
+    let p = 1usize;
+    let max_distance = DELTA.pow(p as u32) + 1;
+
+    let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
+        X,
+        &x_bits,
+        &alpha_bits,
+        &beta_bits,
+        DELTA,
+        p,
         MODULUS,
     )?;
 
@@ -130,11 +207,11 @@ fn distance_fss_eval() -> Result<()> {
 
         let t_u128 = t as u128;
         let expected = if t_u128 < ALPHA || t_u128 > BETA {
-            MAX_DISTANCE % MODULUS
+            max_distance % MODULUS
         } else if t_u128 < X {
-            (X - t_u128).pow(P as u32) % MODULUS
+            (X - t_u128).pow(p as u32) % MODULUS
         } else if t_u128 > X {
-            (t_u128 - X).pow(P as u32) % MODULUS
+            (t_u128 - X).pow(p as u32) % MODULUS
         } else {
             0
         };
@@ -149,6 +226,51 @@ fn distance_fss_eval() -> Result<()> {
 }
 
 #[test]
+fn distance_fss_eval_l2() -> Result<()> {
+    let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
+    let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
+    let x_bits = u128_to_bits_msb(X, BIT_LENGTH);
+    let p = 2usize;
+    let max_distance = DELTA.pow(p as u32) + 1;
+
+    let (key0, key1) = DistanceFSSKey::gen_distance_fss_key(
+        X,
+        &x_bits,
+        &alpha_bits,
+        &beta_bits,
+        DELTA,
+        p,
+        MODULUS,
+    )?;
+
+    for t in 0..(1 << BIT_LENGTH) {
+        let t_bits = u128_to_bits_msb(t as u128, BIT_LENGTH);
+        let res0 = key0.eval_distance_fss(&t_bits, BIT_LENGTH, MODULUS)?;
+        let res1 = key1.eval_distance_fss(&t_bits, BIT_LENGTH, MODULUS)?;
+        let res = (res0 + MODULUS - res1 % MODULUS) % MODULUS;
+
+        let t_u128 = t as u128;
+        let expected = if t_u128 < ALPHA || t_u128 > BETA {
+            max_distance % MODULUS
+        } else if t_u128 < X {
+            (X - t_u128).pow(p as u32) % MODULUS
+        } else if t_u128 > X {
+            (t_u128 - X).pow(p as u32) % MODULUS
+        } else {
+            0
+        };
+
+        assert_eq!(
+            res, expected,
+            "[DistanceFSS] Fail at position {t}, expected {expected}, got {res}"
+        );
+    }
+
+    Ok(())
+}
+
+
+#[test]
 fn distance_fss_serialization() -> Result<()> {
     let alpha_bits = u128_to_bits_msb(ALPHA, BIT_LENGTH);
     let beta_bits = u128_to_bits_msb(BETA, BIT_LENGTH);
@@ -159,8 +281,8 @@ fn distance_fss_serialization() -> Result<()> {
         &x_bits,
         &alpha_bits,
         &beta_bits,
-        MAX_DISTANCE,
-        P,
+        DELTA,
+        1,
         MODULUS,
     )?;
 

@@ -116,43 +116,15 @@ impl SharePhase {
                 }
             }
             ShareMethod::FSS => match self.config.metric {
-                DistanceMetric::LInfinity => {
-                    self.share_with_interval_fss(&left_bound, &right_bound)
-                }
-                DistanceMetric::Lp { p } => {
-                    if p > 3 {
-                        return Err(SharePhaseError::InvalidRange(
-                            "Distance FSS only supports p <= 3 for practical experiments"
-                                .to_string(),
-                        ));
-                    }
-                    let modulus_mask = (1u128 << self.config.h2) - 1;
-                    match p {
-                        1 => self.share_with_distance_fss_l1(
-                            &x,
-                            &left_bound,
-                            &right_bound,
-                            (delta + 1) & modulus_mask,
-                        ),
-                        2 => self.share_with_distance_fss_l2(
-                            &x,
-                            &left_bound,
-                            &right_bound,
-                            (delta * delta + 1) & modulus_mask,
-                        ),
-                        3 => self.share_with_distance_fss_l3(
-                            &x,
-                            &left_bound,
-                            &right_bound,
-                            (((delta * delta) & modulus_mask) * delta + 1) & modulus_mask,
-                        ),
-                        _ => {
-                            return Err(SharePhaseError::InvalidRange(
-                                "Distance FSS only supports p in range 1-3".to_string(),
-                            ))
-                        }
-                    }
-                }
+                DistanceMetric::LInfinity => self.share_with_interval_fss(&left_bound, &right_bound),
+                DistanceMetric::Lp { p } => 
+                    self.share_with_distance_fss(
+                        &x,
+                        &left_bound,
+                        &right_bound,
+                        delta, 
+                        p as usize,
+                    ),
             },
         }
     }
