@@ -163,9 +163,15 @@ impl SketchPhase {
         // Checking whether last level of ldcf is shifted by 2*delta from last level of rdcf
         let ldcf_last_layer = &ldcf_incremental_evals_mod2k[self.config.h1]; // Critical point x - delta - 1
         let rdcf_last_layer = &rdcf_incremental_evals_mod2k[self.config.h1]; // Critical point x + delta
+        // Convert last layers to dpf
+        let ldcf_last_layer_dpf = self.shifted_dcf_to_dpf(ldcf_last_layer, domain_size, 0)
+            .map_err(|e| anyhow!("Failed to convert ldcf_last_layer into dpf: {}", e))?;
+        let rdcf_last_layer_dpf = self.shifted_dcf_to_dpf(rdcf_last_layer, domain_size, 0)
+            .map_err(|e| anyhow!("Failed to convert rdcf_last_layer into dpf: {}", e))?;
+
         let subtracted = self.subtract_shifted_mod2k_to_modp(
-            rdcf_last_layer,
-            ldcf_last_layer,
+            &rdcf_last_layer_dpf,
+            &ldcf_last_layer_dpf,
             (2 * delta + 1) as usize,
             &self.barrett_ctx,
         ).map_err(|e| anyhow!("Failed to subtract shifted mod2k vectors for linf consistency: {}", e))?;
@@ -450,7 +456,6 @@ impl SketchPhase {
 
         // Sketch consistency between earlier levels
         let mut consistency_sketches = Vec::new();
-        println!();
         for level in 1..self.config.h1 {
             let evals_i_duplicated = duplicate_vector_mod2k(&incremental_evals[level]);
             let next = &incremental_evals[level + 1];
@@ -511,9 +516,6 @@ impl SketchPhase {
                 .map_err(|e| anyhow!("Failed to compute DCF consistency z_ast at level {}: {}", level, e))?;
             let z_bullet = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case1)
                 .map_err(|e| anyhow!("Failed to compute DCF consistency z_bullet at level {}: {}", level, e))?;
-
-            println!("z_ast: {:?}", z_ast);
-            println!("z_bullet: {:?}", z_bullet);
 
             consistency_sketches.push((z_ast, z_bullet));
         }

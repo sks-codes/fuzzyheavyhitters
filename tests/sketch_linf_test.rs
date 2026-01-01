@@ -58,56 +58,6 @@ fn sketch_interval_fss_test() -> Result<()> {
 
     let sketch_helper = sketch_phase.get_sketch_helper()?;
 
-    let full_incremental_eval_ldcf0 = match range0.clone() {
-        SharedRange::IntervalFSS { keys, .. } => keys[0].ldcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
-        _ => return Err(anyhow!("wrong shared_range")),
-    };
-    let full_incremental_eval_ldcf1 = match range1.clone() {
-        SharedRange::IntervalFSS { keys, .. } => keys[0].ldcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
-        _ => return Err(anyhow!("wrong shared_range")),
-    };
-
-    let full_incremental_eval_rdcf0 = match range0.clone() {
-        SharedRange::IntervalFSS { keys, .. } => keys[0].rdcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
-        _ => return Err(anyhow!("wrong shared_range")),
-    };
-    let full_incremental_eval_rdcf1 = match range1.clone() {
-        SharedRange::IntervalFSS { keys, .. } => keys[0].rdcf_key().full_domain_incremental_eval(1u128 << H2, H1)?,
-        _ => return Err(anyhow!("wrong shared_range")),
-    };
-
-    for level in 1..H1+1 {
-        let mut res = Vec::new();
-        for i in 0..1<<level {
-            res.push(full_incremental_eval_ldcf0[level][i][0]);
-        }
-        println!("ldcf0 layer {}: {:?}", level, res);
-    }
-
-    for level in 1..H1+1 {
-        let mut res = Vec::new();
-        for i in 0..1<<level {
-            res.push(full_incremental_eval_ldcf1[level][i][0]);
-        }
-        println!("ldcf1 layer {}: {:?}", level, res);
-    }
-
-    for level in 1..H1+1 {
-        let mut res = Vec::new();
-        for i in 0..1<<level {
-            res.push(full_incremental_eval_rdcf0[level][i][0]);
-        }
-        println!("rdcf0 layer {}: {:?}", level, res);
-    }
-
-    for level in 1..H1+1 {
-        let mut res = Vec::new();
-        for i in 0..1<<level {
-            res.push(full_incremental_eval_rdcf1[level][i][0]);
-        }
-        println!("rdcf1 layer {}: {:?}", level, res);
-    }
-
     let seed = [0u8; 16];
     let mut prg0 = PRG::new(Some(&seed), 0);
     let sketch0 = sketch_phase.sketch(&range0, &sketch_helper, &mut prg0)?;
@@ -156,15 +106,9 @@ fn sketch_interval_fss_test() -> Result<()> {
 
         let mut layer = 1usize;
         for ((z0_ldcf0, z1_ldcf0), (z0_ldcf1, z1_ldcf1)) in consistency_ldcf0.iter().zip(consistency_ldcf1.iter()) {
-            println!("z0_ldcf0: {:?}", z0_ldcf0);
-            println!("z1_ldcf0: {:?}", z1_ldcf0);
-            println!("z0_ldcf1: {:?}", z0_ldcf1);
-            println!("z1_ldcf1: {:?}", z1_ldcf1);
             let z0 = *z0_ldcf0 - *z0_ldcf1;
             let z1 = *z1_ldcf0 - *z1_ldcf1;
             let z = z0 * z1;
-            println!("z0: {:?}", z0);
-            println!("z1: {:?}", z1);
             assert_eq!(z.value(), 0, "Wrong consistency check at level {} of ldcf", layer);
             layer += 1;
         }
@@ -198,15 +142,9 @@ fn sketch_interval_fss_test() -> Result<()> {
 
         let mut layer = 1usize;
         for ((z0_rdcf0, z1_rdcf0), (z0_rdcf1, z1_rdcf1)) in consistency_rdcf0.iter().zip(consistency_rdcf1.iter()) {
-            println!("z0_rdcf0: {:?}", z0_rdcf0);
-            println!("z1_rdcf0: {:?}", z1_rdcf0);
-            println!("z0_rdcf1: {:?}", z0_rdcf1);
-            println!("z1_rdcf1: {:?}", z1_rdcf1);
             let z0 = *z0_rdcf0 - *z0_rdcf1;
             let z1 = *z1_rdcf0 - *z1_rdcf1;
             let z = z0 * z1;
-            println!("z0: {:?}", z0);
-            println!("z1: {:?}", z1);
             assert_eq!(z.value(), 0, "Wrong consistency check at level {} of rdcf", layer);
             layer += 1;
         }
@@ -218,6 +156,7 @@ fn sketch_interval_fss_test() -> Result<()> {
         // Sketch shift consistency
         let consistency = *consistency0 - *consistency1;
         assert_eq!(consistency.value(), 0, "Wrong shift consistency");
+        println!("Checked consistency shift!");
     }
 
     Ok(())
