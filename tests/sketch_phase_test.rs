@@ -347,10 +347,10 @@ fn sketch_distance_fss_test() -> Result<()> {
                 .collect();
             println!("ldcf1 last layer reconstructed (payloads): {:?}", reconstructed);
         }
-        // check_payload("ldcf0", ldcf0_0, ldcf0_1)?;
+        check_payload("ldcf0", ldcf0_0, ldcf0_1)?;
         check_payload("ldcf1", ldcf1_0, ldcf1_1)?;
-        // check_payload("rdcf0", rdcf0_0, rdcf0_1)?;
-        // check_payload("rdcf1", rdcf1_0, rdcf1_1)?;
+        check_payload("rdcf0", rdcf0_0, rdcf0_1)?;
+        check_payload("rdcf1", rdcf1_0, rdcf1_1)?;
     }
 
     Ok(())

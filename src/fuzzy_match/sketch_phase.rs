@@ -271,7 +271,7 @@ impl SketchPhase {
         let sketch_value_ldcf0 = self.sketch_incremental_dcf_shift_payload(
             &ldcf0_full_evals, 
             p+1, 
-            -(self.config.delta as isize), // right shift by delta
+            self.config.delta as isize, // reference_dpf left shift by delta
             true, 
             &reference_dpf,
             &sketch_helper.get_payload_helper_ldcf0()?,
@@ -289,7 +289,7 @@ impl SketchPhase {
         let sketch_value_rdcf0 = self.sketch_incremental_dcf_shift_payload(
             &rdcf0_full_evals, 
             p+1, 
-            1, // left shift by 1
+            -1, // reference_dpf right shift by 1
             false, 
             &reference_dpf,
             &sketch_helper.get_payload_helper_rdcf0()?,
@@ -298,7 +298,7 @@ impl SketchPhase {
         let sketch_value_rdcf1 = self.sketch_incremental_dcf_shift_payload(
             &rdcf1_full_evals, 
             p+1, 
-            self.config.delta as isize + 1, // left shift by delta+1
+            -(self.config.delta as isize + 1), // reference_dpf right shift by delta+1
             false, 
             &reference_dpf,
             &sketch_helper.get_payload_helper_rdcf1()?,
@@ -565,16 +565,16 @@ impl SketchPhase {
         let last_layer = &incremental_evals[self.config.h1];
         let last_layer_dpf = self.dcf_to_dpf_ringvec(last_layer, length, domain_size)
             .map_err(|e| anyhow!("Failed to convert last layer into dcf: {}", e))?;
-        let last_layer_shifted = shift_mod2k_ringvec(&last_layer_dpf, length, shift, modulus)
-            .map_err(|e| anyhow!("Failed to shift last layer dpf: {}", e))?;
+        let reference_dpf_shifted = shift_mod2k(reference_dpf, shift, modulus)
+            .map_err(|e| anyhow!("Failed to shift reference dpf: {}", e))?;
         let last_layer_payloads_subtracted: Vec<Vec<Modp>> = (0..length)
             .map(|i| -> Result<Vec<Modp>> {
-                let rescaled: Vec<Mod2k> = reference_dpf 
+                let rescaled: Vec<Mod2k> = reference_dpf_shifted 
                     .iter()
                     .zip(payload_helper[i].iter())
                     .map(|(&x, helper)| x * *helper)
                     .collect();
-                let compare: Vec<Mod2k> = last_layer_shifted
+                let compare: Vec<Mod2k> = last_layer_dpf
                     .iter()
                     .map(|components| Mod2k::new(components[i], modulus))
                     .collect();
@@ -755,7 +755,39 @@ fn sample_modp_vec<'a>(
         .collect()
 }
 
-fn shift_mod2k_ringvec(
+fn shift_mod2k(
+    input: &[Mod2k],
+    shift: isize,
+    modulus: u128,
+) -> Result<Vec<Mod2k>> {
+    // CAUTION: ONLY WORKS FOR DPF!!!
+    let len = input.len();
+    let mut out: Vec<Mod2k> = Vec::with_capacity(len);
+    if shift > 0 {
+        let s = (shift as usize).min(len);
+        if s < len {
+            out.extend_from_slice(&input[s..]);
+        }
+        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(s));
+    } else if shift < 0 {
+        let s = (-shift as usize).min(len);
+        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(s));
+        if s < len {
+            out.extend_from_slice(&input[..len - s]);
+        }
+    } else {
+        out.extend_from_slice(input);
+    }
+    if out.len() > len {
+        out.truncate(len);
+    } else if out.len() < len {
+        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(len - out.len()));
+    }
+    Ok(out)
+}
+
+#[allow(unused)]
+fn shift_ringvec(
     input: &[RingVec],
     length: usize,
     shift: isize,
@@ -803,14 +835,12 @@ impl SketchPhase {
     }
 
     fn get_sketch_helper_lp(&self, p: u32) -> Result<SketchHelper> {
-        let barrett_ctx = BarrettCtx::new(self.config.q);
         let modulus = 1u128 << self.config.h2;
-        let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
+        let case_2_const_inv = Modp::one(&self.barrett_ctx) - Modp::new(&self.barrett_ctx, modulus);
         let case_2_const = case_2_const_inv.inv().unwrap();
 
         let modulus = 1u128 << self.config.h2;
         let domain_size = 1usize << self.config.h1;
-        let _delta = self.config.delta;
         let barrett_ctx = BarrettCtx::new(self.config.q);
         let p_usize = p as usize;
 
@@ -865,6 +895,13 @@ impl SketchPhase {
             .map_err(|e| anyhow!("Failed to subtract out_payload and left_payload: {}", e))?;
         let ldcf_0_helper = element_wise_subtract_mod2k_vec(&out_minus_left, &zero_payload)
             .map_err(|e| anyhow!("Failed to compute ldcf0 helper: {}", e))?;
+        let ldcf_0_helper = ldcf_0_helper // Shift left by delta+1 
+            .iter()
+            .map(|v| 
+                shift_mod2k(v, self.config.delta as isize + 1, modulus)
+                    .map_err(|e| anyhow!("Failed to shift ldcf_0_helper: {}", e))
+            )
+            .collect::<Result<Vec<_>>>()?;
 
         // Helper vectors for ldcf1: left_payload - zero_payload.
         let ldcf_1_helper = element_wise_subtract_mod2k_vec(&left_payload, &zero_payload)
@@ -872,8 +909,9 @@ impl SketchPhase {
         let ldcf_1_helper: Vec<Vec<Mod2k>> = ldcf_1_helper // Shift left by 1 because of dpf transformation
             .iter()
             .map(|v| {
-                [v[1..].to_vec(), vec![Mod2k::zero(modulus); 1]].concat()
-            }).collect();
+                shift_mod2k(v, 1, modulus)
+                    .map_err(|e| anyhow!("Failed to shift ldcf_1_helper: {}", e))
+            }).collect::<Result<Vec<_>>>()?;
         println!("Length of ldcf_1_helper: {}", ldcf_1_helper.len());
 
         // Helper vectors for rdcf0: zero_payload - right_payload.
@@ -885,7 +923,12 @@ impl SketchPhase {
             .map_err(|e| anyhow!("Failed to subtract out_payload and right_payload: {}", e))?;
         let rdcf_1_helper = element_wise_subtract_mod2k_vec(&zero_payload, &out_minus_right)
             .map_err(|e| anyhow!("Failed to compute rdcf1 helper: {}", e))?;
-
+        let rdcf_1_helper: Vec<Vec<Mod2k>> = rdcf_1_helper
+            .iter()
+            .map(|v| {
+                shift_mod2k(v, -(self.config.delta as isize), modulus)
+                    .map_err(|e| anyhow!("Failed to shift rdcf_1_helper: {}", e))
+            }).collect::<Result<Vec<_>>>()?;
 
         Ok(SketchHelper::DistanceFSS {
             sketch_helper_dcf: Box::new(SketchHelper::Dcf {
