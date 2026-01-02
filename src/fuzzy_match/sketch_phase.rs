@@ -1,23 +1,26 @@
 use crate::{
+    channel::CommTrackingChannel,
     data_structures::{
         mod2k::Mod2k,
         modp::{BarrettCtx, Modp},
         ringvec::RingVec,
     },
     fss::{
-        distance::{DistanceFSSKey, BINOMIAL_COEFFICIENTS},
+        distance::{BINOMIAL_COEFFICIENTS, DistanceFSSKey},
         interval::IntervalFSSKey,
     },
     fuzzy_match::{
-        share_phase::SharePhaseError,
-        share_types::{DistanceMetric, ShareMethod},
-        shared_range::SharedRange,
-        sketch_helper::SketchHelper,
+        share_phase::SharePhaseError, 
+        share_types::{DistanceMetric, ShareMethod}, 
+        shared_range::SharedRange, 
+        shared_sketch::{SketchData, TripleModp}, 
+        sketch_helper::SketchHelper, 
         sketch_types::{SketchConfig, SketchValues},
     },
     randomness::prg::PRG,
 };
 use anyhow::{anyhow, ensure, Result};
+use scuttlebutt::AbstractChannel;
 
 pub struct SketchPhase {
     config: SketchConfig,
@@ -60,8 +63,36 @@ impl SketchPhase {
         }
     }
 
-    pub fn get_payload_helper(&self) -> Result<Vec<Vec<Mod2k>>> {
-        unimplemented!()
+    pub fn get_sketch_data<'a>(&self, prg: &mut PRG) -> Result<SketchData<'a>> {
+        match &self.config.method {
+            ShareMethod::FSS => {
+                match &self.config.metric {
+                    DistanceMetric::LInfinity => self.get_sketch_data_linf(prg),
+                    DistanceMetric::Lp { p } => self.get_sketch_data_lp(prg),
+                }
+            }
+            _ => Err(anyhow!("get_sketch_data not supported for this method. Only support ShareMethod::FSS")), 
+        }
+    }
+
+    /// Verify the sketch using pre-shared Beaver triples over an MPC channel.
+    /// Returns a collection of zero-tests (shares) that should all open to 0 when combined.
+    pub fn verify<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        match (&self.config.method, &self.config.metric) {
+            (ShareMethod::FSS, DistanceMetric::LInfinity) => {
+                self.verify_linf(sketch_value, sketch_data, channel, is_first)
+            }
+            (ShareMethod::FSS, DistanceMetric::Lp { .. }) => {
+                self.verify_lp(sketch_value, sketch_data, channel, is_first)
+            }
+            _ => Err(anyhow!("Sketch verification not supported for this configuration")),
+        }
     }
 }
 
@@ -176,7 +207,8 @@ impl SketchPhase {
             (2 * delta + 1) as usize,
             &self.barrett_ctx,
         ).map_err(|e| anyhow!("Failed to subtract shifted mod2k vectors for linf consistency: {}", e))?;
-        let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+        let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg)
+            .map_err(|e| anyhow!("Failed to sample random vector for linf consistency: {}", e))?;
         let z_consistency = dot_product_modp(&self.barrett_ctx, &subtracted, &rs)
             .map_err(|e| anyhow!("Failed to compute linf consistency dot product: {}", e))?;
 
@@ -245,7 +277,8 @@ impl SketchPhase {
                 &self.barrett_ctx,
             )?;
 
-            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg)
+                .map_err(|e| anyhow!("Failed to sample random vector for reference dpf sketch: {}", e))?;
 
             let rs2 = element_wise_product_modp(&rs, &rs)
                 .map_err(|e| anyhow!("Failed to square random vector for last layer sketch: {}", e))?;
@@ -265,8 +298,6 @@ impl SketchPhase {
                 (z_bullet, z2_bullet),
             )
         };
-
-        println!("Payload helper: {:?}", sketch_helper.get_payload_helper_ldcf1());
 
         let sketch_value_ldcf0 = self.sketch_incremental_dcf_shift_payload(
             &ldcf0_full_evals, 
@@ -317,7 +348,485 @@ impl SketchPhase {
         }
         )
     }
+}
 
+// This is the bulk of implmentations for get_sketch_helper
+impl SketchPhase {
+    fn get_sketch_helper_linf(&self) -> Result<SketchHelper> {
+        let barrett_ctx = BarrettCtx::new(self.config.q);
+        let modulus = 1u128 << self.config.h2;
+        let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
+        let case_2_const = case_2_const_inv.inv().unwrap();
+        Ok(SketchHelper::IntervalFSS {
+            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
+                barrett_ctx: barrett_ctx,
+                inv_value: case_2_const.value(),
+            }),
+        })
+    }
+
+    fn get_sketch_helper_lp(&self, p: u32) -> Result<SketchHelper> {
+        let modulus = 1u128 << self.config.h2;
+        let case_2_const_inv = Modp::one(&self.barrett_ctx) - Modp::new(&self.barrett_ctx, modulus);
+        let case_2_const = case_2_const_inv.inv().unwrap();
+
+        let modulus = 1u128 << self.config.h2;
+        let domain_size = 1usize << self.config.h1;
+        let barrett_ctx = BarrettCtx::new(self.config.q);
+        let p_usize = p as usize;
+
+        // zero_payload
+        let zero_payload: Vec<Vec<Mod2k>> = (0..=p_usize)
+            .map(|_| (0..domain_size).map(|_| Mod2k::zero(modulus)).collect())
+            .collect();
+
+        // Base vectors for degree-1 (p = 1) polynomial payloads.
+        let mut pow_vec: Vec<Vec<Mod2k>> = (0..=p_usize)
+            .map(|i| {
+                (0..domain_size)
+                    .map(|x| {
+                        Mod2k::new(x as u128, modulus).pow(i as u128)
+                            * BINOMIAL_COEFFICIENTS[p_usize][i]
+                    })
+                    .collect()
+            })
+            .collect();
+        for i in 0..=p_usize {
+            if (i & 1) == 1 {
+                pow_vec[i] = pow_vec[i]
+                    .iter()
+                    .map(|x| Mod2k::zero(modulus) - *x)
+                    .collect();
+            }
+        }
+
+        // right_payload corresponds to (1, -x).
+        let right_payload = pow_vec.clone();
+
+        for i in 0..=p_usize {
+            if ((i & 1) == 1) ^ (((p_usize + 1 - i) & 1) == 0) {
+                pow_vec[i] = pow_vec[i]
+                    .iter()
+                    .map(|x| Mod2k::zero(modulus) - *x)
+                    .collect();
+            }
+        }
+
+        // left_payload is the negation of right_payload.
+        let left_payload = pow_vec.clone();
+
+        // out_payload carries the threshold term on the last coordinate.
+        let mut out_payload = zero_payload.clone();
+        out_payload[p_usize] = (0..domain_size)
+            .map(|_| Mod2k::new(self.config.delta, modulus).pow(p as u128) + 1u128)
+            .collect();
+
+        // Helper vectors for ldcf0: (out_payload - left_payload) - zero_payload.
+        let out_minus_left = element_wise_subtract_mod2k_vec(&out_payload, &left_payload)
+            .map_err(|e| anyhow!("Failed to subtract out_payload and left_payload: {}", e))?;
+        let ldcf_0_helper = element_wise_subtract_mod2k_vec(&out_minus_left, &zero_payload)
+            .map_err(|e| anyhow!("Failed to compute ldcf0 helper: {}", e))?;
+        let ldcf_0_helper = ldcf_0_helper // Shift left by delta+1 
+            .iter()
+            .map(|v| 
+                shift_mod2k(v, self.config.delta as isize + 1, modulus)
+                    .map_err(|e| anyhow!("Failed to shift ldcf_0_helper: {}", e))
+            )
+            .collect::<Result<Vec<_>>>()?;
+
+        // Helper vectors for ldcf1: left_payload - zero_payload.
+        let ldcf_1_helper = element_wise_subtract_mod2k_vec(&left_payload, &zero_payload)
+            .map_err(|e| anyhow!("Failed to compute ldcf1 helper: {}", e))?;
+        let ldcf_1_helper: Vec<Vec<Mod2k>> = ldcf_1_helper // Shift left by 1 because of dpf transformation
+            .iter()
+            .map(|v| {
+                shift_mod2k(v, 1, modulus)
+                    .map_err(|e| anyhow!("Failed to shift ldcf_1_helper: {}", e))
+            }).collect::<Result<Vec<_>>>()?;
+        println!("Length of ldcf_1_helper: {}", ldcf_1_helper.len());
+
+        // Helper vectors for rdcf0: zero_payload - right_payload.
+        let rdcf_0_helper = element_wise_subtract_mod2k_vec(&zero_payload, &right_payload)
+            .map_err(|e| anyhow!("Failed to compute rdcf0 helper: {}", e))?;
+
+        // Helper vectors for rdcf1: zero_payload - (out_payload - right_payload).
+        let out_minus_right = element_wise_subtract_mod2k_vec(&out_payload, &right_payload)
+            .map_err(|e| anyhow!("Failed to subtract out_payload and right_payload: {}", e))?;
+        let rdcf_1_helper = element_wise_subtract_mod2k_vec(&zero_payload, &out_minus_right)
+            .map_err(|e| anyhow!("Failed to compute rdcf1 helper: {}", e))?;
+        let rdcf_1_helper: Vec<Vec<Mod2k>> = rdcf_1_helper
+            .iter()
+            .map(|v| {
+                shift_mod2k(v, -(self.config.delta as isize), modulus)
+                    .map_err(|e| anyhow!("Failed to shift rdcf_1_helper: {}", e))
+            }).collect::<Result<Vec<_>>>()?;
+
+        Ok(SketchHelper::DistanceFSS {
+            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
+                barrett_ctx: barrett_ctx,
+                inv_value: case_2_const.value(),
+            }),
+            payload_helper_ldcf0: ldcf_0_helper,
+            payload_helper_ldcf1: ldcf_1_helper,
+            payload_helper_rdcf0: rdcf_0_helper,
+            payload_helper_rdcf1: rdcf_1_helper,
+        })
+    }
+}
+
+
+impl SketchPhase {
+    fn get_sketch_data_linf<'a>(
+        &self,
+        prg: &mut PRG,
+    ) -> Result<SketchData<'a>> {
+        unimplemented!()
+    }
+
+    fn get_sketch_data_lp<'a>(
+        &self, 
+        prg: &mut PRG,
+    ) -> Result<SketchData<'a>> {
+        unimplemented!()
+    }
+}
+
+impl SketchPhase {
+    fn verify_linf<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        let (ldcf_value, rdcf_value, shift_consistency) = match sketch_value {
+            SketchValues::Linf {
+                ldcf,
+                rdcf,
+                consistency,
+            } => (&**ldcf, &**rdcf, consistency),
+            _ => return Err(anyhow!("SketchValues not in Linf format for verification")),
+        };
+        let (ldcf_data, rdcf_data) = match sketch_data {
+            SketchData::Linf { ldcf, rdcf } => (&**ldcf, &**rdcf),
+            _ => return Err(anyhow!("SketchData not in Linf format for verification")),
+        };
+
+        let (ldcf_last_layer, ldcf_consistency) =
+            self.verify_dcf(ldcf_value, ldcf_data, channel, is_first)?;
+        let (rdcf_last_layer, rdcf_consistency) =
+            self.verify_dcf(rdcf_value, rdcf_data, channel, is_first)?;
+
+        let mut checks = Vec::new();
+        checks.push(ldcf_last_layer);
+        checks.extend(ldcf_consistency);
+        checks.push(rdcf_last_layer);
+        checks.extend(rdcf_consistency);
+        checks.push(*shift_consistency);
+
+        Ok(checks)
+    }
+
+    fn verify_lp<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        let (
+            p_value,
+            ldcf0_value,
+            ldcf1_value,
+            rdcf0_value,
+            rdcf1_value,
+            reference_dpf_case0,
+            reference_dpf_case1,
+        ) = match sketch_value {
+            SketchValues::Lp {
+                p,
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                reference_dpf_case0,
+                reference_dpf_case1,
+            } => (
+                *p,
+                &**ldcf0,
+                &**ldcf1,
+                &**rdcf0,
+                &**rdcf1,
+                reference_dpf_case0,
+                reference_dpf_case1,
+            ),
+            _ => return Err(anyhow!("SketchValues not in Lp format for verification")),
+        };
+        let (
+            p_data,
+            ldcf0_data,
+            ldcf1_data,
+            rdcf0_data,
+            rdcf1_data,
+            z_ast_triple,
+            z_bullet_triple,
+            z_triple,
+        ) = match sketch_data {
+            SketchData::Lp {
+                p,
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                z_ast,
+                z_bullet,
+                z,
+            } => (
+                *p,
+                &**ldcf0,
+                &**ldcf1,
+                &**rdcf0,
+                &**rdcf1,
+                z_ast,
+                z_bullet,
+                z,
+            ),
+            _ => return Err(anyhow!("SketchData not in Lp format for verification")),
+        };
+
+        ensure!(
+            p_value == p_data,
+            "Mismatch p between sketch values ({}) and sketch data ({})",
+            p_value,
+            p_data
+        );
+
+        // Verify reference DPF sketch
+        let ref_case0_sq = self.beaver_multiply(
+            reference_dpf_case0.0,
+            reference_dpf_case0.0,
+            z_ast_triple,
+            channel,
+            is_first,
+        )?;
+        let ref_case0 = ref_case0_sq - reference_dpf_case0.1;
+        let ref_case1_sq = self.beaver_multiply(
+            reference_dpf_case1.0,
+            reference_dpf_case1.0,
+            z_bullet_triple,
+            channel,
+            is_first,
+        )?;
+        let ref_case1 = ref_case1_sq - reference_dpf_case1.1;
+        let ref_check = self.beaver_multiply(ref_case0, ref_case1, z_triple, channel, is_first)?;
+
+        // Verify each payload component
+        let mut checks = vec![ref_check];
+        checks.extend(self.verify_dcf_payload(
+            ldcf0_value,
+            ldcf0_data,
+            channel,
+            is_first,
+        )?);
+        checks.extend(self.verify_dcf_payload(
+            ldcf1_value,
+            ldcf1_data,
+            channel,
+            is_first,
+        )?);
+        checks.extend(self.verify_dcf_payload(
+            rdcf0_value,
+            rdcf0_data,
+            channel,
+            is_first,
+        )?);
+        checks.extend(self.verify_dcf_payload(
+            rdcf1_value,
+            rdcf1_data,
+            channel,
+            is_first,
+        )?);
+
+        Ok(checks)
+    }
+
+    fn verify_dcf<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<(Modp<'a>, Vec<Modp<'a>>)> {
+        let (last_layer_case0, last_layer_case1, consistency_values) = match sketch_value {
+            SketchValues::Dcf {
+                last_layer_case0,
+                last_layer_case1,
+                consistency,
+            } => (last_layer_case0, last_layer_case1, consistency),
+            _ => return Err(anyhow!("SketchValues not in Dcf format for verification")),
+        };
+
+        let (triple_z_ast, triple_z_bullet, triple_z, consistency_triples) = match sketch_data {
+            SketchData::Dcf {
+                z_ast,
+                z_bullet,
+                z,
+                consistency,
+            } => (z_ast, z_bullet, z, consistency),
+            _ => return Err(anyhow!("SketchData not in Dcf format for verification")),
+        };
+
+        ensure!(
+            consistency_values.len() == consistency_triples.len(),
+            "Mismatch DCF consistency length: values {} vs triples {}",
+            consistency_values.len(),
+            consistency_triples.len()
+        );
+
+        let z_ast_sq = self.beaver_multiply(
+            last_layer_case0.0,
+            last_layer_case0.0,
+            triple_z_ast,
+            channel,
+            is_first,
+        )?;
+        let z_case0 = z_ast_sq - last_layer_case0.1;
+        let z_bullet_sq = self.beaver_multiply(
+            last_layer_case1.0,
+            last_layer_case1.0,
+            triple_z_bullet,
+            channel,
+            is_first,
+        )?;
+        let z_case1 = z_bullet_sq - last_layer_case1.1;
+        let last_layer_check =
+            self.beaver_multiply(z_case0, z_case1, triple_z, channel, is_first)?;
+
+        let mut consistency_checks = Vec::with_capacity(consistency_values.len());
+        for (value_pair, triple) in consistency_values.iter().zip(consistency_triples.iter()) {
+            let check =
+                self.beaver_multiply(value_pair.0, value_pair.1, triple, channel, is_first)?;
+            consistency_checks.push(check);
+        }
+
+        Ok((last_layer_check, consistency_checks))
+    }
+
+    fn verify_dcf_payload<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        let (length_value, last_layer_consistency, consistency_values) = match sketch_value {
+            SketchValues::DcfPayload {
+                length,
+                last_layer_consistency,
+                consistency,
+            } => (*length, last_layer_consistency, consistency),
+            _ => return Err(anyhow!("SketchValues not in DcfPayload format for verification")),
+        };
+        let (length_data, consistency_triples) = match sketch_data {
+            SketchData::DcfPayload { length, consistency } => (*length, consistency),
+            _ => return Err(anyhow!("SketchData not in DcfPayload format for verification")),
+        };
+
+        ensure!(
+            length_value == length_data,
+            "Mismatch payload length for verification: values {} vs data {}",
+            length_value,
+            length_data
+        );
+        ensure!(
+            last_layer_consistency.len() == length_value,
+            "Unexpected last layer payload length: {} vs declared {}",
+            last_layer_consistency.len(),
+            length_value
+        );
+        ensure!(
+            consistency_values.len() == consistency_triples.len(),
+            "Mismatch DCF payload consistency levels: values {} vs triples {}",
+            consistency_values.len(),
+            consistency_triples.len()
+        );
+
+        let mut checks = Vec::new();
+        checks.extend(last_layer_consistency.iter().copied());
+
+        for (level_idx, (value_pairs, triples)) in consistency_values
+            .iter()
+            .zip(consistency_triples.iter())
+            .enumerate()
+        {
+            ensure!(
+                value_pairs.len() == triples.len(),
+                "Mismatch payload consistency count at level {}: values {} vs triples {}",
+                level_idx + 1,
+                value_pairs.len(),
+                triples.len()
+            );
+            for (value_pair, triple) in value_pairs.iter().zip(triples.iter()) {
+                checks.push(self.beaver_multiply(
+                    value_pair.0,
+                    value_pair.1,
+                    triple,
+                    channel,
+                    is_first,
+                )?);
+            }
+        }
+
+        Ok(checks)
+    }
+
+    fn beaver_multiply<'a>(
+        &'a self,
+        x: Modp<'a>,
+        y: Modp<'a>,
+        triple: &TripleModp<'a>,
+        channel: &mut CommTrackingChannel,
+        is_first: bool,
+    ) -> Result<Modp<'a>> {
+        let (a, b, c) = *triple;
+        let d = x - a;
+        let e = y - b;
+
+        // Open d and e with the counterpart
+        let send_opening =
+            |val: &Modp<'a>, chan: &mut CommTrackingChannel| -> Result<()> {
+                let buf = val.value().to_le_bytes();
+                chan.write_bytes(&buf)
+                    .map_err(|er| anyhow!("Failed to send opening share: {}", er))
+            };
+        send_opening(&d, channel)?;
+        send_opening(&e, channel)?;
+        channel
+            .flush()
+            .map_err(|er| anyhow!("Failed to flush opening shares: {}", er))?;
+
+        let mut buf_d = [0u8; 16];
+        channel
+            .read_bytes(&mut buf_d)
+            .map_err(|er| anyhow!("Failed to receive opening share d: {}", er))?;
+        let mut buf_e = [0u8; 16];
+        channel
+            .read_bytes(&mut buf_e)
+            .map_err(|er| anyhow!("Failed to receive opening share e: {}", er))?;
+
+        let d_open = d + Modp::new(&self.barrett_ctx, u128::from_le_bytes(buf_d));
+        let e_open = e + Modp::new(&self.barrett_ctx, u128::from_le_bytes(buf_e));
+
+        let mut prod_share = c + d_open * b + e_open * a;
+        if is_first {
+            prod_share = prod_share + d_open * e_open;
+        }
+
+        Ok(prod_share)
+    }
+}
+
+impl SketchPhase {
     fn dcf_to_dpf_ringvec(
         &self,
         evals: &[RingVec],
@@ -445,7 +954,8 @@ impl SketchPhase {
                 &self.barrett_ctx,
             )?;
 
-            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg)
+                .map_err(|e| anyhow!("Failed to sample random vector for last layer sketch: {}", e))?;
 
             let rs2 = element_wise_product_modp(&rs, &rs)
                 .map_err(|e| anyhow!("Failed to square random vector for last layer sketch: {}", e))?;
@@ -523,7 +1033,8 @@ impl SketchPhase {
             // println!("evals_subtracted_case1: {:?}", evals_subtracted_case1);
 
             let domain_size = evals_subtracted_case0.len();
-            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg)
+                .map_err(|e| anyhow!("Failed to sample random vector for DCF consistency: {}", e))?;
 
             let z_ast = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case0)
                 .map_err(|e| anyhow!("Failed to compute DCF consistency z_ast at level {}: {}", level, e))?;
@@ -584,7 +1095,8 @@ impl SketchPhase {
             .collect::<Result<Vec<_>>>()?;
 
         // Sketch last layer payload consistency
-        let rs = sample_modp_vec(domain_size, barrett_ctx, prg);
+        let rs = sample_modp_vec(domain_size, barrett_ctx, prg)
+            .map_err(|e| anyhow!("Failed to sample random vector for payload consistency: {}", e))?;
         let mut rs_pow = vec![Modp::one(barrett_ctx); domain_size];
         let mut last_layer_consistency_sketch = Vec::with_capacity(length);
         for subtracted in &last_layer_payloads_subtracted {
@@ -652,7 +1164,8 @@ impl SketchPhase {
             // println!("evals_subtracted_case1: {:?}", evals_subtracted_case1);
 
             let domain_size = evals_subtracted_case0.len();
-            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg)
+                .map_err(|e| anyhow!("Failed to sample random vector for payload DCF consistency: {}", e))?;
             let mut rs_pow = vec![Modp::one(barrett_ctx); domain_size];
 
             let domain_size = 1 << (level + 1);
@@ -743,16 +1256,49 @@ impl SketchPhase {
 }
 
 fn sample_modp_vec<'a>(
-    domain_size: usize,
+    size: usize,
     barrett_ctx: &'a BarrettCtx,
     prg: &mut PRG,
-) -> Vec<Modp<'a>> {
-    let mut rs_u128: Vec<u128> = vec![0u128; domain_size];
+) -> Result<Vec<Modp<'a>>> {
+    let mut rs_u128: Vec<u128> = vec![0u128; size];
     prg.random_u128s(&mut rs_u128);
-    rs_u128
-        .into_iter()
-        .map(|x| Modp::new(barrett_ctx, x))
-        .collect()
+    Ok(
+        rs_u128
+            .into_iter()
+            .map(|x| Modp::new(barrett_ctx, x))
+            .collect()
+    )
+}
+
+fn sample_modp_triples<'a>(
+    num_triples: usize, 
+    barrett_ctx: &'a BarrettCtx,
+    prg: &mut PRG
+) -> Result<(Vec<TripleModp<'a>>, Vec<TripleModp<'a>>)> {
+    let a0 = sample_modp_vec(num_triples, barrett_ctx, prg)
+        .map_err(|e| anyhow!("Error sampling vector a0 for triple: {}", e))?;
+    let a1 = sample_modp_vec(num_triples, barrett_ctx, prg)
+        .map_err(|e| anyhow!("Error sampling vector a1 for triple: {}", e))?;
+    let b0 = sample_modp_vec(num_triples, barrett_ctx, prg)
+        .map_err(|e| anyhow!("Error sampling vector b0 for triple: {}", e))?;
+    let b1 = sample_modp_vec(num_triples, barrett_ctx, prg)
+        .map_err(|e| anyhow!("Error sampling vector b1 for triple: {}", e))?;
+    let a = element_wise_sum_modp(&a0, &a1)
+        .map_err(|e| anyhow!("Error getting vector a from a0 + a1: {}", e))?;
+    let b = element_wise_sum_modp(&b0, &b1)
+        .map_err(|e| anyhow!("Error getting vector b from b0 + b1: {}", e))?;
+    // Get c = a * b, then sample c0, then get c1 from c - c0
+    let c = element_wise_product_modp(&a, &b)
+        .map_err(|e| anyhow!("Error getting c from a * b: {}", e))?;
+    let c0 = sample_modp_vec(num_triples, barrett_ctx, prg)
+        .map_err(|e| anyhow!("Error sampling vector c0 for triple: {}", e))?;
+    let c1 = element_wise_subtract_modp(&c, &c0)
+        .map_err(|e| anyhow!("Error getting c1 from c - c0: {}", e))?;
+
+    Ok((
+        a0.iter().zip(b0.iter()).zip(c0.iter()).map(|((a, b), c)| (*a, *b, *c)).collect(),
+        a1.iter().zip(b1.iter()).zip(c1.iter()).map(|((a, b), c)| (*a, *b, *c)).collect(),
+    ))
 }
 
 fn shift_mod2k(
@@ -819,130 +1365,6 @@ fn shift_ringvec(
     Ok(out)
 }
 
-// This is the bulk of implmentations for get_sketch_helper
-impl SketchPhase {
-    fn get_sketch_helper_linf(&self) -> Result<SketchHelper> {
-        let barrett_ctx = BarrettCtx::new(self.config.q);
-        let modulus = 1u128 << self.config.h2;
-        let case_2_const_inv = Modp::one(&barrett_ctx) - Modp::new(&barrett_ctx, modulus);
-        let case_2_const = case_2_const_inv.inv().unwrap();
-        Ok(SketchHelper::IntervalFSS {
-            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
-                barrett_ctx: barrett_ctx,
-                inv_value: case_2_const.value(),
-            }),
-        })
-    }
-
-    fn get_sketch_helper_lp(&self, p: u32) -> Result<SketchHelper> {
-        let modulus = 1u128 << self.config.h2;
-        let case_2_const_inv = Modp::one(&self.barrett_ctx) - Modp::new(&self.barrett_ctx, modulus);
-        let case_2_const = case_2_const_inv.inv().unwrap();
-
-        let modulus = 1u128 << self.config.h2;
-        let domain_size = 1usize << self.config.h1;
-        let barrett_ctx = BarrettCtx::new(self.config.q);
-        let p_usize = p as usize;
-
-        // zero_payload
-        let zero_payload: Vec<Vec<Mod2k>> = (0..=p_usize)
-            .map(|_| (0..domain_size).map(|_| Mod2k::zero(modulus)).collect())
-            .collect();
-
-        // Base vectors for degree-1 (p = 1) polynomial payloads.
-        let mut pow_vec: Vec<Vec<Mod2k>> = (0..=p_usize)
-            .map(|i| {
-                (0..domain_size)
-                    .map(|x| {
-                        Mod2k::new(x as u128, modulus).pow(i as u128)
-                            * BINOMIAL_COEFFICIENTS[p_usize][i]
-                    })
-                    .collect()
-            })
-            .collect();
-        for i in 0..=p_usize {
-            if (i & 1) == 1 {
-                pow_vec[i] = pow_vec[i]
-                    .iter()
-                    .map(|x| Mod2k::zero(modulus) - *x)
-                    .collect();
-            }
-        }
-
-        // right_payload corresponds to (1, -x).
-        let right_payload = pow_vec.clone();
-
-        for i in 0..=p_usize {
-            if ((i & 1) == 1) ^ (((p_usize + 1 - i) & 1) == 0) {
-                pow_vec[i] = pow_vec[i]
-                    .iter()
-                    .map(|x| Mod2k::zero(modulus) - *x)
-                    .collect();
-            }
-        }
-
-        // left_payload is the negation of right_payload.
-        let left_payload = pow_vec.clone();
-
-        // out_payload carries the threshold term on the last coordinate.
-        let mut out_payload = zero_payload.clone();
-        out_payload[p_usize] = (0..domain_size)
-            .map(|_| Mod2k::new(self.config.delta, modulus).pow(p as u128) + 1u128)
-            .collect();
-
-        // Helper vectors for ldcf0: (out_payload - left_payload) - zero_payload.
-        let out_minus_left = element_wise_subtract_mod2k_vec(&out_payload, &left_payload)
-            .map_err(|e| anyhow!("Failed to subtract out_payload and left_payload: {}", e))?;
-        let ldcf_0_helper = element_wise_subtract_mod2k_vec(&out_minus_left, &zero_payload)
-            .map_err(|e| anyhow!("Failed to compute ldcf0 helper: {}", e))?;
-        let ldcf_0_helper = ldcf_0_helper // Shift left by delta+1 
-            .iter()
-            .map(|v| 
-                shift_mod2k(v, self.config.delta as isize + 1, modulus)
-                    .map_err(|e| anyhow!("Failed to shift ldcf_0_helper: {}", e))
-            )
-            .collect::<Result<Vec<_>>>()?;
-
-        // Helper vectors for ldcf1: left_payload - zero_payload.
-        let ldcf_1_helper = element_wise_subtract_mod2k_vec(&left_payload, &zero_payload)
-            .map_err(|e| anyhow!("Failed to compute ldcf1 helper: {}", e))?;
-        let ldcf_1_helper: Vec<Vec<Mod2k>> = ldcf_1_helper // Shift left by 1 because of dpf transformation
-            .iter()
-            .map(|v| {
-                shift_mod2k(v, 1, modulus)
-                    .map_err(|e| anyhow!("Failed to shift ldcf_1_helper: {}", e))
-            }).collect::<Result<Vec<_>>>()?;
-        println!("Length of ldcf_1_helper: {}", ldcf_1_helper.len());
-
-        // Helper vectors for rdcf0: zero_payload - right_payload.
-        let rdcf_0_helper = element_wise_subtract_mod2k_vec(&zero_payload, &right_payload)
-            .map_err(|e| anyhow!("Failed to compute rdcf0 helper: {}", e))?;
-
-        // Helper vectors for rdcf1: zero_payload - (out_payload - right_payload).
-        let out_minus_right = element_wise_subtract_mod2k_vec(&out_payload, &right_payload)
-            .map_err(|e| anyhow!("Failed to subtract out_payload and right_payload: {}", e))?;
-        let rdcf_1_helper = element_wise_subtract_mod2k_vec(&zero_payload, &out_minus_right)
-            .map_err(|e| anyhow!("Failed to compute rdcf1 helper: {}", e))?;
-        let rdcf_1_helper: Vec<Vec<Mod2k>> = rdcf_1_helper
-            .iter()
-            .map(|v| {
-                shift_mod2k(v, -(self.config.delta as isize), modulus)
-                    .map_err(|e| anyhow!("Failed to shift rdcf_1_helper: {}", e))
-            }).collect::<Result<Vec<_>>>()?;
-
-        Ok(SketchHelper::DistanceFSS {
-            sketch_helper_dcf: Box::new(SketchHelper::Dcf {
-                barrett_ctx: barrett_ctx,
-                inv_value: case_2_const.value(),
-            }),
-            payload_helper_ldcf0: ldcf_0_helper,
-            payload_helper_ldcf1: ldcf_1_helper,
-            payload_helper_rdcf0: rdcf_0_helper,
-            payload_helper_rdcf1: rdcf_1_helper,
-        })
-    }
-}
-
 fn dot_product_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>], b: &[Modp<'a>]) -> Result<Modp<'a>> {
     ensure!(a.len() == b.len(), "Length mismatch in dot_product_modp: a.len() = {}, b.len() = {}", a.len(), b.len());
     Ok(
@@ -952,7 +1374,17 @@ fn dot_product_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>], b: &[Modp<'a>]) -> 
     )
 }
 
-#[allow(dead_code)]
+fn element_wise_sum_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Result<Vec<Modp<'a>>> {
+    ensure!(
+        a.len() == b.len(),
+        "length mismatch in element_wise_product_modp: a.len() = {}, b.len() = {}",
+        a.len(),
+        b.len()
+    );
+    Ok(a.iter().zip(b.iter()).map(|(x, y)| *x + *y).collect())
+}
+
+
 fn element_wise_product_modp<'a>(a: &[Modp<'a>], b: &[Modp<'a>]) -> Result<Vec<Modp<'a>>> {
     ensure!(
         a.len() == b.len(),

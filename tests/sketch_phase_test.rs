@@ -1,14 +1,22 @@
 use mosaic::{
+    channel::CommTrackingChannel,
+    data_structures::modp::Modp,
     fuzzy_match::{
         share_phase::SharePhase,
         share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
         shared_range::SharedRange,
+        shared_sketch::{SketchData, TripleModp},
         sketch_phase::SketchPhase,
         sketch_types::{SketchConfig, SketchValues},
     },
     randomness::prg::PRG,
 };
 use anyhow::{anyhow, Result};
+use std::{
+    io::{BufReader, BufWriter},
+    net::{TcpListener, TcpStream},
+    thread,
+};
 
 const H1: usize = 5;
 const H2: usize = 10;
@@ -41,6 +49,107 @@ fn share_phase_config(method: ShareMethod, metric: DistanceMetric, dictionary_ty
             delta: DELTA,
         }
     )
+}
+
+fn setup_channels_pair() -> Result<(CommTrackingChannel, CommTrackingChannel)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+
+    let handle = thread::spawn(move || -> Result<CommTrackingChannel> {
+        let stream = TcpStream::connect(addr)?;
+        stream.set_nodelay(true)?;
+        let reader = BufReader::new(stream.try_clone()?);
+        let writer = BufWriter::new(stream);
+        Ok(CommTrackingChannel::new(reader, writer))
+    });
+
+    let (server_stream, _) = listener.accept()?;
+    server_stream.set_nodelay(true)?;
+    let server_reader = BufReader::new(server_stream.try_clone()?);
+    let server_writer = BufWriter::new(server_stream);
+    let server_channel = CommTrackingChannel::new(server_reader, server_writer);
+
+    let client_channel = handle.join().expect("client thread panicked")?;
+    Ok((server_channel, client_channel))
+}
+
+fn zero_modp_from<'a>(sketch_value: &SketchValues<'a>) -> Modp<'a> {
+    match sketch_value {
+        SketchValues::Dcf { last_layer_case0, .. } => last_layer_case0.0 - last_layer_case0.0,
+        SketchValues::Linf { ldcf, .. } => zero_modp_from(ldcf),
+        SketchValues::DcfPayload {
+            last_layer_consistency,
+            ..
+        } => {
+            let first = last_layer_consistency
+                .first()
+                .expect("last_layer_consistency should not be empty");
+            *first - *first
+        }
+        SketchValues::Lp {
+            reference_dpf_case0, ..
+        } => reference_dpf_case0.0 - reference_dpf_case0.0,
+    }
+}
+
+fn zero_triple_from<'a>(sketch_value: &SketchValues<'a>) -> TripleModp<'a> {
+    let zero = zero_modp_from(sketch_value);
+    (zero, zero, zero)
+}
+
+fn build_sketch_data_from<'a>(sketch_value: &SketchValues<'a>) -> SketchData<'a> {
+    match sketch_value {
+        SketchValues::Dcf {
+            consistency, ..
+        } => {
+            let zero_triple = zero_triple_from(sketch_value);
+            SketchData::Dcf {
+                z_ast: zero_triple,
+                z_bullet: zero_triple,
+                z: zero_triple,
+                consistency: vec![zero_triple; consistency.len()],
+            }
+        }
+        SketchValues::Linf { ldcf, rdcf, .. } => SketchData::Linf {
+            ldcf: Box::new(build_sketch_data_from(ldcf)),
+            rdcf: Box::new(build_sketch_data_from(rdcf)),
+        },
+        SketchValues::DcfPayload {
+            length,
+            consistency,
+            ..
+        } => {
+            let zero_triple = zero_triple_from(sketch_value);
+            let consistency_triples = consistency
+                .iter()
+                .map(|pairs| vec![zero_triple; pairs.len()])
+                .collect();
+            SketchData::DcfPayload {
+                length: *length,
+                consistency: consistency_triples,
+            }
+        }
+        SketchValues::Lp {
+            p,
+            ldcf0,
+            ldcf1,
+            rdcf0,
+            rdcf1,
+            ..
+        } => {
+            let zero_triple = zero_triple_from(sketch_value);
+            SketchData::Lp {
+                p: *p,
+                ldcf0: Box::new(build_sketch_data_from(ldcf0)),
+                ldcf1: Box::new(build_sketch_data_from(ldcf1)),
+                rdcf0: Box::new(build_sketch_data_from(rdcf0)),
+                rdcf1: Box::new(build_sketch_data_from(rdcf1)),
+                z_ast: zero_triple,
+                z_bullet: zero_triple,
+                z: zero_triple,
+            }
+        }
+    }
 }
 
 #[test]
@@ -351,6 +460,95 @@ fn sketch_distance_fss_test() -> Result<()> {
         check_payload("ldcf1", ldcf1_0, ldcf1_1)?;
         check_payload("rdcf0", rdcf0_0, rdcf0_1)?;
         check_payload("rdcf1", rdcf1_0, rdcf1_1)?;
+    }
+
+    Ok(())
+}
+
+#[test]
+fn verify_interval_fss_mpc_test() -> Result<()> {
+    let share_cfg =
+        share_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
+    let share_phase = SharePhase::new(share_cfg);
+    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+
+    let sketch_cfg =
+        sketch_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
+    let sketch_phase = SketchPhase::new(sketch_cfg);
+    let sketch_helper = sketch_phase.get_sketch_helper()?;
+
+    let seed = [0u8; 16];
+    let mut prg0 = PRG::new(Some(&seed), 0);
+    let sketch0 = sketch_phase.sketch(&range0, &sketch_helper, &mut prg0)?;
+
+    let mut prg1 = PRG::new(Some(&seed), 0);
+    let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
+
+    let (mut chan0, mut chan1) = setup_channels_pair()?;
+
+    let (checks0, checks1) = thread::scope(|s| -> Result<_> {
+        let sv0 = &sketch0[0];
+        let sv1 = &sketch1[0];
+        let sd0 = build_sketch_data_from(sv0);
+        let sd1 = build_sketch_data_from(sv1);
+
+        let handle0 = s.spawn(move || sketch_phase.verify(sv0, &sd0, &mut chan0, true));
+        let handle1 = s.spawn(move || sketch_phase.verify(sv1, &sd1, &mut chan1, false));
+
+        let res0 = handle0.join().expect("thread 0 panicked")?;
+        let res1 = handle1.join().expect("thread 1 panicked")?;
+        Ok((res0, res1))
+    })?;
+
+    assert_eq!(checks0.len(), checks1.len());
+    for (idx, (c0, c1)) in checks0.iter().zip(checks1.iter()).enumerate() {
+        let opened = *c0 + *c1;
+        assert_eq!(opened.value(), 0, "Interval verify failed at {}", idx);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn verify_distance_fss_mpc_test() -> Result<()> {
+    let p: u32 = 2;
+    let share_cfg =
+        share_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
+    let share_phase = SharePhase::new(share_cfg);
+    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+
+    let sketch_cfg =
+        sketch_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
+    let sketch_phase = SketchPhase::new(sketch_cfg);
+    let sketch_helper = sketch_phase.get_sketch_helper()?;
+
+    let seed = [0u8; 16];
+    let mut prg0 = PRG::new(Some(&seed), 0);
+    let sketch0 = sketch_phase.sketch(&range0, &sketch_helper, &mut prg0)?;
+
+    let mut prg1 = PRG::new(Some(&seed), 0);
+    let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
+
+    let (mut chan0, mut chan1) = setup_channels_pair()?;
+
+    let (checks0, checks1) = thread::scope(|s| -> Result<_> {
+        let sv0 = &sketch0[0];
+        let sv1 = &sketch1[0];
+        let sd0 = build_sketch_data_from(sv0);
+        let sd1 = build_sketch_data_from(sv1);
+
+        let handle0 = s.spawn(move || sketch_phase.verify(sv0, &sd0, &mut chan0, true));
+        let handle1 = s.spawn(move || sketch_phase.verify(sv1, &sd1, &mut chan1, false));
+
+        let res0 = handle0.join().expect("thread 0 panicked")?;
+        let res1 = handle1.join().expect("thread 1 panicked")?;
+        Ok((res0, res1))
+    })?;
+
+    assert_eq!(checks0.len(), checks1.len());
+    for (idx, (c0, c1)) in checks0.iter().zip(checks1.iter()).enumerate() {
+        let opened = *c0 + *c1;
+        assert_eq!(opened.value(), 0, "Distance verify failed at {}", idx);
     }
 
     Ok(())
