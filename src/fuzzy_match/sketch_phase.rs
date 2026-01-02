@@ -205,16 +205,16 @@ impl SketchPhase {
         let rdcf_key1 = key.right_fss1();
 
         let ldcf0_full_evals = ldcf_key0
-            .full_domain_incremental_eval(modulus, domain_size)
+            .full_domain_incremental_eval(modulus, self.config.h1)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
         let ldcf1_full_evals = ldcf_key1
-            .full_domain_incremental_eval(modulus, domain_size)
+            .full_domain_incremental_eval(modulus, self.config.h1)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
         let rdcf0_full_evals = rdcf_key0
-            .full_domain_incremental_eval(modulus, domain_size)
+            .full_domain_incremental_eval(modulus, self.config.h1)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
         let rdcf1_full_evals = rdcf_key1
-            .full_domain_incremental_eval(modulus, domain_size)
+            .full_domain_incremental_eval(modulus, self.config.h1)
             .map_err(|e| SharePhaseError::EvaluationError(e.to_string()))?;
 
         // Extract reference dpf from the last layer of ldcf1 and sketch it
@@ -234,20 +234,39 @@ impl SketchPhase {
             _ => return Err(anyhow!("Sketch helper for distance fss type mismatch!")),
         };
 
-        let (scale0, scale1) = sketch_helper_dcf.get_helper_vector(&self.barrett_ctx, domain_size)
-            .map_err(|e| anyhow!("Failed to get helper vector: {}", e))?;
-        let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
-            &reference_dpf,
-            domain_size,
-            &scale0,
-            &scale1,
-            &self.barrett_ctx,
-        )?;
+        let (reference_dpf_sketch_case0, reference_dpf_sketch_case1) = {
+            let (scale0, scale1) = sketch_helper_dcf.get_helper_vector(&self.barrett_ctx, domain_size)
+                .map_err(|e| anyhow!("Failed to get helper vector: {}", e))?;
+            let (evals_unit_vector0, evals_unit_vector1) = self.dpf_to_unit_vector(
+                &reference_dpf,
+                domain_size,
+                &scale0,
+                &scale1,
+                &self.barrett_ctx,
+            )?;
 
-        let z0 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector0, &evals_unit_vector0)
-            .map_err(|e| anyhow!("Failed to compute lp z0 dot product: {}", e))?;
-        let z1 = dot_product_modp(&self.barrett_ctx, &evals_unit_vector1, &evals_unit_vector1)
-            .map_err(|e| anyhow!("Failed to compute lp z1 dot product: {}", e))?;
+            let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+
+            let rs2 = element_wise_product_modp(&rs, &rs)
+                .map_err(|e| anyhow!("Failed to square random vector for last layer sketch: {}", e))?;
+
+            let z_ast = dot_product_modp(&self.barrett_ctx, &rs, &evals_unit_vector0)
+                .map_err(|e| anyhow!("Failed to multiply rs with evals_unit_vector case0: {}", e))?;
+            let z2_ast = dot_product_modp(&self.barrett_ctx, &rs2, &evals_unit_vector0)
+                .map_err(|e| anyhow!("Failed to multiply rs2 with evals_unit_vector case0: {}", e))?;
+
+            let z_bullet= dot_product_modp(&self.barrett_ctx, &rs, &evals_unit_vector1)
+                .map_err(|e| anyhow!("Failed to multiply rs with evals_unit_vector case1: {}", e))?;
+            let z2_bullet = dot_product_modp(&self.barrett_ctx, &rs2, &evals_unit_vector1)
+                .map_err(|e| anyhow!("Failed to multiply rs2 with evals_unit_vector case1: {}", e))?;
+
+            (
+                (z_ast, z2_ast),
+                (z_bullet, z2_bullet),
+            )
+        };
+
+        println!("Payload helper: {:?}", sketch_helper.get_payload_helper_ldcf1());
 
         let sketch_value_ldcf0 = self.sketch_incremental_dcf_shift_payload(
             &ldcf0_full_evals, 
@@ -271,7 +290,7 @@ impl SketchPhase {
             &rdcf0_full_evals, 
             p+1, 
             1, // left shift by 1
-            true, 
+            false, 
             &reference_dpf,
             &sketch_helper.get_payload_helper_rdcf0()?,
             prg
@@ -280,7 +299,7 @@ impl SketchPhase {
             &rdcf1_full_evals, 
             p+1, 
             self.config.delta as isize + 1, // left shift by delta+1
-            true, 
+            false, 
             &reference_dpf,
             &sketch_helper.get_payload_helper_rdcf1()?,
             prg
@@ -293,7 +312,8 @@ impl SketchPhase {
             ldcf1: Box::new(sketch_value_ldcf1), 
             rdcf0: Box::new(sketch_value_rdcf0), 
             rdcf1: Box::new(sketch_value_rdcf1), 
-            reference_dpf: (z0, z1) 
+            reference_dpf_case0: reference_dpf_sketch_case0, 
+            reference_dpf_case1: reference_dpf_sketch_case1,
         }
         )
     }
@@ -548,25 +568,25 @@ impl SketchPhase {
         let last_layer_shifted = shift_mod2k_ringvec(&last_layer_dpf, length, shift, modulus)
             .map_err(|e| anyhow!("Failed to shift last layer dpf: {}", e))?;
         let last_layer_payloads_subtracted: Vec<Vec<Modp>> = (0..length)
-            .map(|i| {
+            .map(|i| -> Result<Vec<Modp>> {
                 let rescaled: Vec<Mod2k> = reference_dpf 
                     .iter()
-                    .zip(payload_helper.iter())
-                    .map(|(&x, helper)| x * helper[i])
+                    .zip(payload_helper[i].iter())
+                    .map(|(&x, helper)| x * *helper)
                     .collect();
                 let compare: Vec<Mod2k> = last_layer_shifted
                     .iter()
                     .map(|components| Mod2k::new(components[i], modulus))
                     .collect();
                 self.subtract_shifted_mod2k_to_modp(&rescaled, &compare, 0, barrett_ctx)
-                    .map_err(|e| anyhow!("Failed to subtract last layer payload for component {}: {}", i, e))?
+                    .map_err(|e| anyhow!("Failed to subtract last layer payload for component {}: {}", i, e))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
-        // Sketch last layer payload consistency (power sums)
+        // Sketch last layer payload consistency
         let rs = sample_modp_vec(domain_size, barrett_ctx, prg);
         let mut rs_pow = vec![Modp::one(barrett_ctx); domain_size];
-        let mut last_layer_consistency_sketch = Vec::with_capacity(length.saturating_sub(1));
+        let mut last_layer_consistency_sketch = Vec::with_capacity(length);
         for subtracted in &last_layer_payloads_subtracted {
             rs_pow = element_wise_product_modp(&rs, &rs_pow)
                 .map_err(|e| anyhow!("Failed to build power vector for payload consistency: {}", e))?;
@@ -593,15 +613,15 @@ impl SketchPhase {
                 // So either next layer left shift 1 or next layer would be equal to this layer duplicated
                 let next_layer_case0 = next.clone();
                 let next_layer_case1: Vec<RingVec> = 
-                    [next[1..].to_vec(), vec![next[next.len() - 1]; 1]].concat();
+                    [next[1..].to_vec(), vec![next[next.len() - 1].clone(); 1]].concat();
                 let subtracted_case0 = element_wise_subtract_ringvec(&evals_i_duplicated, &next_layer_case0)
                     .map_err(|e| anyhow!("Failed to subtract evals_i_duplicated and next_layer_case0: {}", e))?;
                 let subtracted_case1 = element_wise_subtract_ringvec(&evals_i_duplicated, &next_layer_case1)
                     .map_err(|e| anyhow!("Failed to subtract evals_i_duplicated and next_layer_case1: {}", e))?;
                 (
-                    mod2k_to_modp(&self.barrett_ctx, &subtracted_case0)
+                    ringvec_to_modp_vec(&self.barrett_ctx, &subtracted_case0)
                         .map_err(|e| anyhow!("Failed to convert subtracted_case0 to modp: {}", e))?,
-                    mod2k_to_modp(&self.barrett_ctx, &subtracted_case1)
+                    ringvec_to_modp_vec(&self.barrett_ctx, &subtracted_case1)
                         .map_err(|e| anyhow!("Failed to convert subtracted_case1 to modp: {}", e))?,
                 )
             } else {
@@ -615,16 +635,16 @@ impl SketchPhase {
                 // Last value of next layer is either 2 * alpha_i or 2 * alpha_i + 1
                 // So either next layer right shift 1 or next layer would be equal to this layer duplicated
                 let next_layer_case0 = next.clone();
-                let next_layer_case1: Vec<Mod2k> = 
-                    [vec![next[0]; 1], next[..next.len()-1].to_vec()].concat();
-                let subtracted_case0 = element_wise_subtract_mod2k(&evals_i_duplicated, &next_layer_case0)
+                let next_layer_case1: Vec<RingVec> = 
+                    [vec![next[0].clone(); 1], next[..next.len()-1].to_vec()].concat();
+                let subtracted_case0 = element_wise_subtract_ringvec(&evals_i_duplicated, &next_layer_case0)
                     .map_err(|e| anyhow!("Failed to subtract evals_i_duplicated and next_layer_case0: {}", e))?;
-                let subtracted_case1 = element_wise_subtract_mod2k(&evals_i_duplicated, &next_layer_case1)
+                let subtracted_case1 = element_wise_subtract_ringvec(&evals_i_duplicated, &next_layer_case1)
                     .map_err(|e| anyhow!("Failed to subtract evals_i_duplicated and next_layer_case1: {}", e))?;
                 (
-                    mod2k_to_modp(&self.barrett_ctx, &subtracted_case0)
+                    ringvec_to_modp_vec(&self.barrett_ctx, &subtracted_case0)
                         .map_err(|e| anyhow!("Failed to convert subtracted_case0 to modp: {}", e))?,
-                    mod2k_to_modp(&self.barrett_ctx, &subtracted_case1)
+                    ringvec_to_modp_vec(&self.barrett_ctx, &subtracted_case1)
                         .map_err(|e| anyhow!("Failed to convert subtracted_case1 to modp: {}", e))?,
                 )
             };
@@ -633,13 +653,23 @@ impl SketchPhase {
 
             let domain_size = evals_subtracted_case0.len();
             let rs = sample_modp_vec(domain_size, &self.barrett_ctx, prg);
+            let mut rs_pow = vec![Modp::one(barrett_ctx); domain_size];
 
-            let z_ast = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case0)
-                .map_err(|e| anyhow!("Failed to compute DCF consistency z_ast at level {}: {}", level, e))?;
-            let z_bullet = dot_product_modp(&self.barrett_ctx, &rs, &evals_subtracted_case1)
-                .map_err(|e| anyhow!("Failed to compute DCF consistency z_bullet at level {}: {}", level, e))?;
+            let domain_size = 1 << (level + 1);
+            let mut consistency_this_level = Vec::new();
+            for i in 0..length {
+                rs_pow = element_wise_product_modp(&rs, &rs_pow)
+                    .map_err(|e| anyhow!("Failed to do element wise product between rs and rs_pow at level {} index {}: {}", level, i, e))?;
+                let evals_subtracted_case0_vec: Vec<Modp> = (0..domain_size).map(|j| evals_subtracted_case0[j][i]).collect();
+                let evals_subtracted_case1_vec: Vec<Modp> = (0..domain_size).map(|j| evals_subtracted_case1[j][i]).collect();
+                let z_ast = dot_product_modp(&self.barrett_ctx, &rs_pow, &evals_subtracted_case0_vec)
+                    .map_err(|e| anyhow!("Failed to compute DCF consistency z_ast at level {}: {}", level, e))?;
+                let z_bullet = dot_product_modp(&self.barrett_ctx, &rs_pow, &evals_subtracted_case1_vec)
+                    .map_err(|e| anyhow!("Failed to compute DCF consistency z_bullet at level {}: {}", level, e))?;
+                consistency_this_level.push((z_ast, z_bullet));
+            }
 
-            consistency_sketches.push((z_ast, z_bullet));
+            consistency_sketches.push(consistency_this_level);
         }
 
         Ok(SketchValues::DcfPayload {
@@ -712,56 +742,6 @@ impl SketchPhase {
     }
 }
 
-impl SketchPhase {
-    fn incremental_dcf_to_incremental_dpf(
-        &self,
-        incremental_evals: &[Vec<Mod2k>],
-        height: usize,
-    ) -> Result<Vec<Vec<Mod2k>>> {
-        // Transform every single level into dpf in Z2k first
-        // Assume originally, each level contains vectors of form a, a, ..., a, b, b, ..., b
-        // The non-zero index in each level is exactly the last a-index in each original level
-        let mut incremental_evals_dpf: Vec<Vec<Mod2k>> = Vec::with_capacity(height + 1);
-        let modulus = 1u128 << self.config.h2;
-        for level in 0..=height {
-            let evals = &incremental_evals[level];
-            let domain_size = 1usize << level;
-            ensure!(
-                evals.len() == domain_size,
-                "length mismatch between dcf sketch vector and domain_size"
-            );
-            let mut evals_dpf: Vec<Mod2k> = (0..domain_size.saturating_sub(1))
-                .map(|i| evals[i] - evals[i + 1])
-                .collect();
-            evals_dpf.push(Mod2k::zero(modulus));
-            incremental_evals_dpf.push(evals_dpf);
-        }
-
-        Ok(incremental_evals_dpf)
-    }
-
-    fn incremental_dcf_payload_to_incremmental_dpf_payload(
-        &self,
-        incremental_evals: &[Vec<Vec<Mod2k>>],
-        length: usize,
-        height: usize,
-    ) -> Result<Vec<Vec<Vec<Mod2k>>>> {
-        let mut incremental_evals_dpf: Vec<Vec<Vec<Mod2k>>> = Vec::with_capacity(height);
-        let modulus = 1u128 << self.config.h2;
-        for level in 0..height {
-            let evals = &incremental_evals[level];
-            let domain_size = 1usize << level;
-            let mut evals_dpf: Vec<Vec<Mod2k>> = (0..domain_size.saturating_sub(1))
-                .map(|i| (0..length).map(|j| evals[i][j] - evals[i + 1][j]).collect())
-                .collect();
-            evals_dpf.push(vec![Mod2k::zero(modulus); length]);
-            incremental_evals_dpf.push(evals_dpf);
-        }
-
-        Ok(incremental_evals_dpf)
-    }
-}
-
 fn sample_modp_vec<'a>(
     domain_size: usize,
     barrett_ctx: &'a BarrettCtx,
@@ -773,33 +753,6 @@ fn sample_modp_vec<'a>(
         .into_iter()
         .map(|x| Modp::new(barrett_ctx, x))
         .collect()
-}
-
-fn shift_mod2k_vec(input: &[Mod2k], shift: isize, modulus: u128) -> Vec<Mod2k> {
-    // CAUTION: ONLY WORKS FOR DPF!!!
-    let len = input.len();
-    let mut out = Vec::with_capacity(len);
-    if shift > 0 {
-        let s = (shift as usize).min(len);
-        if s < len {
-            out.extend_from_slice(&input[s..]);
-        }
-        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(s));
-    } else if shift < 0 {
-        let s = (-shift as usize).min(len);
-        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(s));
-        if s < len {
-            out.extend_from_slice(&input[..len - s]);
-        }
-    } else {
-        out.extend_from_slice(input);
-    }
-    if out.len() > len {
-        out.truncate(len);
-    } else if out.len() < len {
-        out.extend(std::iter::repeat(Mod2k::zero(modulus)).take(len - out.len()));
-    }
-    out
 }
 
 fn shift_mod2k_ringvec(
@@ -890,7 +843,7 @@ impl SketchPhase {
         let right_payload = pow_vec.clone();
 
         for i in 0..=p_usize {
-            if ((i & 1) == 1) ^ (((p_usize + 1 - i) & 1) == 1) {
+            if ((i & 1) == 1) ^ (((p_usize + 1 - i) & 1) == 0) {
                 pow_vec[i] = pow_vec[i]
                     .iter()
                     .map(|x| Mod2k::zero(modulus) - *x)
@@ -916,6 +869,12 @@ impl SketchPhase {
         // Helper vectors for ldcf1: left_payload - zero_payload.
         let ldcf_1_helper = element_wise_subtract_mod2k_vec(&left_payload, &zero_payload)
             .map_err(|e| anyhow!("Failed to compute ldcf1 helper: {}", e))?;
+        let ldcf_1_helper: Vec<Vec<Mod2k>> = ldcf_1_helper // Shift left by 1 because of dpf transformation
+            .iter()
+            .map(|v| {
+                [v[1..].to_vec(), vec![Mod2k::zero(modulus); 1]].concat()
+            }).collect();
+        println!("Length of ldcf_1_helper: {}", ldcf_1_helper.len());
 
         // Helper vectors for rdcf0: zero_payload - right_payload.
         let rdcf_0_helper = element_wise_subtract_mod2k_vec(&zero_payload, &right_payload)
@@ -1017,10 +976,6 @@ fn element_wise_subtract_ringvec(a: &[RingVec], b: &[RingVec]) -> Result<Vec<Rin
 }
 
 
-fn sum_modp<'a>(ctx: &'a BarrettCtx, a: &[Modp<'a>]) -> Result<Modp<'a>> {
-    Ok(a.iter().fold(Modp::zero(ctx), |acc, x| acc + *x))
-}
-
 fn duplicate_vector<T: Clone>(v: &[T]) -> Result<Vec<T>> {
     let mut out = Vec::with_capacity(v.len() * 2);
     for x in v {
@@ -1032,4 +987,10 @@ fn duplicate_vector<T: Clone>(v: &[T]) -> Result<Vec<T>> {
 
 fn mod2k_to_modp<'a>(ctx: &'a BarrettCtx, a: &[Mod2k]) -> Result<Vec<Modp<'a>>> {
     Ok(a.iter().map(|x| Modp::new(ctx, x.val())).collect())
+}
+
+fn ringvec_to_modp_vec<'a>(ctx: &'a BarrettCtx, a: &[RingVec]) -> Result<Vec<Vec<Modp<'a>>>> {
+    Ok(a.iter().map(|x| 
+        (0..x.len()).map(|i| Modp::new(ctx, x[i])).collect()
+    ).collect())
 }

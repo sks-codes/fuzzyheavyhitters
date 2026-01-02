@@ -74,6 +74,7 @@ pub enum SketchValues<'a> {
         ldcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for LDCF
         rdcf0: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
         rdcf1: Box<SketchValues<'a>>, // SketchValues::DcfPayload for RDCF
-        reference_dpf: (Modp<'a>, Modp<'a>),
+        reference_dpf_case0: (Modp<'a>, Modp<'a>),
+        reference_dpf_case1: (Modp<'a>, Modp<'a>),
     },
 }
