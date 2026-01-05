@@ -72,6 +72,11 @@ impl<'a> Modp<'a> {
     pub fn value(&self) -> u128 {
         self.v
     }
+
+    pub fn context(&self) -> &'a BarrettCtx {
+        self.ctx
+    }
+
     pub fn modulus(&self) -> u128 {
         self.ctx.m
     }

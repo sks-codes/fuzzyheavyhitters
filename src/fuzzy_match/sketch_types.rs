@@ -78,3 +78,28 @@ pub enum SketchValues<'a> {
         reference_dpf_case1: (Modp<'a>, Modp<'a>),
     },
 }
+
+#[derive(Debug)]
+pub enum VerifyValues<'a> {
+    Dcf {
+        last_layer: Modp<'a>,
+        consistency: Vec<Modp<'a>>,
+    },
+    Linf {
+        ldcf: Box<VerifyValues<'a>>, 
+        rdcf: Box<VerifyValues<'a>>,
+        consistency: Modp<'a>,
+    },
+    DcfPayload {
+        length: usize,
+        consistency: Vec<Vec<Modp<'a>>>,
+    },
+    Lp {
+        p: usize,
+        ldcf0: Box<VerifyValues<'a>>,
+        ldcf1: Box<VerifyValues<'a>>,
+        rdcf0: Box<VerifyValues<'a>>,
+        rdcf1: Box<VerifyValues<'a>>,
+        reference_dpf: Modp<'a>,
+    }
+}

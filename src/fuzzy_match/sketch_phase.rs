@@ -15,12 +15,13 @@ use crate::{
         shared_range::SharedRange, 
         shared_sketch::{SketchData, TripleModp}, 
         sketch_helper::SketchHelper, 
-        sketch_types::{SketchConfig, SketchValues},
+        sketch_types::{SketchConfig, SketchValues, VerifyValues},
     },
     randomness::prg::PRG,
 };
 use anyhow::{anyhow, ensure, Result};
 use scuttlebutt::AbstractChannel;
+use std::convert::TryInto;
 
 pub struct SketchPhase {
     config: SketchConfig,
@@ -77,16 +78,16 @@ impl SketchPhase {
 
     /// Verify the sketch using pre-shared Beaver triples over an MPC channel.
     /// Returns a collection of zero-tests (shares) that should all open to 0 when combined.
-    pub fn verify<'a>(
+    pub fn batch_verify<'a>(
         &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
+        sketch_values: &[SketchValues<'a>],
+        sketch_data: &[SketchData<'a>],
         channel: &mut CommTrackingChannel,
-        is_first: bool,
+        role: bool,
     ) -> Result<Vec<Modp<'a>>> {
         match (&self.config.method, &self.config.metric) {
             (ShareMethod::FSS, DistanceMetric::LInfinity) => {
-                self.verify_linf(sketch_value, sketch_data, channel, is_first)
+                self.batch_verify_linf(sketch_values, sketch_data, channel, role)
             }
             (ShareMethod::FSS, DistanceMetric::Lp { .. }) => {
                 self.verify_lp(sketch_value, sketch_data, channel, is_first)
@@ -492,39 +493,138 @@ impl SketchPhase {
 }
 
 impl SketchPhase {
-    fn verify_linf<'a>(
+    fn batch_verify_linf<'a>(
         &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
+        sketch_values: &[SketchValues<'a>],
+        sketch_data: &[SketchData<'a>],
         channel: &mut CommTrackingChannel,
-        is_first: bool,
-    ) -> Result<Vec<Modp<'a>>> {
-        let (ldcf_value, rdcf_value, shift_consistency) = match sketch_value {
-            SketchValues::Linf {
-                ldcf,
-                rdcf,
-                consistency,
-            } => (&**ldcf, &**rdcf, consistency),
-            _ => return Err(anyhow!("SketchValues not in Linf format for verification")),
-        };
-        let (ldcf_data, rdcf_data) = match sketch_data {
-            SketchData::Linf { ldcf, rdcf } => (&**ldcf, &**rdcf),
-            _ => return Err(anyhow!("SketchData not in Linf format for verification")),
-        };
+        role: bool,
+    ) -> Result<Vec<VerifyValues<'a>>> {
+        // Gather every multiplication needed
+        let mut zs_ast = Vec::new(); // z_ast
+        let mut zs2_ast = Vec::new(); // Supposed to be z_ast^2
+        let mut zs_bullet = Vec::new(); // z_bullet
+        let mut zs2_bullet = Vec::new(); // Supposed to be z_bullet^2
+        let mut consistency0 = Vec::new(); // Consistency between levels, case 0. Flatten all levels
+        let mut consistency1 = Vec::new(); // Consistency between levels, case 1. Flatten all levels
+        let mut shift_consistency = Vec::new(); // Shift consistency between ldcf and rdcf
 
-        let (ldcf_last_layer, ldcf_consistency) =
-            self.verify_dcf(ldcf_value, ldcf_data, channel, is_first)?;
-        let (rdcf_last_layer, rdcf_consistency) =
-            self.verify_dcf(rdcf_value, rdcf_data, channel, is_first)?;
+        for sketch_value in sketch_values.iter() {
+            match sketch_value {
+                SketchValues::Linf {
+                    ldcf,
+                    rdcf,
+                    consistency,
+                } => {
+                    match &**ldcf {
+                        SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
+                            zs_ast.push(last_layer_case0.0);
+                            zs2_ast.push(last_layer_case0.1);
+                            zs_bullet.push(last_layer_case1.0);
+                            zs2_bullet.push(last_layer_case1.1);
+                            for consistency_check in consistency {
+                                consistency0.push(consistency_check.0);
+                                consistency1.push(consistency_check.1);
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for member ldcf of SketchValues::Linf, needed SketchValues::Dcf.")),
+                    };
+                    match &**rdcf {
+                        SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
+                            zs_ast.push(last_layer_case0.0);
+                            zs2_ast.push(last_layer_case0.1);
+                            zs_bullet.push(last_layer_case1.0);
+                            zs2_bullet.push(last_layer_case1.1);
+                            for consistency_check in consistency {
+                                consistency0.push(consistency_check.0);
+                                consistency1.push(consistency_check.1);
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for member rdcf of SketchValues::Linf, needed SketchValues::Dcf.")),
+                    };
+                    shift_consistency.push(*consistency);
 
-        let mut checks = Vec::new();
-        checks.push(ldcf_last_layer);
-        checks.extend(ldcf_consistency);
-        checks.push(rdcf_last_layer);
-        checks.extend(rdcf_consistency);
-        checks.push(*shift_consistency);
+                },
+                _ => return Err(anyhow!("Type mismatch for verify linf. Need SketchValues::Linf")),
+            }
+        }
 
-        Ok(checks)
+        let mut zs_sq_ast_triples = Vec::new();
+        let mut zs_sq_bullet_triples = Vec::new();
+        let mut zs_triples = Vec::new();
+        let mut consistency_triples = Vec::new();
+
+        // Gather Beaver triples accordingly
+        for sketch_datum in sketch_data {
+            match sketch_datum {
+                SketchData::Linf { ldcf, rdcf } => {
+                    match **ldcf {
+                        SketchData::Dcf { z_ast, z_bullet, z, consistency } => {
+                            zs_sq_ast_triples.push(z_ast);
+                            zs_sq_bullet_triples.push(z_bullet);
+                            zs_triples.push(z);
+                            for consistency_triple in consistency {
+                                consistency_triples.push(consistency_triple);
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for member ldcf of SketchData::Linf, needed SketchData::Dcf")),
+                    };
+                    match **rdcf{
+                        SketchData::Dcf { z_ast, z_bullet, z, consistency } => {
+                            zs_sq_ast_triples.push(z_ast);
+                            zs_sq_bullet_triples.push(z_bullet);
+                            zs_triples.push(z);
+                            for consistency_triple in consistency {
+                                consistency_triples.push(consistency_triple);
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for member rdcf of SketchData::Linf, needed SketchData::Dcf")),
+                    };
+                },
+                _ => return Err(anyhow!("Type mismatch for verify linf. Need SketchData::Linf.")),
+            }
+        }
+
+        let zs_sq_ast = self.batch_multiply_with_beaver(&zs_ast, &zs_ast, &zs_sq_ast_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to multipy z_ast with z_ast: {}", e))?; // Compute z_ast * z_ast
+        let zs_sq_bullet = self.batch_multiply_with_beaver(&zs_bullet, &zs_bullet, &zs_sq_bullet_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to multipy z_bullet with z_bullet: {}", e))?; // Compute z_bullet * z_bullet
+        let zs_subtract_ast = element_wise_subtract_modp(&zs_sq_ast, &zs2_ast) 
+            .map_err(|e| anyhow!("Failed to subtract z2_ast from z_ast*z_ast: {}", e))?; // Compute z_ast * z_ast - z2_ast
+        let zs_subtract_bullet= element_wise_subtract_modp(&zs_sq_bullet, &zs2_bullet) 
+            .map_err(|e| anyhow!("Failed to subtract z2_bullet from z_bullet*z_bullet: {}", e))?; // Compute z_bullet * z_bullet - z2_bullet
+        let zs = self.batch_multiply_with_beaver(&zs_subtract_ast, &zs_subtract_bullet, &zs_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to obtain z = z_subtract_ast * z_subtract_bullet: {}", e))?; // Compute z = (z_ast * z_ast - z2_ast) * (z_bullet * z_bullet - z2_bullet)
+
+        // Now obtain verify values for conssitency between levels
+        let consistency_between_levels = self.batch_multiply_with_beaver(&consistency0, &consistency1, &consistency_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to obtain consistency verify value by consistency0 * consistency1: {}", e))?; // Simply multiply consistency sketch values
+
+        let mut verify_values = Vec::new();
+        for ((z_pair, consistency_pair), shift_consistency_value) in 
+            zs.chunks(2)
+            .zip(consistency_between_levels.chunks(2*self.config.h1-2))
+            .zip(shift_consistency.iter()) {
+            ensure!(z_pair.len() == 2, "Some size mismatch in preparing verify values. Expected z_pair.len() = 2, got {}", z_pair.len());
+            ensure!(consistency_pair.len() == 2 * self.config.h1 - 2, 
+                "Some size mismatch in preparing verify values. Expected consistency_pair.len() = {}, got {}", 2 * self.config.h1 - 2, consistency_pair.len());
+            let ldcf_verify = VerifyValues::Dcf {
+                last_layer: z_pair[0],
+                consistency: consistency_pair[..self.config.h1-1].to_vec(),
+            };
+            let rdcf_verify = VerifyValues::Dcf {
+                last_layer: z_pair[1],
+                consistency: consistency_pair[self.config.h1-1..].to_vec(),
+            };
+            let verify_value = VerifyValues::Linf {
+                ldcf: Box::new(ldcf_verify),
+                rdcf: Box::new(rdcf_verify),
+                consistency: *shift_consistency_value,
+            };
+            verify_values.push(verify_value);
+        }
+
+        Ok(verify_values)
     }
 
     fn verify_lp<'a>(
@@ -780,49 +880,115 @@ impl SketchPhase {
         Ok(checks)
     }
 
-    fn beaver_multiply<'a>(
+}
+
+// Beaver multiplication for the verify phase
+impl SketchPhase {
+    fn batch_multiply_with_beaver<'a>(
         &'a self,
-        x: Modp<'a>,
-        y: Modp<'a>,
-        triple: &TripleModp<'a>,
+        xs: &[Modp<'a>],
+        ys: &[Modp<'a>],
+        triples: &[TripleModp<'a>],
         channel: &mut CommTrackingChannel,
-        is_first: bool,
-    ) -> Result<Modp<'a>> {
-        let (a, b, c) = *triple;
-        let d = x - a;
-        let e = y - b;
+        role: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        let mut prod_shares = Vec::new();
+        // Gotta fix later. Need to batch send the whole vector
+        let a: Vec<Modp> = triples.iter().map(|triple| triple.0).collect();
+        let b: Vec<Modp> = triples.iter().map(|triple| triple.1).collect();
+        let c: Vec<Modp> = triples.iter().map(|triple| triple.2).collect();
 
-        // Open d and e with the counterpart
-        let send_opening =
-            |val: &Modp<'a>, chan: &mut CommTrackingChannel| -> Result<()> {
-                let buf = val.value().to_le_bytes();
-                chan.write_bytes(&buf)
-                    .map_err(|er| anyhow!("Failed to send opening share: {}", er))
-            };
-        send_opening(&d, channel)?;
-        send_opening(&e, channel)?;
-        channel
-            .flush()
-            .map_err(|er| anyhow!("Failed to flush opening shares: {}", er))?;
+        let d = element_wise_subtract_modp(xs, &a)
+            .map_err(|err| anyhow!("Failed to obtain d = x - a: {}", err))?; // d = x - a
+        let e = element_wise_subtract_modp(ys, &b)
+            .map_err(|err| anyhow!("Failed to obtain e = y - b: {}", err))?; // e = y - b
 
-        let mut buf_d = [0u8; 16];
-        channel
-            .read_bytes(&mut buf_d)
-            .map_err(|er| anyhow!("Failed to receive opening share d: {}", er))?;
-        let mut buf_e = [0u8; 16];
-        channel
-            .read_bytes(&mut buf_e)
-            .map_err(|er| anyhow!("Failed to receive opening share e: {}", er))?;
+        let (d_other, e_other) = if role {
+            // Send first, receive after
+            self.send_modp_vec(&d, channel)
+                .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
+            self.send_modp_vec(&e, channel)
+                .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
+            channel.flush()?;
+            (
+                self.recv_modp_vec(channel)
+                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
+                self.recv_modp_vec(channel)
+                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
+            )
+        } else {
+            // Receive first, send after
+            let (d_recv, e_recv) = (
+                self.recv_modp_vec(channel)
+                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
+                self.recv_modp_vec(channel)
+                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
+            );
+            self.send_modp_vec(&d, channel)
+                .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
+            self.send_modp_vec(&e, channel)
+                .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
+            channel.flush()?;
+            (d_recv, e_recv)
+        };
 
-        let d_open = d + Modp::new(&self.barrett_ctx, u128::from_le_bytes(buf_d));
-        let e_open = e + Modp::new(&self.barrett_ctx, u128::from_le_bytes(buf_e));
+        let d_open = element_wise_sum_modp(&d, &d_other)
+            .map_err(|err| anyhow!("Failed to obtain d_open = d + d_other: {}", err))?; // d_open = d + d_other
+        let e_open = element_wise_sum_modp(&e, &e_other)
+            .map_err(|err| anyhow!("Failed to obtain e_open = e + e_other: {}", err))?; // e_open = e + e_other
 
-        let mut prod_share = c + d_open * b + e_open * a;
-        if is_first {
-            prod_share = prod_share + d_open * e_open;
+        let d_open_times_b = element_wise_product_modp(&d_open, &b)
+            .map_err(|err| anyhow!("Failed to obtain d_open * b: {}", err))?; // Compute d * b = (x - a) * b = xb - ab
+        let e_open_times_a = element_wise_product_modp(&e_open, &a)
+            .map_err(|err| anyhow!("Failed to obtain e_open * a: {}", err))?; // Compute e * a = (y - b) * a = ya - ba
+
+        // d * e = (x - a) * (y - b) = xy - xb - ay + ab
+
+        let mut prod_shares = element_wise_sum_modp(&d_open_times_b, &e_open_times_a)
+            .map_err(|err| anyhow!("Failed to obtain d_open * b + e_open * a: {}", err))?; // Compute d * b + e * a = xb + ya - 2ab
+        prod_shares = element_wise_sum_modp(&prod_shares, &c)
+            .map_err(|err| anyhow!("Failed to obtain c + d * b + e * a: {}", err))?; // Compute c + d * b + e * a = ab + xb + ya - 2ab = xb + ya - ab
+        if role {
+            let d_open_times_e_open = element_wise_product_modp(&d_open, &e_open)
+                .map_err(|err| anyhow!("Failed to obtain d * e for final step: {}", err))?; // Obtain d * e = (x - a) * (y - b) = xy - ay - bx + ab
+            prod_shares = element_wise_sum_modp(&prod_shares, &d_open_times_e_open)
+                .map_err(|err| anyhow!("Failed to obtain prod_shares + d * e = x * y: {}", err))?; // Compute prod_shares + d * e = xy
         }
 
-        Ok(prod_share)
+        Ok(prod_shares)
+    }
+
+    // Heavily assumes that both parties synchronize on the barrett context
+    fn send_modp_vec<'a>(
+        &'a self,
+        vals: &[Modp<'a>],
+        channel: &mut CommTrackingChannel,
+    ) -> Result<()> {
+        let length: usize = vals.len();
+        channel.write_bytes(&length.to_le_bytes());
+        for (idx, val) in vals.iter().enumerate() {
+            ensure!(val.context() == &self.barrett_ctx, "Barrett context mismatch at idx {}", idx);
+            channel.write_bytes(&val.value().to_le_bytes());
+        }
+        Ok(())
+    }
+
+    // Heavily assumes that both parties synchronize on the barrett context
+    fn recv_modp_vec<'a>(
+        &'a self,
+        channel: &mut CommTrackingChannel,
+    ) -> Result<Vec<Modp<'a>>> {
+        let mut length_bytes = vec![0u8; 8];
+        channel.read_bytes(&mut length_bytes);
+        let length = usize::from_le_bytes(length_bytes.try_into().unwrap());
+        let mut res: Vec<Modp> = Vec::with_capacity(length);
+        for _ in 0..length {
+            let mut val_bytes = vec![0u8; 16];
+            channel.read_bytes(&mut val_bytes);
+            let val = u128::from_le_bytes(val_bytes.try_into().unwrap());
+            res.push(Modp::new(&self.barrett_ctx, val));
+        }
+        Ok(res)
     }
 }
 
