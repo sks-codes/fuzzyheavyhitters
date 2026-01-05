@@ -92,6 +92,7 @@ pub enum VerifyValues<'a> {
     },
     DcfPayload {
         length: usize,
+        last_layer_consistency: Vec<Modp<'a>>,
         consistency: Vec<Vec<Modp<'a>>>,
     },
     Lp {

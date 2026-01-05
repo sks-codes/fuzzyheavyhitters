@@ -84,13 +84,13 @@ impl SketchPhase {
         sketch_data: &[SketchData<'a>],
         channel: &mut CommTrackingChannel,
         role: bool,
-    ) -> Result<Vec<Modp<'a>>> {
+    ) -> Result<Vec<VerifyValues<'a>>> {
         match (&self.config.method, &self.config.metric) {
             (ShareMethod::FSS, DistanceMetric::LInfinity) => {
                 self.batch_verify_linf(sketch_values, sketch_data, channel, role)
             }
             (ShareMethod::FSS, DistanceMetric::Lp { .. }) => {
-                self.verify_lp(sketch_value, sketch_data, channel, is_first)
+                self.batch_verify_lp(sketch_values, sketch_data, channel, role)
             }
             _ => Err(anyhow!("Sketch verification not supported for this configuration")),
         }
@@ -558,24 +558,24 @@ impl SketchPhase {
         for sketch_datum in sketch_data {
             match sketch_datum {
                 SketchData::Linf { ldcf, rdcf } => {
-                    match **ldcf {
+                    match &**ldcf {
                         SketchData::Dcf { z_ast, z_bullet, z, consistency } => {
-                            zs_sq_ast_triples.push(z_ast);
-                            zs_sq_bullet_triples.push(z_bullet);
-                            zs_triples.push(z);
+                            zs_sq_ast_triples.push(*z_ast);
+                            zs_sq_bullet_triples.push(*z_bullet);
+                            zs_triples.push(*z);
                             for consistency_triple in consistency {
-                                consistency_triples.push(consistency_triple);
+                                consistency_triples.push(*consistency_triple);
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member ldcf of SketchData::Linf, needed SketchData::Dcf")),
                     };
-                    match **rdcf{
+                    match &**rdcf {
                         SketchData::Dcf { z_ast, z_bullet, z, consistency } => {
-                            zs_sq_ast_triples.push(z_ast);
-                            zs_sq_bullet_triples.push(z_bullet);
-                            zs_triples.push(z);
+                            zs_sq_ast_triples.push(*z_ast);
+                            zs_sq_bullet_triples.push(*z_bullet);
+                            zs_triples.push(*z);
                             for consistency_triple in consistency {
-                                consistency_triples.push(consistency_triple);
+                                consistency_triples.push(*consistency_triple);
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member rdcf of SketchData::Linf, needed SketchData::Dcf")),
@@ -627,259 +627,249 @@ impl SketchPhase {
         Ok(verify_values)
     }
 
-    fn verify_lp<'a>(
+    fn batch_verify_lp<'a>(
         &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
+        sketch_values: &[SketchValues<'a>],
+        sketch_data: &[SketchData<'a>],
         channel: &mut CommTrackingChannel,
-        is_first: bool,
-    ) -> Result<Vec<Modp<'a>>> {
-        let (
-            p_value,
-            ldcf0_value,
-            ldcf1_value,
-            rdcf0_value,
-            rdcf1_value,
-            reference_dpf_case0,
-            reference_dpf_case1,
-        ) = match sketch_value {
-            SketchValues::Lp {
-                p,
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                reference_dpf_case0,
-                reference_dpf_case1,
-            } => (
-                *p,
-                &**ldcf0,
-                &**ldcf1,
-                &**rdcf0,
-                &**rdcf1,
-                reference_dpf_case0,
-                reference_dpf_case1,
-            ),
-            _ => return Err(anyhow!("SketchValues not in Lp format for verification")),
-        };
-        let (
-            p_data,
-            ldcf0_data,
-            ldcf1_data,
-            rdcf0_data,
-            rdcf1_data,
-            z_ast_triple,
-            z_bullet_triple,
-            z_triple,
-        ) = match sketch_data {
-            SketchData::Lp {
-                p,
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                z_ast,
-                z_bullet,
-                z,
-            } => (
-                *p,
-                &**ldcf0,
-                &**ldcf1,
-                &**rdcf0,
-                &**rdcf1,
-                z_ast,
-                z_bullet,
-                z,
-            ),
-            _ => return Err(anyhow!("SketchData not in Lp format for verification")),
+        role: bool,
+    ) -> Result<Vec<VerifyValues<'a>>> {
+        let p_metric = match self.config.metric {
+            DistanceMetric::Lp { p } => p as usize,
+            _ => return Err(anyhow!("Distance metric is not Lp but run batch_verify_lp.")),
         };
 
-        ensure!(
-            p_value == p_data,
-            "Mismatch p between sketch values ({}) and sketch data ({})",
-            p_value,
-            p_data
-        );
+        let mut last_layer_verify = Vec::new();
+        let mut consistency0 = Vec::new();
+        let mut consistency1 = Vec::new();
+        let mut zs_ast = Vec::new();
+        let mut zs2_ast = Vec::new();
+        let mut zs_bullet = Vec::new();
+        let mut zs2_bullet = Vec::new();
 
-        // Verify reference DPF sketch
-        let ref_case0_sq = self.beaver_multiply(
-            reference_dpf_case0.0,
-            reference_dpf_case0.0,
-            z_ast_triple,
-            channel,
-            is_first,
-        )?;
-        let ref_case0 = ref_case0_sq - reference_dpf_case0.1;
-        let ref_case1_sq = self.beaver_multiply(
-            reference_dpf_case1.0,
-            reference_dpf_case1.0,
-            z_bullet_triple,
-            channel,
-            is_first,
-        )?;
-        let ref_case1 = ref_case1_sq - reference_dpf_case1.1;
-        let ref_check = self.beaver_multiply(ref_case0, ref_case1, z_triple, channel, is_first)?;
-
-        // Verify each payload component
-        let mut checks = vec![ref_check];
-        checks.extend(self.verify_dcf_payload(
-            ldcf0_value,
-            ldcf0_data,
-            channel,
-            is_first,
-        )?);
-        checks.extend(self.verify_dcf_payload(
-            ldcf1_value,
-            ldcf1_data,
-            channel,
-            is_first,
-        )?);
-        checks.extend(self.verify_dcf_payload(
-            rdcf0_value,
-            rdcf0_data,
-            channel,
-            is_first,
-        )?);
-        checks.extend(self.verify_dcf_payload(
-            rdcf1_value,
-            rdcf1_data,
-            channel,
-            is_first,
-        )?);
-
-        Ok(checks)
-    }
-
-    fn verify_dcf<'a>(
-        &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
-        channel: &mut CommTrackingChannel,
-        is_first: bool,
-    ) -> Result<(Modp<'a>, Vec<Modp<'a>>)> {
-        let (last_layer_case0, last_layer_case1, consistency_values) = match sketch_value {
-            SketchValues::Dcf {
-                last_layer_case0,
-                last_layer_case1,
-                consistency,
-            } => (last_layer_case0, last_layer_case1, consistency),
-            _ => return Err(anyhow!("SketchValues not in Dcf format for verification")),
-        };
-
-        let (triple_z_ast, triple_z_bullet, triple_z, consistency_triples) = match sketch_data {
-            SketchData::Dcf {
-                z_ast,
-                z_bullet,
-                z,
-                consistency,
-            } => (z_ast, z_bullet, z, consistency),
-            _ => return Err(anyhow!("SketchData not in Dcf format for verification")),
-        };
-
-        ensure!(
-            consistency_values.len() == consistency_triples.len(),
-            "Mismatch DCF consistency length: values {} vs triples {}",
-            consistency_values.len(),
-            consistency_triples.len()
-        );
-
-        let z_ast_sq = self.beaver_multiply(
-            last_layer_case0.0,
-            last_layer_case0.0,
-            triple_z_ast,
-            channel,
-            is_first,
-        )?;
-        let z_case0 = z_ast_sq - last_layer_case0.1;
-        let z_bullet_sq = self.beaver_multiply(
-            last_layer_case1.0,
-            last_layer_case1.0,
-            triple_z_bullet,
-            channel,
-            is_first,
-        )?;
-        let z_case1 = z_bullet_sq - last_layer_case1.1;
-        let last_layer_check =
-            self.beaver_multiply(z_case0, z_case1, triple_z, channel, is_first)?;
-
-        let mut consistency_checks = Vec::with_capacity(consistency_values.len());
-        for (value_pair, triple) in consistency_values.iter().zip(consistency_triples.iter()) {
-            let check =
-                self.beaver_multiply(value_pair.0, value_pair.1, triple, channel, is_first)?;
-            consistency_checks.push(check);
-        }
-
-        Ok((last_layer_check, consistency_checks))
-    }
-
-    fn verify_dcf_payload<'a>(
-        &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
-        channel: &mut CommTrackingChannel,
-        is_first: bool,
-    ) -> Result<Vec<Modp<'a>>> {
-        let (length_value, last_layer_consistency, consistency_values) = match sketch_value {
-            SketchValues::DcfPayload {
-                length,
-                last_layer_consistency,
-                consistency,
-            } => (*length, last_layer_consistency, consistency),
-            _ => return Err(anyhow!("SketchValues not in DcfPayload format for verification")),
-        };
-        let (length_data, consistency_triples) = match sketch_data {
-            SketchData::DcfPayload { length, consistency } => (*length, consistency),
-            _ => return Err(anyhow!("SketchData not in DcfPayload format for verification")),
-        };
-
-        ensure!(
-            length_value == length_data,
-            "Mismatch payload length for verification: values {} vs data {}",
-            length_value,
-            length_data
-        );
-        ensure!(
-            last_layer_consistency.len() == length_value,
-            "Unexpected last layer payload length: {} vs declared {}",
-            last_layer_consistency.len(),
-            length_value
-        );
-        ensure!(
-            consistency_values.len() == consistency_triples.len(),
-            "Mismatch DCF payload consistency levels: values {} vs triples {}",
-            consistency_values.len(),
-            consistency_triples.len()
-        );
-
-        let mut checks = Vec::new();
-        checks.extend(last_layer_consistency.iter().copied());
-
-        for (level_idx, (value_pairs, triples)) in consistency_values
-            .iter()
-            .zip(consistency_triples.iter())
-            .enumerate()
-        {
-            ensure!(
-                value_pairs.len() == triples.len(),
-                "Mismatch payload consistency count at level {}: values {} vs triples {}",
-                level_idx + 1,
-                value_pairs.len(),
-                triples.len()
-            );
-            for (value_pair, triple) in value_pairs.iter().zip(triples.iter()) {
-                checks.push(self.beaver_multiply(
-                    value_pair.0,
-                    value_pair.1,
-                    triple,
-                    channel,
-                    is_first,
-                )?);
+        for sketch_value in sketch_values {
+            match sketch_value {
+                SketchValues::Lp { p, ldcf0, ldcf1, rdcf0, rdcf1, reference_dpf_case0, reference_dpf_case1 } => {
+                    ensure!(*p == p_metric, "Lp distance metric mismatch, p = {}, p_metric = {}", p, p_metric);
+                    match &** ldcf0 {
+                        SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for ldcf0, expect p+1 = {}, have length = {}", *p+1, length);
+                            for last_layer in last_layer_consistency.iter() {
+                                last_layer_verify.push(*last_layer);
+                            }
+                            for consistency_vec in consistency.iter() {
+                                for (cons0, cons1) in consistency_vec.iter() {
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for ldcf0, expect SketchValues::DcfPayload.")),
+                    };
+                    match &** ldcf1 {
+                        SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for ldcf1, expect p+1 = {}, have length = {}", *p+1, length);
+                            for last_layer in last_layer_consistency.iter() {
+                                last_layer_verify.push(*last_layer);
+                            }
+                            for consistency_vec in consistency.iter() {
+                                for (cons0, cons1) in consistency_vec.iter() {
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for ldcf1, expect SketchValues::DcfPayload.")),
+                    };
+                    match &** rdcf0 {
+                        SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for rdcf0, expect p+1 = {}, have length = {}", *p+1, length);
+                            for last_layer in last_layer_consistency.iter() {
+                                last_layer_verify.push(*last_layer);
+                            }
+                            for consistency_vec in consistency.iter() {
+                                for (cons0, cons1) in consistency_vec.iter() {
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for rdcf0, expect SketchValues::DcfPayload.")),
+                    };
+                    match &** rdcf1 {
+                        SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for rdcf1, expect p+1 = {}, have length = {}", *p+1, length);
+                            for last_layer in last_layer_consistency.iter() {
+                                last_layer_verify.push(*last_layer);
+                            }
+                            for consistency_vec in consistency.iter() {
+                                for (cons0, cons1) in consistency_vec.iter() {
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for rdcf1, expect SketchValues::DcfPayload.")),
+                    };
+                    zs_ast.push(reference_dpf_case0.0);
+                    zs2_ast.push(reference_dpf_case0.1);
+                    zs_bullet.push(reference_dpf_case1.0);
+                    zs2_bullet.push(reference_dpf_case1.1);
+                },
+                _ => return Err(anyhow!("SketchValues type mismatch for batch_verify_lp, expect SketchValues::Lp.")),
             }
         }
 
-        Ok(checks)
-    }
+        let mut consistency_triples = Vec::new();
+        let mut zs_sq_ast_triples = Vec::new();
+        let mut zs_sq_bullet_triples = Vec::new();
+        let mut zs_triples = Vec::new();
 
+        for sketch_datum in sketch_data.iter() {
+            match sketch_datum {
+                SketchData::Lp { p, ldcf0, ldcf1, rdcf0, rdcf1, z_ast, z_bullet, z } => {
+                    ensure!(*p == p_metric, "Lp distance metric mismatch for sketch_datum, expected p_metric = {}, got p = {}", p_metric, p);
+                    match &**ldcf0 {
+                        SketchData::DcfPayload { length, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for ldcf0 in sketch_data, expect p+1 = {}, have length = {}", *p+1, length);
+                            for consistency_vec in consistency.iter() {
+                                for cons in consistency_vec.iter() {
+                                    consistency_triples.push(*cons);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for ldcf0, expect SketchData::DcfPayload.")),
+                    };
+                    match &**ldcf1 {
+                        SketchData::DcfPayload { length, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for ldcf1 in sketch_data, expect p+1 = {}, have length = {}", *p+1, length);
+                            for consistency_vec in consistency.iter() {
+                                for cons in consistency_vec.iter() {
+                                    consistency_triples.push(*cons);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for ldcf1, expect SketchData::DcfPayload.")),
+                    };
+                    match &**rdcf0 {
+                        SketchData::DcfPayload { length, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for rdcf0 in sketch_data, expect p+1 = {}, have length = {}", *p+1, length);
+                            for consistency_vec in consistency.iter() {
+                                for cons in consistency_vec.iter() {
+                                    consistency_triples.push(*cons);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for rdcf0, expect SketchData::DcfPayload.")),
+                    };
+                    match &**rdcf1 {
+                        SketchData::DcfPayload { length, consistency } => {
+                            ensure!(*length == *p+1, "Length mismatch for rdcf1 in sketch_data, expect p+1 = {}, have length = {}", *p+1, length);
+                            for consistency_vec in consistency.iter() {
+                                for cons in consistency_vec.iter() {
+                                    consistency_triples.push(*cons);
+                                }
+                            }
+                        },
+                        _ => return Err(anyhow!("Type mismatch for rdcf1, expect SketchData::DcfPayload.")),
+                    };
+                    zs_sq_ast_triples.push(*z_ast);
+                    zs_sq_bullet_triples.push(*z_bullet);
+                    zs_triples.push(*z);
+                },
+                _ => return Err(anyhow!("SketchData type mismatch for batch_verify_lp, expect SketchData::Lp.")),
+            }
+        }
+
+        let zs_sq_ast = self.batch_multiply_with_beaver(&zs_ast, &zs_ast, &zs_sq_ast_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to multipy z_ast with z_ast: {}", e))?; // Compute z_ast * z_ast
+        let zs_sq_bullet = self.batch_multiply_with_beaver(&zs_bullet, &zs_bullet, &zs_sq_bullet_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to multipy z_bullet with z_bullet: {}", e))?; // Compute z_bullet * z_bullet
+        let zs_subtract_ast = element_wise_subtract_modp(&zs_sq_ast, &zs2_ast) 
+            .map_err(|e| anyhow!("Failed to subtract z2_ast from z_ast*z_ast: {}", e))?; // Compute z_ast * z_ast - z2_ast
+        let zs_subtract_bullet= element_wise_subtract_modp(&zs_sq_bullet, &zs2_bullet) 
+            .map_err(|e| anyhow!("Failed to subtract z2_bullet from z_bullet*z_bullet: {}", e))?; // Compute z_bullet * z_bullet - z2_bullet
+        let zs = self.batch_multiply_with_beaver(&zs_subtract_ast, &zs_subtract_bullet, &zs_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to obtain z = z_subtract_ast * z_subtract_bullet: {}", e))?; // Compute z = (z_ast * z_ast - z2_ast) * (z_bullet * z_bullet - z2_bullet)
+
+        // Now obtain verify values for conssitency between levels
+        let consistency_between_levels = self.batch_multiply_with_beaver(&consistency0, &consistency1, &consistency_triples, channel, role)
+            .map_err(|e| anyhow!("Failed to obtain consistency verify value by consistency0 * consistency1: {}", e))?; // Simply multiply consistency sketch values
+
+        let mut verify_values = Vec::new();
+        for ((z, consistency_quad), last_layer_quad) in 
+            zs.iter()
+            .zip(consistency_between_levels.chunks(4 * (self.config.h1-1) * (p_metric + 1)))
+            .zip(last_layer_verify.chunks(4 * (p_metric + 1))) {
+            ensure!(consistency_quad.len() == 4 * (self.config.h1 - 1) * (p_metric + 1), 
+                "Some size mismatch in preparing verify values. Expected consistency_quad.len() = {}, got {}",
+                4 * (self.config.h1 - 1) * (p_metric + 1), 
+                consistency_quad.len());
+            ensure!(last_layer_quad.len() == 4 * (p_metric + 1),
+                "Some size mismatch in preparing verify values. Expected last_layer_quad.len() = {}, got {}",
+                4 * (p_metric + 1),
+                last_layer_quad.len());
+            
+            let mut ldcf0_consistency = Vec::new();
+            for i in 0..self.config.h1 - 1 {
+                let start_idx = i * (p_metric + 1);
+                let end_idx = (i + 1) * (p_metric + 1);
+                ldcf0_consistency.push(consistency_quad[start_idx..end_idx].to_vec());
+            }
+            let ldcf0_verify = VerifyValues::DcfPayload { 
+                length: p_metric + 1, 
+                last_layer_consistency: last_layer_quad[0..p_metric+1].to_vec(),
+                consistency: ldcf0_consistency };
+            
+            let mut ldcf1_consistency = Vec::new();
+            for i in 0..self.config.h1 - 1 {
+                let offset = self.config.h1 - 1;
+                let start_idx = (offset + i) * (p_metric + 1);
+                let end_idx = (offset + i + 1) * (p_metric + 1);
+                ldcf1_consistency.push(consistency_quad[start_idx..end_idx].to_vec());
+            }
+            let ldcf1_verify = VerifyValues::DcfPayload { 
+                length: p_metric + 1, 
+                last_layer_consistency: last_layer_quad[p_metric+1..2*(p_metric+1)].to_vec(),
+                consistency: ldcf1_consistency };
+            
+            let mut rdcf0_consistency = Vec::new();
+            for i in 0..self.config.h1 - 1 {
+                let offset = 2 * (self.config.h1 - 1);
+                let start_idx = (offset + i) * (p_metric + 1);
+                let end_idx = (offset + i + 1) * (p_metric + 1);
+                rdcf0_consistency.push(consistency_quad[start_idx..end_idx].to_vec());
+            }
+            let rdcf0_verify = VerifyValues::DcfPayload { 
+                length: p_metric + 1, 
+                last_layer_consistency: last_layer_quad[2*(p_metric+1)..3*(p_metric+1)].to_vec(),
+                consistency: rdcf0_consistency };
+            
+            let mut rdcf1_consistency = Vec::new();
+            for i in 0..self.config.h1 - 1 {
+                let offset = 3 * (self.config.h1 - 1);
+                let start_idx = (offset + i) * (p_metric + 1);
+                let end_idx = (offset + i + 1) * (p_metric + 1);
+                rdcf1_consistency.push(consistency_quad[start_idx..end_idx].to_vec());
+            }
+            let rdcf1_verify = VerifyValues::DcfPayload { 
+                length: p_metric + 1, 
+                last_layer_consistency: last_layer_quad[3*(p_metric+1)..4*(p_metric+1)].to_vec(),
+                consistency: rdcf1_consistency };
+
+            let verify_value = VerifyValues::Lp { 
+                p: p_metric, 
+                ldcf0: Box::new(ldcf0_verify), 
+                ldcf1: Box::new(ldcf1_verify), 
+                rdcf0: Box::new(rdcf0_verify), 
+                rdcf1: Box::new(rdcf1_verify), 
+                reference_dpf: *z };
+
+            verify_values.push(verify_value);
+        }
+
+        Ok(verify_values)
+    }
 }
 
 // Beaver multiplication for the verify phase
@@ -892,7 +882,6 @@ impl SketchPhase {
         channel: &mut CommTrackingChannel,
         role: bool,
     ) -> Result<Vec<Modp<'a>>> {
-        let mut prod_shares = Vec::new();
         // Gotta fix later. Need to batch send the whole vector
         let a: Vec<Modp> = triples.iter().map(|triple| triple.0).collect();
         let b: Vec<Modp> = triples.iter().map(|triple| triple.1).collect();
