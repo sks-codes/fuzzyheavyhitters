@@ -17,7 +17,7 @@ fn run_dealer(config_path: &str, num_threads: usize) -> Result<(), String> {
 
     let dealer = FssDealer::new(
         distance_threshold,
-        cli_config.protocol.threshold,
+        cli_config.protocol.match_threshold,
         cli_config.protocol.h2,
         cli_config.protocol.h3,
         cli_config.protocol.num_clients,

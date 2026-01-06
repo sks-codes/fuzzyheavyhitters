@@ -4,7 +4,7 @@ use crate::{
 };
 
 /// Method for threshold comparison
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ThresholdMethod {
     /// Use garbled circuits for threshold comparison
     GC,

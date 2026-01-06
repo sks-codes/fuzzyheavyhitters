@@ -6,7 +6,8 @@ use mosaic::{
     fuzzy_match::{
         dealer::{FssDealer, FssKeyBatch},
         protocol::request_dealer_threshold,
-        threshold_phase::{ThresholdConfig, ThresholdData, ThresholdMethod, ThresholdPhase},
+        threshold_phase::ThresholdPhase,
+        threshold_phase_types::{ThresholdConfig, ThresholdData, ThresholdMethod},
     },
 };
 use rand::Rng;
@@ -130,11 +131,10 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     let threshold_config = ThresholdConfig {
         h3: config.h3,
-        is_garbler_side: server,
         method: ThresholdMethod::FSS,
     };
 
-    let threshold_phase = ThresholdPhase::new(threshold_config);
+    let threshold_phase = ThresholdPhase::new(threshold_config, server);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!(

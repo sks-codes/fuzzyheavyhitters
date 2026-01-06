@@ -4,7 +4,8 @@ use mosaic::{
     configs::property_test_config::BenchmarkConfig,
     data_structures::mod2k::Mod2k,
     fuzzy_match::{
-        check_phase::{CheckConfig, CheckMethod, CheckPhase, CheckProperty},
+        check_phase::CheckPhase,
+        check_phase_types::{CheckConfig, CheckMethod, CheckProperty},
         dealer::{FssDealer, FssKeyBatch},
         protocol::request_dealer_check,
     },
@@ -125,12 +126,11 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         h2: config.h2,
         h3: config.h3,
         d: config.d,
-        is_garbler_side: server,
         property: CheckProperty::MuBounded,
         method: CheckMethod::FSS,
     };
 
-    let check_phase = CheckPhase::new(check_config);
+    let check_phase = CheckPhase::new(check_config, server);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!(

@@ -1725,6 +1725,20 @@ impl SketchPhase {
     }
 }
 
+impl SketchPhase {
+    pub fn h1(&self) -> usize {
+        self.config.h1
+    }
+
+    pub fn h2(&self) -> usize {
+        self.config.h2
+    }
+
+    pub fn q(&self) -> u128 {
+        self.config.q
+    }
+}
+
 fn sample_modp_vec<'a>(
     size: usize,
     barrett_ctx: &'a BarrettCtx,

@@ -25,25 +25,6 @@ use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
 
-/// Configuration for the entire fuzzy heavy hitters protocol
-#[derive(Debug, Clone)]
-pub struct ProtocolConfig {
-    /// Configuration for the share phase
-    pub share_config: ShareConfig,
-    /// Configuration for the check phase
-    pub check_config: CheckConfig,
-    /// Configuration for the threshold phase
-    pub threshold_config: ThresholdConfig,
-    /// The threshold value for heavy hitters detection
-    pub threshold: u128,
-    /// The delta value for fuzzy matching (L-infinity distance)
-    pub delta: u128,
-    /// Number of clients participating in the protocol
-    pub num_clients: usize,
-    /// Whether to enable sketching verification
-    pub enable_sketch: bool,
-}
-
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
 #[derive(Clone)]
 pub struct MosaicProtocol {
@@ -52,11 +33,20 @@ pub struct MosaicProtocol {
     check_phase: CheckPhase,
     threshold_phase: ThresholdPhase,
     role: bool, 
+    enable_sketch: bool,
+    num_clients: usize,
+    match_threshold: u128,
 }
 
 impl MosaicProtocol {
     /// Create a new protocol instance
-    pub fn new<C: Into<ShareConfig> + Into<SketchConfig> + Into<CheckConfig> + Into<ThresholdConfig> + Clone>(config: C, role: bool) -> Self {
+    pub fn new<C: Into<ShareConfig> + Into<SketchConfig> + Into<CheckConfig> + Into<ThresholdConfig> + Clone>(
+        config: C, 
+        role: bool,
+        enable_sketch: bool,
+        num_clients: usize,
+        match_threshold: u128,
+    ) -> Self {
         let share_phase = SharePhase::new(config.clone());
         let check_phase = CheckPhase::new(config.clone(), role);
         let sketch_phase = SketchPhase::new(config.clone());
@@ -67,8 +57,64 @@ impl MosaicProtocol {
             check_phase,
             threshold_phase,
             role,
+            enable_sketch,
+            num_clients,
+            match_threshold,
         }
     }
+
+    pub fn receive_client_shares(
+        &self,
+        client_channel: &mut CommTrackingChannel,
+    ) -> Result<(Vec<SharedRange>, Option<Vec<Vec<SketchDataOwned>>>), String> {
+        // Receive shares using custom serialization
+        let mut len_bytes = [0u8; 8];
+        client_channel
+            .read_bytes(&mut len_bytes)
+            .map_err(|e| format!("Failed to read length from client: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        let mut shares_data = vec![0u8; len];
+        client_channel
+            .read_bytes(&mut shares_data)
+            .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
+
+        // Custom deserialization for Vec<SharedRange>
+        let bytes = &shares_data[..];
+        if bytes.len() < 4 {
+            return Err("Too short for Vec<SharedRange> length".to_string());
+        }
+        let mut offset = 0;
+        let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+        let modulus = 1u128 << self.share_phase.config.h2;
+        let mut shares = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)?;
+            shares.push(share);
+            offset += share_used;
+        }
+        if !self.enable_sketch {
+            return Ok((shares, None));
+        }
+
+        let mut sketch_len_bytes = [0u8; 8];
+        client_channel
+            .read_bytes(&mut sketch_len_bytes)
+            .map_err(|e| format!("Failed to read sketch length from client: {}", e))?;
+        let sketch_len = u64::from_le_bytes(sketch_len_bytes) as usize;
+        if sketch_len == 0 {
+            return Ok((shares, None));
+        }
+        let mut sketch_buf = vec![0u8; sketch_len];
+        client_channel
+            .read_bytes(&mut sketch_buf)
+            .map_err(|e| format!("Failed to read sketches from client: {}", e))?;
+        let sketches: Vec<Vec<SketchDataOwned>> = bincode::deserialize(&sketch_buf)
+            .map_err(|e| format!("Failed to deserialize sketches: {}", e))?;
+
+        Ok((shares, Some(sketches)))
+    }
+
 
     fn extract_role(shared_range: &SharedRange) -> bool {
         match shared_range {
@@ -88,7 +134,7 @@ impl MosaicProtocol {
         channel: &mut CommTrackingChannel,
         role: bool,
     ) -> Result<Vec<u128>, String> {
-        let modulus = self.config.share_config.sketch_modulus;
+        let modulus = self.q();
         let my_values: Vec<u128> = shares.iter().map(|m| m.value()).collect();
         let len = my_values.len() as u64;
 
@@ -213,7 +259,7 @@ impl MosaicProtocol {
         client_sketches: Option<&[Vec<SketchDataOwned>]>,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
-        if self.config.share_config.method != ShareMethod::FSS || !self.config.enable_sketch {
+        if self.share_method() != ShareMethod::FSS || !self.enable_sketch() {
             return Ok(vec![false; client_shares.len()]);
         }
         if client_shares.is_empty() {
@@ -231,8 +277,6 @@ impl MosaicProtocol {
                 sketches.len()
             ));
         }
-        let sketch_config =
-            Self::sketch_config_from_share_config(&self.config.share_config);
 
         let num_threads = other_server_channels.len().max(1);
         let chunk_size = (client_shares.len() + num_threads - 1) / num_threads.max(1);
@@ -243,8 +287,7 @@ impl MosaicProtocol {
             .zip(sketches.par_chunks(chunk_size))
             .zip(other_server_channels.par_iter_mut())
             .try_for_each(|(((flag_chunk, range_chunk), sketch_chunk), channel)| {
-                let sketch_phase = SketchPhase::new(sketch_config.clone());
-                let sketch_helper = sketch_phase
+                let sketch_helper = self.sketch_phase
                     .get_sketch_helper()
                     .map_err(|e| format!("Failed to build sketch helper: {}", e))?;
 
@@ -267,16 +310,16 @@ impl MosaicProtocol {
 
                     let seed = Self::extract_sketch_seed(shared_range);
                     let mut prg_sketch = PRG::new(Some(&seed), 0);
-                    let sketch_values = sketch_phase
+                    let sketch_values = self.sketch_phase
                         .sketch(shared_range, &sketch_helper, &mut prg_sketch)
                         .map_err(|e| format!("Sketch failed: {}", e))?;
 
                     let sketch_data_vec: Vec<_> = sketches_one
                         .iter()
-                        .map(|owned| sketch_phase.sketch_data_from_owned(owned))
+                        .map(|owned| self.sketch_phase.sketch_data_from_owned(owned))
                         .collect();
 
-                    let verify_shares = sketch_phase
+                    let verify_shares = self.sketch_phase
                         .batch_verify(&sketch_values, &sketch_data_vec, channel, role)
                         .map_err(|e| format!("Sketch verify failed: {}", e))?;
                     let flattened = self.flatten_verify_values(&verify_shares);
@@ -291,58 +334,6 @@ impl MosaicProtocol {
             .map_err(|e| format!("Parallel sketch verification failed: {}", e))?;
 
         Ok(malicious_flags)
-    }
-
-    pub fn receive_client_shares(
-        &self,
-        client_channel: &mut CommTrackingChannel,
-    ) -> Result<(Vec<SharedRange>, Option<Vec<Vec<SketchDataOwned>>>), String> {
-        // Receive shares using custom serialization
-        let mut len_bytes = [0u8; 8];
-        client_channel
-            .read_bytes(&mut len_bytes)
-            .map_err(|e| format!("Failed to read length from client: {}", e))?;
-        let len = u64::from_le_bytes(len_bytes) as usize;
-        let mut shares_data = vec![0u8; len];
-        client_channel
-            .read_bytes(&mut shares_data)
-            .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
-
-        // Custom deserialization for Vec<SharedRange>
-        let bytes = &shares_data[..];
-        if bytes.len() < 4 {
-            return Err("Too short for Vec<SharedRange> length".to_string());
-        }
-        let mut offset = 0;
-        let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
-        let modulus = 1u128 << self.config.share_config.h2;
-        let mut shares = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)?;
-            shares.push(share);
-            offset += share_used;
-        }
-        if !self.config.enable_sketch {
-            return Ok((shares, None));
-        }
-
-        let mut sketch_len_bytes = [0u8; 8];
-        client_channel
-            .read_bytes(&mut sketch_len_bytes)
-            .map_err(|e| format!("Failed to read sketch length from client: {}", e))?;
-        let sketch_len = u64::from_le_bytes(sketch_len_bytes) as usize;
-        if sketch_len == 0 {
-            return Ok((shares, None));
-        }
-        let mut sketch_buf = vec![0u8; sketch_len];
-        client_channel
-            .read_bytes(&mut sketch_buf)
-            .map_err(|e| format!("Failed to read sketches from client: {}", e))?;
-        let sketches: Vec<Vec<SketchDataOwned>> = bincode::deserialize(&sketch_buf)
-            .map_err(|e| format!("Failed to deserialize sketches: {}", e))?;
-
-        Ok((shares, Some(sketches)))
     }
 
     /// Parallel version of run_server_known_dictionary using multiple channels for both dealer and other server
@@ -381,7 +372,7 @@ impl MosaicProtocol {
             .map(|query_point| {
                 query_point
                     .iter()
-                    .map(|&point| u128_to_bits_msb(point, self.config.share_config.h1))
+                    .map(|&point| u128_to_bits_msb(point, self.h1()))
                     .collect()
             })
             .collect();
@@ -392,7 +383,7 @@ impl MosaicProtocol {
                 client_shares
                     .iter()
                     .map(|range| {
-                        (0..self.config.share_config.d)
+                        (0..self.d())
                             .map(|i| {
                                 self.share_phase
                                     .evaluate_at_single_dimension(range, &query_point[i], i)
@@ -455,9 +446,9 @@ impl MosaicProtocol {
             .filter_map(|(share, ok)| if !*ok { Some(share.clone()) } else { None })
             .collect();
 
-        let max_bit_length = self.config.share_config.h1;
-        let dimension = self.config.share_config.d;
-        let eval_len = self.config.share_config.h2;
+        let max_bit_length = self.h1();
+        let dimension = self.d();
+        let eval_len = self.h2();
         let eval_modulus = 1u128 << eval_len;
 
         // Evaluate the empty prefix for each dimension
@@ -644,12 +635,12 @@ impl MosaicProtocol {
         );
 
         // Calculate distance threshold once
-        let distance_threshold = if self.config.share_config.metric == DistanceMetric::LInfinity {
-            get_distance_threshold(self.config.delta, "Linf")
+        let distance_threshold = if self.metric() == DistanceMetric::LInfinity {
+            get_distance_threshold(self.delta(), "Linf")
         } else {
-            match self.config.share_config.metric {
+            match self.metric() {
                 DistanceMetric::Lp { p } => {
-                    get_distance_threshold(self.config.delta, &format!("L{}", p))
+                    get_distance_threshold(self.delta(), &format!("L{}", p))
                 }
                 _ => return Err("Unsupported distance metric for threshold".to_string()),
             }
@@ -676,21 +667,21 @@ impl MosaicProtocol {
                 // Process each evaluation chunk in this chunk using the parallel channels
                 for eval in eval_chunk.iter() {
                     // Handle CheckData - get from dealer if using LpIntervalFSS, otherwise create locally
-                    let check_data_list = match self.config.check_config.property {
+                    let check_data_list = match self.check_property() {
                         CheckProperty::Equality => {
-                            match self.config.check_config.method {
+                            match self.check_method() {
                                 CheckMethod::FSS => {
                                     let batch =
-                                        request_dealer_equality(signal_dealer_channel, check_dealer_channel, 1u128 << self.config.check_config.h3)?;
+                                        request_dealer_equality(signal_dealer_channel, check_dealer_channel, 1u128 << self.h3())?;
 
-                                    if batch.keys.len() < self.config.num_clients {
+                                    if batch.keys.len() < self.num_clients() {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
-                                                        batch.keys.len(), self.config.num_clients));
+                                                        batch.keys.len(), self.num_clients()));
                                     }
 
                                     // Create CheckData for each client share using corresponding FSS key
                                     let mut check_data_vec = Vec::new();
-                                    for i in 0..self.config.num_clients {
+                                    for i in 0..self.num_clients() {
                                         check_data_vec.push(CheckData::LinfDpf {
                                             fss_key: batch.keys[i].clone(),
                                             random_value: batch.random_values[i].clone(),
@@ -699,30 +690,30 @@ impl MosaicProtocol {
                                     check_data_vec
                                 }
                                 CheckMethod::GC => {
-                                    vec![CheckData::LinfGarbledCircuits; self.config.num_clients]
+                                    vec![CheckData::LinfGarbledCircuits; self.num_clients()]
                                 }
                             }
                         }
                         CheckProperty::MuBounded => {
-                            match self.config.check_config.method {
+                            match self.check_method() {
                                 CheckMethod::FSS => {
                                     // Request check FSS keys from dealer using the parallel check dealer channel
-                                    let batch = request_dealer_check(signal_dealer_channel, check_dealer_channel, 1u128 << self.config.check_config.h3)?;
+                                    let batch = request_dealer_check(signal_dealer_channel, check_dealer_channel, 1u128 << self.h3())?;
                                     println!("Received dealer check keys");
 
-                                    if batch.keys.len() < self.config.num_clients {
+                                    if batch.keys.len() < self.num_clients() {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
-                                                         batch.keys.len(), self.config.num_clients));
+                                                         batch.keys.len(), self.num_clients()));
                                     }
 
-                                    if batch.random_values.len() < self.config.num_clients {
+                                    if batch.random_values.len() < self.num_clients() {
                                         return Err(format!("Dealer provided {} random values but {} are needed",
-                                                         batch.random_values.len(), self.config.num_clients));
+                                                         batch.random_values.len(), self.num_clients()));
                                     }
 
                                     // Create CheckData for each client share using corresponding FSS key
                                     let mut check_data_vec = Vec::new();
-                                    for i in 0..self.config.num_clients {
+                                    for i in 0..self.num_clients() {
                                         check_data_vec.push(CheckData::LpIntervalFSS {
                                             fss_key: batch.keys[i].clone(),
                                             random_value: batch.random_values[i],
@@ -731,7 +722,7 @@ impl MosaicProtocol {
                                     check_data_vec
                                 }
                                 CheckMethod::GC => {
-                                    vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; self.config.num_clients]
+                                    vec![CheckData::LpGarbledCircuits { mu: distance_threshold }; self.num_clients()]
                                 }
                             }
                         }
@@ -755,10 +746,10 @@ impl MosaicProtocol {
 
                 println!("Time to process all prefixes and aggregate results: {:?}", start.elapsed());
 
-                let threshold_data_list = match self.config.threshold_config.method {
+                let threshold_data_list = match self.threshold_method() {
                     ThresholdMethod::GC => {
                         // Use garbled circuits for threshold comparison
-                        vec![ThresholdData::GarbledCircuits { t: self.config.threshold }; aggregated_counts.len()]
+                        vec![ThresholdData::GarbledCircuits { t: self.match_threshold() }; aggregated_counts.len()]
                     }
                     ThresholdMethod::FSS => {
                         // Request threshold FSS keys from dealer using the parallel threshold dealer channel
@@ -877,6 +868,64 @@ impl MosaicProtocol {
         println!("Time for parallel bit exchange: {:?}", start.elapsed());
         println!("Parallel processing completed successfully");
         Ok(final_results)
+    }
+}
+
+impl MosaicProtocol {
+    pub fn h1(&self) -> usize {
+        self.share_phase.h1()
+    }
+
+    pub fn h2(&self) -> usize {
+        self.share_phase.h2()
+    }
+
+    pub fn h3(&self) -> usize {
+        self.check_phase.h3()
+    }
+
+    pub fn d(&self) -> usize {
+        self.share_phase.d()
+    }
+
+    pub fn q(&self) -> u128 {
+        self.sketch_phase.q()
+    }
+
+    pub fn delta(&self) -> u128 {
+        self.share_phase.delta()
+    }
+
+    pub fn metric(&self) -> DistanceMetric {
+        self.share_phase.metric()
+    }
+
+    pub fn num_clients(&self) -> usize {
+        self.num_clients
+    }
+
+    pub fn match_threshold(&self) -> u128 {
+        self.match_threshold
+    }
+
+    pub fn enable_sketch(&self) -> bool {
+        self.enable_sketch
+    }
+
+    pub fn share_method(&self) -> ShareMethod {
+        self.share_phase.method()
+    }
+
+    pub fn check_method(&self) -> CheckMethod {
+        self.check_phase.method()
+    }
+
+    pub fn check_property(&self) -> CheckProperty {
+        self.check_phase.property()
+    }
+
+    pub fn threshold_method(&self) -> ThresholdMethod {
+        self.threshold_phase.method()
     }
 }
 

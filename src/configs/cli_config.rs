@@ -3,10 +3,7 @@
 //! This module defines configuration structures for the CLI application
 
 use crate::fuzzy_match::{
-    check_phase_types::{CheckConfig, CheckMethod, CheckProperty},
-    protocol::ProtocolConfig,
     share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
-    threshold_phase_types::{ThresholdConfig, ThresholdMethod},
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,9 +28,8 @@ pub struct ProtocolParameters {
     /// L-infinity distance for fuzzy matching
     pub delta: u128,
     /// Threshold for heavy hitters detection
-    pub threshold: u128,
+    pub match_threshold: u128,
     /// Whether to enable sketching verification
-    #[serde(default)]
     pub enable_sketch: bool,
     /// Input bit length (for coordinates)
     pub h1: usize,
@@ -91,84 +87,6 @@ pub struct OutputConfig {
 
 impl CliConfig {
     /// Convert CLI config to protocol config for a specific server
-    pub fn to_protocol_config(&self) -> Result<ProtocolConfig, String> {
-        // Convert share method and data
-        let share_method = match self.protocol.share_method.as_str() {
-            "OKVS" => ShareMethod::OKVS,
-            "FSS" => ShareMethod::FSS,
-            other => return Err(format!("Unsupported share method: {}", other)),
-        };
-
-        // Convert dictionary type
-        let dictionary_type = match self.protocol.dictionary_type.as_str() {
-            "Known" => DictionaryType::Known,
-            "Unknown" => DictionaryType::Unknown,
-            other => return Err(format!("Unsupported dictionary type: {}", other)),
-        };
-
-        // Convert distance metric based on the explicit distance_metric field
-        let distance_metric = match self.protocol.distance_metric.as_str() {
-            "Linf" => DistanceMetric::LInfinity,
-            "L1" => DistanceMetric::Lp { p: 1 },
-            "L2" => DistanceMetric::Lp { p: 2 },
-            "L3" => DistanceMetric::Lp { p: 3 },
-            other => return Err(format!("Unsupported distance metric: {}", other)),
-        };
-
-        let share_config = ShareConfig {
-            method: share_method,
-            dictionary_type,
-            metric: distance_metric,
-            h1: self.protocol.h1,
-            h2: self.protocol.h2,
-            d: self.protocol.d,
-            sketch_modulus: self.protocol.sketch_modulus,
-            delta: self.protocol.delta,
-        };
-
-        // Convert check method
-        let check_method = match self.protocol.check_method.as_str() {
-            "GC" => CheckMethod::GC,
-            "FSS" => CheckMethod::FSS,
-            other => return Err(format!("Unsupported check method: {}", other)),
-        };
-        let check_property = match self.protocol.check_property.as_str() {
-            "Equality" => CheckProperty::Equality,
-            "MuBounded" => CheckProperty::MuBounded,
-            other => return Err(format!("Unsupported check property: {}", other)),
-        };
-
-        let check_config = CheckConfig {
-            h2: self.protocol.h2,
-            h3: self.protocol.h3,
-            d: self.protocol.d,
-            property: check_property,
-            method: check_method,
-        };
-
-        // Convert threshold method and data
-        let threshold_method = match self.protocol.threshold_method.as_str() {
-            "GC" => ThresholdMethod::GC,
-            "FSS" => ThresholdMethod::FSS,
-            other => return Err(format!("Unsupported threshold method: {}", other)),
-        };
-
-        let threshold_config = ThresholdConfig {
-            h3: self.protocol.h3,
-            method: threshold_method,
-        };
-
-        Ok(ProtocolConfig {
-            share_config,
-            check_config,
-            threshold_config,
-            threshold: self.protocol.threshold,
-            delta: self.protocol.delta,
-            num_clients: self.protocol.num_clients,
-            enable_sketch: self.protocol.enable_sketch,
-        })
-    }
-
     /// Convert CLI config to share config for client
     pub fn to_share_config(&self) -> Result<ShareConfig, String> {
         // Convert share method and data
@@ -232,7 +150,7 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
         query_file: "data/synthetic/server_points.json".to_string(),
         protocol: ProtocolParameters {
             delta: 5,
-            threshold: 3,
+            match_threshold: 3,
             enable_sketch: false,
             h1: 10,
             h2: 16,

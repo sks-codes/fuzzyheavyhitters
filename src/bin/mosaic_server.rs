@@ -39,8 +39,14 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     };
 
     // Create protocol configuration
-    let protocol_config = cli_config.to_protocol_config(is_server1)?;
-    let protocol = MosaicProtocol::new(protocol_config, is_server1);
+    let protocol_parameters = cli_config.protocol;
+    let protocol = MosaicProtocol::new(
+        protocol_parameters.clone(), 
+        is_server1,
+        protocol_parameters.clone().enable_sketch,
+        protocol_parameters.clone().num_clients,
+        protocol_parameters.clone().match_threshold,
+    );
 
     // Listen for client connection
     let client_to_server_port = if is_server1 {

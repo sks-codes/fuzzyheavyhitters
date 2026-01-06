@@ -190,7 +190,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                     ) <= distance_threshold
                 })
                 .count();
-            if count >= cli_config.protocol.threshold as usize {
+            if count >= cli_config.protocol.match_threshold as usize {
                 heavy_hitters.push(query_point);
             }
         }
@@ -203,7 +203,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
         println!("Delta (distance threshold): {}", cli_config.protocol.delta);
         println!(
             "Threshold (minimum count): {}",
-            cli_config.protocol.threshold
+            cli_config.protocol.match_threshold
         );
         println!("Total query points: {}", query_points.len());
         println!(
@@ -219,7 +219,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                 "config": {
                     "distance_metric": cli_config.protocol.distance_metric,
                     "delta": cli_config.protocol.delta.to_string(),
-                    "threshold": cli_config.protocol.threshold.to_string(),
+                    "match_threshold": cli_config.protocol.match_threshold.to_string(),
                     "dimensions": cli_config.protocol.d.to_string(),
                 },
                 "results": query_points.iter().zip(heavy_hitters.iter()).enumerate().map(|(i, (query, result))| {
@@ -251,7 +251,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
         let ground_truth_heavy_hitters = find_heavy_hitters_prefix_search(
             &client_points,
             cli_config.protocol.delta,
-            cli_config.protocol.threshold as usize,
+            cli_config.protocol.match_threshold as usize,
             cli_config.protocol.h1,
             &cli_config.protocol.distance_metric,
         );
@@ -262,8 +262,8 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
         println!("Distance metric: {}", cli_config.protocol.distance_metric);
         println!("Delta (distance threshold): {}", cli_config.protocol.delta);
         println!(
-            "Threshold (minimum count): {}",
-            cli_config.protocol.threshold
+            "Match threshold (minimum count): {}",
+            cli_config.protocol.match_threshold
         );
         println!("Input bit length: {}", cli_config.protocol.h1);
         println!("Dimensions: {}", cli_config.protocol.d);
@@ -284,7 +284,7 @@ fn run_ground_truth(config_path: &str) -> Result<(), String> {
                 "config": {
                     "distance_metric": cli_config.protocol.distance_metric,
                     "delta": cli_config.protocol.delta.to_string(),
-                    "threshold": cli_config.protocol.threshold.to_string(),
+                    "match_threshold": cli_config.protocol.match_threshold.to_string(),
                     "dimensions": cli_config.protocol.d.to_string(),
                     "input_bit_length": cli_config.protocol.h1.to_string()
                 },

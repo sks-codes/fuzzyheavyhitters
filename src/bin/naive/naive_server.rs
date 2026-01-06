@@ -28,7 +28,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     };
 
     let share_config = config.to_share_config()?;
-    let threshold = config.protocol.threshold;
+    let threshold = config.protocol.match_threshold;
     let protocol = NaiveProtocol::new(share_config, is_server1, threshold);
 
     let client_to_server_port = if is_server1 {

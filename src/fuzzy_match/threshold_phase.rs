@@ -232,3 +232,9 @@ impl ThresholdPhase {
         &self.config
     }
 }
+
+impl ThresholdPhase {
+    pub fn method(&self) -> ThresholdMethod {
+        self.config.method
+    }
+}

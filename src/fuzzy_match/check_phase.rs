@@ -501,3 +501,21 @@ impl CheckPhase {
         }
     }
 }
+
+impl CheckPhase {
+    pub fn h2(&self) -> usize {
+        self.config.h2
+    }
+
+    pub fn h3(&self) -> usize {
+        self.config.h3
+    }
+
+    pub fn method(&self) -> CheckMethod {
+        self.config.method
+    }
+
+    pub fn property(&self) -> CheckProperty {
+        self.config.property
+    }
+}

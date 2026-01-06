@@ -1,7 +1,7 @@
 use crate::configs::cli_config::ProtocolParameters;
 
 /// Enumeration of different distance metrics
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum DistanceMetric {
     /// L-infinity distance (max of absolute differences)
     LInfinity,
@@ -10,7 +10,7 @@ pub enum DistanceMetric {
 }
 
 /// Enumeration of dictionary types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum DictionaryType {
     /// Known dictionary case - exact values in range
     Known,
@@ -19,7 +19,7 @@ pub enum DictionaryType {
 }
 
 /// Enumeration of different sharing methods available
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ShareMethod {
     /// Use OKVS for sharing
     OKVS,

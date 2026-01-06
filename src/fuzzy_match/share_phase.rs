@@ -1,7 +1,6 @@
 use rand::Rng;
 
 use crate::{
-    channel::CommTrackingChannel,
     fss::{distance::DistanceFSSEval, interval::IntervalFSSEval},
     fuzzy_match::{
         share_okvs_strategies::{
@@ -10,13 +9,10 @@ use crate::{
         shared_range::SharedRange,
     },
 };
-use scuttlebutt::AbstractChannel;
 
 // Re-export legacy names for external callers/tests.
 pub use super::share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
 pub use super::shared_range::ShareData;
-
-use std::convert::TryInto;
 
 /// Share phase handler
 #[derive(Clone)]
@@ -258,74 +254,30 @@ impl SharePhase {
     }
 }
 
-#[allow(dead_code)]
-fn send_u128(channel: &mut CommTrackingChannel, value: u128) -> Result<(), SharePhaseError> {
-    let buf = value.to_le_bytes();
-    channel
-        .write_bytes(&buf)
-        .map_err(|e| SharePhaseError::EvaluationError(format!("Failed to send u128: {}", e)))?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-fn recv_u128(channel: &mut CommTrackingChannel) -> Result<u128, SharePhaseError> {
-    let mut buf = [0u8; 16];
-    channel
-        .read_bytes(&mut buf)
-        .map_err(|e| SharePhaseError::EvaluationError(format!("Failed to receive u128: {}", e)))?;
-    Ok(u128::from_le_bytes(buf))
-}
-
-#[allow(dead_code)]
-fn send_array(
-    channel: &mut CommTrackingChannel,
-    array: &Vec<Vec<u128>>,
-    length: usize,
-    width: usize,
-) -> Result<(), SharePhaseError> {
-    let mut buffer = Vec::new();
-    buffer.extend_from_slice(&array.len().to_le_bytes());
-    for l in 0..length {
-        for w in 0..width {
-            buffer.extend_from_slice(&array[l][w].to_le_bytes());
-        }
+impl SharePhase {
+    pub fn h1(&self) -> usize {
+        self.config.h1
     }
-    let len_buf: [u8; 8] = buffer.len().to_le_bytes().try_into().unwrap();
-    channel.write_bytes(&len_buf).map_err(|e| {
-        SharePhaseError::EvaluationError(format!("Failed to send array length: {}", e))
-    })?;
-    channel.write_bytes(&buffer).map_err(|e| {
-        SharePhaseError::EvaluationError(format!("Failed to send array data: {}", e))
-    })?;
-    Ok(())
-}
 
-#[allow(dead_code)]
-fn recv_array(
-    channel: &mut CommTrackingChannel,
-    array: &mut Vec<Vec<u128>>,
-    length: usize,
-    width: usize,
-) -> Result<(), SharePhaseError> {
-    let mut len_buf = [0u8; 8];
-    channel.read_bytes(&mut len_buf).map_err(|e| {
-        SharePhaseError::EvaluationError(format!("Failed to receive array length: {}", e))
-    })?;
-    let data_len = usize::from_le_bytes(len_buf);
-    let mut buffer = vec![0u8; data_len];
-    channel.read_bytes(&mut buffer).map_err(|e| {
-        SharePhaseError::EvaluationError(format!("Failed to receive array data: {}", e))
-    })?;
-    let mut offset = 0;
-    for l in 0..length {
-        for w in 0..width {
-            let mut num_buf = [0u8; 16];
-            num_buf.copy_from_slice(&buffer[offset..offset + 16]);
-            array[l][w] = u128::from_le_bytes(num_buf);
-            offset += 16;
-        }
+    pub fn h2(&self) -> usize {
+        self.config.h2
     }
-    Ok(())
+
+    pub fn d(&self) -> usize {
+        self.config.d
+    }
+
+    pub fn delta(&self) -> u128 {
+        self.config.delta
+    }
+
+    pub fn metric(&self) -> DistanceMetric {
+        self.config.metric
+    }
+
+    pub fn method(&self) -> ShareMethod {
+        self.config.method
+    }
 }
 
 /// Errors that can occur during the share phase

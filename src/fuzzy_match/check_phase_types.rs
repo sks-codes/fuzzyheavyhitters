@@ -9,13 +9,13 @@ use crate::{
 };
 
 /// Method for check phase comparison
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum CheckMethod {
     GC,
     FSS,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum CheckProperty {
     Equality,
     MuBounded,

@@ -3,7 +3,10 @@ use mosaic::{
     channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
     data_structures::mod2k::Mod2k,
-    fuzzy_match::threshold_phase::{ThresholdConfig, ThresholdMethod, ThresholdPhase},
+    fuzzy_match::{
+        threshold_phase::ThresholdPhase,
+        threshold_phase_types::{ThresholdConfig, ThresholdMethod},
+    },
 };
 use rand::Rng;
 use scuttlebutt::{AbstractChannel, AesRng};
@@ -39,11 +42,10 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
 
     let threshold_config = ThresholdConfig {
         h3: config.h3,
-        is_garbler_side: server,
         method: ThresholdMethod::GC,
     };
 
-    let threshold_phase = ThresholdPhase::new(threshold_config);
+    let threshold_phase = ThresholdPhase::new(threshold_config, server);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!(

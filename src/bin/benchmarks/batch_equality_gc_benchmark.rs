@@ -2,7 +2,10 @@ use clap::Parser;
 use mosaic::{
     channel::{connect_to, listen_to},
     configs::property_test_config::BenchmarkConfig,
-    fuzzy_match::check_phase::{CheckConfig, CheckMethod, CheckPhase, CheckProperty},
+    fuzzy_match::{
+        check_phase::CheckPhase,
+        check_phase_types::{CheckConfig, CheckMethod, CheckProperty},
+    },
 };
 use rand::Rng;
 use scuttlebutt::{AbstractChannel, AesRng};
@@ -44,12 +47,11 @@ fn run_server_benchmark(config_path: &str, server: bool) -> Result<(), Box<dyn s
         h2: config.h2,
         h3: config.h3,
         d: config.d,
-        is_garbler_side: server,
         property: CheckProperty::Equality,
         method: CheckMethod::GC,
     };
 
-    let check_phase = CheckPhase::new(check_config);
+    let check_phase = CheckPhase::new(check_config, server);
 
     // Generate test inputs - 1000 Vec<bool> with h2 bits each
     println!(
