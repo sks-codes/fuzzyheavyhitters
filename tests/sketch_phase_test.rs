@@ -3,10 +3,10 @@ use mosaic::{
     data_structures::modp::Modp,
     fuzzy_match::{
         share_phase::SharePhase,
-        share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+        share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
         shared_range::SharedRange,
         sketch_phase::SketchPhase,
-        sketch_types::{SketchConfig, SketchValues, SketchData, TripleModp},
+        sketch_phase_types::{SketchConfig, SketchValues, SketchData, TripleModp},
     },
     randomness::prg::PRG,
 };

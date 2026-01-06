@@ -7,14 +7,16 @@ use crate::{
     channel::CommTrackingChannel,
     data_structures::modp::Modp,
     fuzzy_match::{
-        check_phase::{CheckConfig, CheckData, CheckMethod, CheckPhase, CheckProperty},
         dealer::{DealerSignal, DpfKeyBatch, FssKeyBatch},
         share_phase::SharePhase,
-        share_types::{DistanceMetric, ShareConfig, ShareMethod},
+        share_phase_types::{DistanceMetric, ShareConfig, ShareMethod},
         shared_range::{ShareData, SharedRange},
         sketch_phase::SketchPhase,
-        sketch_types::{SketchConfig, SketchDataOwned, VerifyValues},
-        threshold_phase::{ThresholdConfig, ThresholdData, ThresholdMethod, ThresholdPhase},
+        sketch_phase_types::{SketchConfig, SketchDataOwned, VerifyValues},
+        check_phase::CheckPhase,
+        check_phase_types::{CheckConfig, CheckData, CheckMethod, CheckProperty},
+        threshold_phase::ThresholdPhase,
+        threshold_phase_types::{ThresholdConfig, ThresholdData, ThresholdMethod},
     },
     randomness::prg::PRG,
     util::{get_distance_threshold, receive_bool_vec, send_bool_vec, u128_to_bits_msb},
@@ -45,24 +47,26 @@ pub struct ProtocolConfig {
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
 #[derive(Clone)]
 pub struct MosaicProtocol {
-    config: ProtocolConfig,
     share_phase: SharePhase,
+    sketch_phase: SketchPhase,
     check_phase: CheckPhase,
     threshold_phase: ThresholdPhase,
-    is_server1: bool,
+    role: bool, 
 }
 
 impl MosaicProtocol {
-    fn sketch_config_from_share_config(share_config: &ShareConfig) -> SketchConfig {
-        SketchConfig {
-            h1: share_config.h1,
-            h2: share_config.h2,
-            q: share_config.sketch_modulus,
-            delta: share_config.delta,
-            d: share_config.d,
-            method: share_config.method.clone(),
-            metric: share_config.metric.clone(),
-            dictionary_type: share_config.dictionary_type.clone(),
+    /// Create a new protocol instance
+    pub fn new<C: Into<ShareConfig> + Into<SketchConfig> + Into<CheckConfig> + Into<ThresholdConfig> + Clone>(config: C, role: bool) -> Self {
+        let share_phase = SharePhase::new(config.clone());
+        let check_phase = CheckPhase::new(config.clone(), role);
+        let sketch_phase = SketchPhase::new(config.clone());
+        let threshold_phase = ThresholdPhase::new(config, role);
+        Self {
+            share_phase,
+            sketch_phase,
+            check_phase,
+            threshold_phase,
+            role,
         }
     }
 
@@ -277,7 +281,7 @@ impl MosaicProtocol {
                         .map_err(|e| format!("Sketch verify failed: {}", e))?;
                     let flattened = self.flatten_verify_values(&verify_shares);
                     let opened =
-                        self.open_modp_shares(&flattened, channel, self.is_server1)?;
+                        self.open_modp_shares(&flattened, channel, self.role)?;
                     if opened.iter().any(|v| *v != 0) {
                         *flag = true;
                     }
@@ -287,20 +291,6 @@ impl MosaicProtocol {
             .map_err(|e| format!("Parallel sketch verification failed: {}", e))?;
 
         Ok(malicious_flags)
-    }
-
-    /// Create a new protocol instance
-    pub fn new(config: ProtocolConfig, is_server1: bool) -> Self {
-        let share_phase = SharePhase::new(config.share_config.clone());
-        let check_phase = CheckPhase::new(config.check_config.clone());
-        let threshold_phase = ThresholdPhase::new(config.threshold_config.clone());
-        Self {
-            config,
-            share_phase,
-            check_phase,
-            threshold_phase,
-            is_server1,
-        }
     }
 
     pub fn receive_client_shares(
@@ -820,7 +810,7 @@ impl MosaicProtocol {
                     // Use the corresponding other server channel for this chunk
                     let bits_chunk_vec: Vec<bool> = bits_chunk.to_vec();
 
-                    if self.is_server1 {
+                    if self.role {
                         // Server 1: receive bits from server 0, then send our bits
                         let server0_bits = receive_bool_vec(other_server_channel).map_err(|e| {
                             format!(

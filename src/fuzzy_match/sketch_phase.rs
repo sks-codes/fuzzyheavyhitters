@@ -11,10 +11,10 @@ use crate::{
     },
     fuzzy_match::{
         share_phase::SharePhaseError, 
-        share_types::{DistanceMetric, ShareMethod}, 
+        share_phase_types::{DistanceMetric, ShareMethod}, 
         shared_range::SharedRange, 
         sketch_helper::SketchHelper, 
-        sketch_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp, SketchDataOwned, TripleOwned}, 
+        sketch_phase_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp, SketchDataOwned, TripleOwned}, 
     },
     randomness::prg::PRG,
 };
@@ -22,6 +22,7 @@ use anyhow::{anyhow, ensure, Result};
 use scuttlebutt::AbstractChannel;
 use std::convert::TryInto;
 
+#[derive(Clone)]
 pub struct SketchPhase {
     config: SketchConfig,
     #[allow(dead_code)]

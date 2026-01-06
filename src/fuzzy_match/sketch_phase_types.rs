@@ -1,7 +1,7 @@
 use crate::data_structures::modp::Modp;
 use crate::{
     configs::cli_config::ProtocolParameters,
-    fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareMethod},
+    fuzzy_match::share_phase_types::{DictionaryType, DistanceMetric, ShareMethod},
 };
 use serde::{Deserialize, Serialize};
 

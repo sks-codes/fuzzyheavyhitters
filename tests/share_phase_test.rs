@@ -2,7 +2,7 @@ use anyhow::Result;
 use mosaic::{
     fuzzy_match::{
         share_phase::SharePhase,
-        share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+        share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
     },
     util::{bits_to_u128_msb, u128_to_bits_msb},
 };

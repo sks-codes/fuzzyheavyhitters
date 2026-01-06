@@ -1,6 +1,6 @@
 use mosaic::{
     fuzzy_match::client::Client,
-    fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+    fuzzy_match::share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
 };
 use rand::Rng;
 use std::time::Instant;

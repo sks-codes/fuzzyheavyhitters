@@ -2,7 +2,7 @@ use crate::{
     channel::CommTrackingChannel,
     data_structures::mod2k::Mod2k,
     fss::dpf::DpfKey,
-    fuzzy_match::share_types::ShareConfig,
+    fuzzy_match::share_phase_types::ShareConfig,
     garbled_circuits::greater_than_or_equal_threshold::{
         multiple_ev_greater_than_ss, multiple_gb_greater_than_ss,
     },

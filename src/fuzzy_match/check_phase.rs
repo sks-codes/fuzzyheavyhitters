@@ -1,91 +1,36 @@
-use crate::channel::CommTrackingChannel;
-use crate::data_structures::mod2k::Mod2k;
-use crate::fss::{dpf::DpfKey, ldcf::LdcfKey, rdcf::RdcfKey};
-use crate::fuzzy_match::share_phase::SharePhaseError;
-use crate::garbled_circuits::{
-    batch_equality_full::{batch_ev_equality_test, batch_gb_equality_test},
-    less_than_or_equal_threshold::{multiple_ev_less_than_ss, multiple_gb_less_than_ss},
+use crate::{
+    channel::CommTrackingChannel,
+    data_structures::mod2k::Mod2k,
+    fss::{dpf::DpfKey, ldcf::LdcfKey, rdcf::RdcfKey},
+    fuzzy_match::{
+        share_phase::SharePhaseError,
+        check_phase_types::{CheckConfig, CheckData, CheckMethod, CheckProperty, CheckPhaseError},
+    },
+    garbled_circuits::{
+        batch_equality_full::{batch_ev_equality_test, batch_gb_equality_test},
+        less_than_or_equal_threshold::{multiple_ev_less_than_ss, multiple_gb_less_than_ss},
+    },
+    util::{bits_to_u8s, u128_to_bits_msb, u8s_to_bits},
 };
-use crate::util::{bits_to_u8s, u128_to_bits_msb, u8s_to_bits};
 use ocelot::ot::{Receiver, Sender};
 use ocelot::{ot::AlszReceiver as OtReceiver, ot::AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng, Block};
 use std::convert::TryInto;
 
-/// Method for check phase comparison
-#[derive(Debug, Clone, PartialEq)]
-pub enum CheckMethod {
-    GC,
-    FSS,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CheckProperty {
-    Equality,
-    MuBounded,
-}
-
-/// Data for check phase configuration
-#[derive(Debug, Clone)]
-pub enum CheckData {
-    LinfGarbledCircuits,
-    LinfDpf {
-        fss_key: DpfKey,
-        random_value: Vec<bool>,
-    },
-    /// Threshold value for Lp distance comparison with garbled circuits
-    LpGarbledCircuits {
-        /// Threshold value for comparison
-        mu: u128,
-    },
-    /// FSS key, random value, and threshold for Lp distance comparison with IntervalFSS
-    LpIntervalFSS {
-        fss_key: (LdcfKey, RdcfKey),
-        random_value: u128,
-    },
-}
-
-/// Configuration for the check phase
-#[derive(Debug, Clone)]
-pub struct CheckConfig {
-    pub h2: usize, // Input bit length of Check Phase, which is the output bit length of Share Phase
-    pub h3: usize, // Output bit length of Check Phase, which is the input bit length of threshold phase
-    pub d: usize,
-    /// Number of dimensions for evaluation
-    pub is_garbler_side: bool,
-    pub property: CheckProperty,
-    pub method: CheckMethod,
-}
-
-/// Error types for check phase operations
-#[derive(Debug, Clone)]
-pub enum CheckPhaseError {
-    /// Error during share phase evaluation
-    SharePhaseError(SharePhaseError),
-    /// Mismatched input lengths
-    InputLengthMismatch(String),
-    /// Channel communication error
-    ChannelError(String),
-    /// Invalid configuration
-    InvalidConfig(String),
-}
-
-impl From<SharePhaseError> for CheckPhaseError {
-    fn from(error: SharePhaseError) -> Self {
-        CheckPhaseError::SharePhaseError(error)
-    }
-}
-
 /// Check phase handler
 #[derive(Clone)]
 pub struct CheckPhase {
     config: CheckConfig,
+    role: bool,
 }
 
 impl CheckPhase {
     /// Create a new check phase with the given configuration
-    pub fn new(config: CheckConfig) -> Self {
-        Self { config }
+    pub fn new<C: Into<CheckConfig>>(config: C, role: bool) -> Self {
+        Self { 
+            config: config.into(),
+            role,
+        }
     }
 
     pub fn run_batch_fuzzy_match_check(
@@ -219,7 +164,7 @@ impl CheckPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
-        let all_equality_results = if self.config.is_garbler_side {
+        let all_equality_results = if self.role {
             batch_gb_equality_test(rng, channel, &inputs)
         } else {
             batch_ev_equality_test(rng, channel, &inputs)
@@ -229,7 +174,7 @@ impl CheckPhase {
             1 << self.config.h3,
             channel,
             rng,
-            self.config.is_garbler_side,
+            self.role,
         )?;
         Ok(ring_shares)
     }
@@ -277,7 +222,7 @@ impl CheckPhase {
         let values_bytes_length = masked_values_u8s[0].len();
         let values_bits_length = masked_values[0].len();
 
-        let other_masked_values_u8s: Vec<Vec<u8>> = if self.config.is_garbler_side {
+        let other_masked_values_u8s: Vec<Vec<u8>> = if self.role {
             for u8s in masked_values_u8s.iter() {
                 channel.write_bytes(u8s).map_err(|e| {
                     CheckPhaseError::ChannelError(format!("Failed to send masked evals: {}", e))
@@ -354,7 +299,7 @@ impl CheckPhase {
                             e.to_string(),
                         ))
                     })?;
-                let value = if self.config.is_garbler_side {
+                let value = if self.role {
                     Mod2k::new(
                         (1u128 << self.config.h3) - fss_result[0],
                         1u128 << self.config.h3,
@@ -376,7 +321,7 @@ impl CheckPhase {
         channel: &mut CommTrackingChannel,
         rng: &mut AesRng,
     ) -> Result<Vec<Mod2k>, CheckPhaseError> {
-        let comparison_results = if self.config.is_garbler_side {
+        let comparison_results = if self.role {
             multiple_gb_less_than_ss(rng, channel, inputs, mu)
         } else {
             multiple_ev_less_than_ss(rng, channel, inputs)
@@ -387,7 +332,7 @@ impl CheckPhase {
             1 << self.config.h3,
             channel,
             rng,
-            self.config.is_garbler_side,
+            self.role,
         )?;
 
         Ok(ring_shares)
@@ -406,7 +351,7 @@ impl CheckPhase {
             .map(|(&input, &random_value)| input + random_value)
             .collect::<Vec<Mod2k>>();
 
-        let combined_masked_values = if self.config.is_garbler_side {
+        let combined_masked_values = if self.role {
             for masked_eval in masked_values.iter() {
                 let eval_bytes = masked_eval.val().to_le_bytes();
                 channel.write_bytes(&eval_bytes).map_err(|e| {
@@ -472,7 +417,7 @@ impl CheckPhase {
                     .map_err(|e| CheckPhaseError::InvalidConfig(e.to_string()))?;
 
                 let sum = (fss_ldcf[0] + fss_rdcf[0]) % out_modulus;
-                Ok(if self.config.is_garbler_side {
+                Ok(if self.role {
                     Mod2k::new(out_modulus - sum, out_modulus)
                 } else {
                     Mod2k::new(sum, out_modulus)

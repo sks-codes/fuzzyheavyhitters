@@ -2,10 +2,10 @@ use crate::{
     channel::CommTrackingChannel,
     fuzzy_match::{
         share_phase::SharePhase,
-        share_types::{ShareConfig, ShareMethod},
+        share_phase_types::{ShareConfig, ShareMethod},
         shared_range::SharedRange,
         sketch_phase::SketchPhase,
-        sketch_types::{SketchConfig, SketchDataOwned},
+        sketch_phase_types::{SketchConfig, SketchDataOwned},
     },
     randomness::prg::PRG,
 };

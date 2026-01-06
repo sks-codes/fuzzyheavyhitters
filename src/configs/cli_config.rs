@@ -3,10 +3,10 @@
 //! This module defines configuration structures for the CLI application
 
 use crate::fuzzy_match::{
-    check_phase::{CheckConfig, CheckMethod, CheckProperty},
+    check_phase_types::{CheckConfig, CheckMethod, CheckProperty},
     protocol::ProtocolConfig,
-    share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
-    threshold_phase::{ThresholdConfig, ThresholdMethod},
+    share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
+    threshold_phase_types::{ThresholdConfig, ThresholdMethod},
 };
 use serde::{Deserialize, Serialize};
 
@@ -91,7 +91,7 @@ pub struct OutputConfig {
 
 impl CliConfig {
     /// Convert CLI config to protocol config for a specific server
-    pub fn to_protocol_config(&self, is_server1: bool) -> Result<ProtocolConfig, String> {
+    pub fn to_protocol_config(&self) -> Result<ProtocolConfig, String> {
         // Convert share method and data
         let share_method = match self.protocol.share_method.as_str() {
             "OKVS" => ShareMethod::OKVS,
@@ -142,7 +142,6 @@ impl CliConfig {
             h2: self.protocol.h2,
             h3: self.protocol.h3,
             d: self.protocol.d,
-            is_garbler_side: is_server1,
             property: check_property,
             method: check_method,
         };
@@ -156,7 +155,6 @@ impl CliConfig {
 
         let threshold_config = ThresholdConfig {
             h3: self.protocol.h3,
-            is_garbler_side: is_server1,
             method: threshold_method,
         };
 

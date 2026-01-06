@@ -1,68 +1,31 @@
-use crate::channel::CommTrackingChannel;
-use crate::data_structures::mod2k::Mod2k;
-use crate::fss::{ldcf::LdcfKey, rdcf::RdcfKey};
-use crate::garbled_circuits::greater_than_or_equal_threshold::{
-    multiple_ev_greater_than_ss, multiple_gb_greater_than_ss,
-};
-use crate::util::u128_to_bits_msb;
-use scuttlebutt::{AbstractChannel, AesRng};
-
-/// Method for threshold comparison
-#[derive(Debug, Clone, PartialEq)]
-pub enum ThresholdMethod {
-    /// Use garbled circuits for threshold comparison
-    GC,
-    /// Use IntervalFSS for threshold comparison
-    FSS,
-}
-
-/// Data for threshold phase configuration
-#[derive(Debug, Clone)]
-pub enum ThresholdData {
-    /// No additional data needed for garbled circuits
-    GarbledCircuits { t: u128 },
-    /// FSS key and random value for IntervalFSS privacy
-    IntervalFSS {
-        /// FSS key for this server
-        fss_key: (LdcfKey, RdcfKey),
-        /// Random value for this server (r0 for server 0, r1 for server 1)
-        random_value: u128,
+use crate::{
+    channel::CommTrackingChannel,
+    data_structures::mod2k::Mod2k,
+    fss::{ldcf::LdcfKey, rdcf::RdcfKey},
+    garbled_circuits::greater_than_or_equal_threshold::{
+        multiple_ev_greater_than_ss, multiple_gb_greater_than_ss,
     },
-}
-
-/// Configuration for the threshold phase
-#[derive(Debug, Clone)]
-pub struct ThresholdConfig {
-    pub h3: usize,
-    /// Whether this is the garbler side (true) or evaluator side (false)
-    pub is_garbler_side: bool,
-    /// Method to use for threshold comparison
-    pub method: ThresholdMethod,
-}
-
-/// Error types for threshold phase operations
-#[derive(Debug, Clone)]
-pub enum ThresholdPhaseError {
-    /// Channel communication error
-    ChannelError(String),
-    /// Invalid configuration
-    InvalidConfig(String),
-    /// Conversion error
-    ConversionError(String),
-    /// Garbled circuit error
-    GarbledCircuitError(String),
-}
+    fuzzy_match::{
+        threshold_phase_types::{ThresholdConfig, ThresholdData, ThresholdMethod, ThresholdPhaseError},
+    },
+    util::u128_to_bits_msb,
+};
+use scuttlebutt::{AbstractChannel, AesRng};
 
 /// Threshold phase handler
 #[derive(Debug, Clone)]
 pub struct ThresholdPhase {
     config: ThresholdConfig,
+    role: bool,
 }
 
 impl ThresholdPhase {
     /// Create a new threshold phase with the given configuration
-    pub fn new(config: ThresholdConfig) -> Self {
-        Self { config }
+    pub fn new<C: Into<ThresholdConfig>>(config: C, role: bool) -> Self {
+        Self { 
+            config: config.into(),
+            role
+        }
     }
 
     pub fn aggregate_match_results(
@@ -93,7 +56,7 @@ impl ThresholdPhase {
     ) -> Result<Vec<bool>, ThresholdPhaseError> {
         // Step 2: Compare aggregated share with threshold using garbled circuits
         // Both aggregated_share and threshold are already ModInt, so we can use them directly
-        let comparison_result = if self.config.is_garbler_side {
+        let comparison_result = if self.role {
             multiple_gb_greater_than_ss(rng, channel, match_results, &threshold)
         } else {
             // Evaluator side - gets the actual comparison result
@@ -124,7 +87,7 @@ impl ThresholdPhase {
             .map(|(&input, &random_value)| input + random_value)
             .collect::<Vec<Mod2k>>();
 
-        let combined_masked_values = if self.config.is_garbler_side {
+        let combined_masked_values = if self.role {
             // Garbler: send all masked values, then read all counterpart masked values
             for masked_eval in &masked_values {
                 let eval_bytes = masked_eval.val().to_le_bytes();

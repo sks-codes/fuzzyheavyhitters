@@ -13,7 +13,7 @@ use crate::{
 use scuttlebutt::AbstractChannel;
 
 // Re-export legacy names for external callers/tests.
-pub use super::share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
+pub use super::share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod};
 pub use super::shared_range::ShareData;
 
 use std::convert::TryInto;

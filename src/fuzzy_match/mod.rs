@@ -8,18 +8,22 @@
 //! - Dealer: FSS key generation and distribution
 //! - Client: Client-side functionality for generating and distributing shares
 
-pub mod check_phase;
 pub mod client;
 pub mod dealer;
 pub mod protocol;
 pub mod share_okvs_strategies;
-pub mod shared_range;
-pub mod threshold_phase;
 // Share phase
 pub mod share_phase;
 mod share_phase_helper;
-pub mod share_types;
+pub mod shared_range;
+pub mod share_phase_types;
 // Sketching phase
 pub mod sketch_helper;
 pub mod sketch_phase;
-pub mod sketch_types;
+pub mod sketch_phase_types;
+// Check phase
+pub mod check_phase;
+pub mod check_phase_types;
+// Threshold phae
+pub mod threshold_phase;
+pub mod threshold_phase_types;

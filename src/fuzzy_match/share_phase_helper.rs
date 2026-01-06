@@ -18,7 +18,7 @@ use crate::{
 use rand::Rng;
 
 use super::share_phase::{SharePhase, SharePhaseError};
-use super::share_types::DistanceMetric;
+use super::share_phase_types::DistanceMetric;
 
 impl SharePhase {
     /// Generic OKVS sharing method that uses different strategies for key-value pair preparation
