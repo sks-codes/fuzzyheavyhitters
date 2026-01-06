@@ -34,7 +34,7 @@ fn main() {
     let start = Instant::now();
     let delta = 160u128;
     let results = client
-        .generate_client_shares(&random_points, delta)
+        .generate_client_shares(&random_points, delta, false)
         .unwrap();
     println!(
         "Time to generate shares for {} clients: {:?}",

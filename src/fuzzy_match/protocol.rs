@@ -5,14 +5,18 @@
 
 use crate::{
     channel::CommTrackingChannel,
+    data_structures::modp::Modp,
     fuzzy_match::{
         check_phase::{CheckConfig, CheckData, CheckMethod, CheckPhase, CheckProperty},
         dealer::{DealerSignal, DpfKeyBatch, FssKeyBatch},
         share_phase::SharePhase,
-        share_types::{DistanceMetric, ShareConfig},
+        share_types::{DistanceMetric, ShareConfig, ShareMethod},
         shared_range::{ShareData, SharedRange},
+        sketch_phase::SketchPhase,
+        sketch_types::{SketchConfig, SketchDataOwned, VerifyValues},
         threshold_phase::{ThresholdConfig, ThresholdData, ThresholdMethod, ThresholdPhase},
     },
+    randomness::prg::PRG,
     util::{get_distance_threshold, receive_bool_vec, send_bool_vec, u128_to_bits_msb},
 };
 use rayon::prelude::*;
@@ -34,6 +38,8 @@ pub struct ProtocolConfig {
     pub delta: u128,
     /// Number of clients participating in the protocol
     pub num_clients: usize,
+    /// Whether to enable sketching verification
+    pub enable_sketch: bool,
 }
 
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
@@ -47,6 +53,242 @@ pub struct MosaicProtocol {
 }
 
 impl MosaicProtocol {
+    fn sketch_config_from_share_config(share_config: &ShareConfig) -> SketchConfig {
+        SketchConfig {
+            h1: share_config.h1,
+            h2: share_config.h2,
+            q: share_config.sketch_modulus,
+            delta: share_config.delta,
+            d: share_config.d,
+            method: share_config.method.clone(),
+            metric: share_config.metric.clone(),
+            dictionary_type: share_config.dictionary_type.clone(),
+        }
+    }
+
+    fn extract_role(shared_range: &SharedRange) -> bool {
+        match shared_range {
+            SharedRange::OKVS { role, .. } => *role,
+            SharedRange::IntervalFSS { role, .. } => *role,
+            SharedRange::DistanceFSS { role, .. } => *role,
+        }
+    }
+
+    fn extract_sketch_seed(shared_range: &SharedRange) -> [u8; 16] {
+        shared_range.sketch_seed()
+    }
+
+    fn open_modp_shares(
+        &self,
+        shares: &[Modp<'_>],
+        channel: &mut CommTrackingChannel,
+        role: bool,
+    ) -> Result<Vec<u128>, String> {
+        let modulus = self.config.share_config.sketch_modulus;
+        let my_values: Vec<u128> = shares.iter().map(|m| m.value()).collect();
+        let len = my_values.len() as u64;
+
+        if role {
+            channel
+                .write_bytes(&len.to_le_bytes())
+                .map_err(|e| format!("Failed to send length: {}", e))?;
+            for v in &my_values {
+                channel
+                    .write_bytes(&v.to_le_bytes())
+                    .map_err(|e| format!("Failed to send value: {}", e))?;
+            }
+            channel.flush().map_err(|e| format!("Flush failed: {}", e))?;
+        }
+
+        let mut other_len_bytes = [0u8; 8];
+        channel
+            .read_bytes(&mut other_len_bytes)
+            .map_err(|e| format!("Failed to read length: {}", e))?;
+        let other_len = u64::from_le_bytes(other_len_bytes) as usize;
+        let mut other_values = vec![0u128; other_len];
+        for val in other_values.iter_mut() {
+            let mut buf = [0u8; 16];
+            channel
+                .read_bytes(&mut buf)
+                .map_err(|e| format!("Failed to read value: {}", e))?;
+            *val = u128::from_le_bytes(buf);
+        }
+
+        if !role {
+            channel
+                .write_bytes(&len.to_le_bytes())
+                .map_err(|e| format!("Failed to send length: {}", e))?;
+            for v in &my_values {
+                channel
+                    .write_bytes(&v.to_le_bytes())
+                    .map_err(|e| format!("Failed to send value: {}", e))?;
+            }
+            channel.flush().map_err(|e| format!("Flush failed: {}", e))?;
+        }
+
+        if other_len != my_values.len() {
+            return Err(format!(
+                "Sketch verify length mismatch: local {} remote {}",
+                my_values.len(),
+                other_len
+            ));
+        }
+
+        Ok(my_values
+            .iter()
+            .zip(other_values.iter())
+            .map(|(a, b)| (a + b) % modulus)
+            .collect())
+    }
+
+    fn flatten_verify_values<'a>(
+        &self,
+        verify_values: &'a [VerifyValues<'a>],
+    ) -> Vec<Modp<'a>> {
+        let mut out = Vec::new();
+        for v in verify_values {
+            self.flatten_single_verify_value(v, &mut out);
+        }
+        out
+    }
+
+    fn flatten_single_verify_value<'a>(
+        &self,
+        verify_value: &'a VerifyValues<'a>,
+        output: &mut Vec<Modp<'a>>,
+    ) {
+        match verify_value {
+            VerifyValues::Dcf {
+                last_layer,
+                consistency,
+            } => {
+                output.push(*last_layer);
+                output.extend(consistency.iter().copied());
+            }
+            VerifyValues::Linf {
+                ldcf,
+                rdcf,
+                consistency,
+            } => {
+                self.flatten_single_verify_value(ldcf, output);
+                self.flatten_single_verify_value(rdcf, output);
+                output.push(*consistency);
+            }
+            VerifyValues::DcfPayload {
+                last_layer_consistency,
+                consistency,
+                ..
+            } => {
+                output.extend(last_layer_consistency.iter().copied());
+                for level in consistency.iter() {
+                    for z in level.iter() {
+                        output.push(*z);
+                    }
+                }
+            }
+            VerifyValues::Lp {
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                reference_dpf,
+                ..
+            } => {
+                self.flatten_single_verify_value(ldcf0, output);
+                self.flatten_single_verify_value(ldcf1, output);
+                self.flatten_single_verify_value(rdcf0, output);
+                self.flatten_single_verify_value(rdcf1, output);
+                output.push(*reference_dpf);
+            }
+        }
+    }
+
+    fn verify_client_sketches(
+        &self,
+        client_shares: &[SharedRange],
+        client_sketches: Option<&[Vec<SketchDataOwned>]>,
+        other_server_channels: &mut [CommTrackingChannel],
+    ) -> Result<Vec<bool>, String> {
+        if self.config.share_config.method != ShareMethod::FSS || !self.config.enable_sketch {
+            return Ok(vec![false; client_shares.len()]);
+        }
+        if client_shares.is_empty() {
+            return Ok(Vec::new());
+        }
+        if other_server_channels.is_empty() {
+            return Err("No server channels available for sketch verification".to_string());
+        }
+        let sketches = client_sketches
+            .ok_or_else(|| "Sketch data missing from client".to_string())?;
+        if sketches.len() != client_shares.len() {
+            return Err(format!(
+                "Sketch data length mismatch: shares {} sketches {}",
+                client_shares.len(),
+                sketches.len()
+            ));
+        }
+        let sketch_config =
+            Self::sketch_config_from_share_config(&self.config.share_config);
+
+        let num_threads = other_server_channels.len().max(1);
+        let chunk_size = (client_shares.len() + num_threads - 1) / num_threads.max(1);
+        let mut malicious_flags = vec![false; client_shares.len()];
+        malicious_flags
+            .par_chunks_mut(chunk_size)
+            .zip(client_shares.par_chunks(chunk_size))
+            .zip(sketches.par_chunks(chunk_size))
+            .zip(other_server_channels.par_iter_mut())
+            .try_for_each(|(((flag_chunk, range_chunk), sketch_chunk), channel)| {
+                let sketch_phase = SketchPhase::new(sketch_config.clone());
+                let sketch_helper = sketch_phase
+                    .get_sketch_helper()
+                    .map_err(|e| format!("Failed to build sketch helper: {}", e))?;
+
+                for ((flag, shared_range), sketches_one) in
+                    flag_chunk.iter_mut().zip(range_chunk.iter()).zip(sketch_chunk.iter())
+                {
+                    let role = Self::extract_role(shared_range);
+                    let expected_len = match shared_range {
+                        SharedRange::IntervalFSS { keys, .. } => keys.len(),
+                        SharedRange::DistanceFSS { keys, .. } => keys.len(),
+                        _ => 0,
+                    };
+                    if sketches_one.len() != expected_len {
+                        return Err(format!(
+                            "Sketch data dimension mismatch: expected {} got {}",
+                            expected_len,
+                            sketches_one.len()
+                        ));
+                    }
+
+                    let seed = Self::extract_sketch_seed(shared_range);
+                    let mut prg_sketch = PRG::new(Some(&seed), 0);
+                    let sketch_values = sketch_phase
+                        .sketch(shared_range, &sketch_helper, &mut prg_sketch)
+                        .map_err(|e| format!("Sketch failed: {}", e))?;
+
+                    let sketch_data_vec: Vec<_> = sketches_one
+                        .iter()
+                        .map(|owned| sketch_phase.sketch_data_from_owned(owned))
+                        .collect();
+
+                    let verify_shares = sketch_phase
+                        .batch_verify(&sketch_values, &sketch_data_vec, channel, role)
+                        .map_err(|e| format!("Sketch verify failed: {}", e))?;
+                    let flattened = self.flatten_verify_values(&verify_shares);
+                    let opened =
+                        self.open_modp_shares(&flattened, channel, self.is_server1)?;
+                    if opened.iter().any(|v| *v != 0) {
+                        *flag = true;
+                    }
+                }
+                Ok::<(), String>(())
+            })
+            .map_err(|e| format!("Parallel sketch verification failed: {}", e))?;
+
+        Ok(malicious_flags)
+    }
+
     /// Create a new protocol instance
     pub fn new(config: ProtocolConfig, is_server1: bool) -> Self {
         let share_phase = SharePhase::new(config.share_config.clone());
@@ -64,7 +306,7 @@ impl MosaicProtocol {
     pub fn receive_client_shares(
         &self,
         client_channel: &mut CommTrackingChannel,
-    ) -> Result<Vec<SharedRange>, String> {
+    ) -> Result<(Vec<SharedRange>, Option<Vec<Vec<SketchDataOwned>>>), String> {
         // Receive shares using custom serialization
         let mut len_bytes = [0u8; 8];
         client_channel
@@ -91,19 +333,58 @@ impl MosaicProtocol {
             shares.push(share);
             offset += share_used;
         }
-        Ok(shares)
+        if !self.config.enable_sketch {
+            return Ok((shares, None));
+        }
+
+        let mut sketch_len_bytes = [0u8; 8];
+        client_channel
+            .read_bytes(&mut sketch_len_bytes)
+            .map_err(|e| format!("Failed to read sketch length from client: {}", e))?;
+        let sketch_len = u64::from_le_bytes(sketch_len_bytes) as usize;
+        if sketch_len == 0 {
+            return Ok((shares, None));
+        }
+        let mut sketch_buf = vec![0u8; sketch_len];
+        client_channel
+            .read_bytes(&mut sketch_buf)
+            .map_err(|e| format!("Failed to read sketches from client: {}", e))?;
+        let sketches: Vec<Vec<SketchDataOwned>> = bincode::deserialize(&sketch_buf)
+            .map_err(|e| format!("Failed to deserialize sketches: {}", e))?;
+
+        Ok((shares, Some(sketches)))
     }
 
     /// Parallel version of run_server_known_dictionary using multiple channels for both dealer and other server
     pub fn run_server_known_dictionary_parallel(
         &self,
         client_shares: &[SharedRange],
+        client_sketches: Option<&[Vec<SketchDataOwned>]>,
         query_points: &[Vec<u128>],
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
         threshold_dealer_channels: &mut [CommTrackingChannel],
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
+        let sketch_flags =
+            self.verify_client_sketches(client_shares, client_sketches, other_server_channels)?;
+        let malicious_indices: Vec<usize> = sketch_flags
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, bad)| if *bad { Some(idx) } else { None })
+            .collect();
+        if !malicious_indices.is_empty() {
+            println!(
+                "Detected potentially malicious shared ranges (sketch verification failed): {:?}",
+                malicious_indices
+            );
+        }
+        let client_shares: Vec<SharedRange> = client_shares
+            .iter()
+            .zip(sketch_flags.iter())
+            .filter_map(|(share, ok)| if !*ok { Some(share.clone()) } else { None })
+            .collect();
+
         // Convert query points from u128 to Vec<Vec<bool>>
         let query_point_sets: Vec<Vec<Vec<bool>>> = query_points
             .iter()
@@ -159,11 +440,31 @@ impl MosaicProtocol {
     pub fn run_server_unknown_dictionary_parallel(
         &self,
         client_shares_list: &[SharedRange],
+        client_sketches: Option<&[Vec<SketchDataOwned>]>,
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
         threshold_dealer_channels: &mut [CommTrackingChannel],
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<Vec<u128>>, String> {
+        let sketch_flags =
+            self.verify_client_sketches(client_shares_list, client_sketches, other_server_channels)?;
+        let malicious_indices: Vec<usize> = sketch_flags
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, bad)| if *bad { Some(idx) } else { None })
+            .collect();
+        if !malicious_indices.is_empty() {
+            println!(
+                "Detected potentially malicious shared ranges (sketch verification failed): {:?}",
+                malicious_indices
+            );
+        }
+        let client_shares_list: Vec<SharedRange> = client_shares_list
+            .iter()
+            .zip(sketch_flags.iter())
+            .filter_map(|(share, ok)| if !*ok { Some(share.clone()) } else { None })
+            .collect();
+
         let max_bit_length = self.config.share_config.h1;
         let dimension = self.config.share_config.d;
         let eval_len = self.config.share_config.h2;

@@ -221,7 +221,7 @@ pub fn div_u256_by_u128(n: U256, d: u128) -> (U256, u128) {
 pub fn add_mod(a: u128, b: u128, m: u128) -> u128 {
     assert!(a < m && b < m && m < MAX_MOD);
     let mut s = a + b;
-    if s > m {
+    if s >= m {
         s -= m;
     }
     s

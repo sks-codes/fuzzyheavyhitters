@@ -151,15 +151,18 @@ pub enum SharedRange {
         okvs_shares: Vec<Vec<u128>>,           // One OKVS encoding per dimension
         okvs_seeds: Vec<([u8; 16], [u8; 16])>, // Seeds for OKVS (r1, r2)
         role: bool,                            // True for server 1, false for server 0
+        sketch_seed: [u8; 16],                 // Seed for sketch randomness
         p: Option<u32>,
     },
     IntervalFSS {
         keys: Vec<IntervalFSSKey>, // One key pair per dimension
         role: bool,
+        sketch_seed: [u8; 16],
     },
     DistanceFSS {
         keys: Vec<DistanceFSSKey>,
         role: bool,
+        sketch_seed: [u8; 16],
     },
 }
 
@@ -172,10 +175,12 @@ impl SharedRange {
                 okvs_shares,
                 okvs_seeds,
                 role,
+                sketch_seed,
                 p,
             } => {
                 out.push(0u8); // tag for OKVS
                 out.push(*role as u8);
+                out.extend_from_slice(sketch_seed);
                 match p {
                     Some(val) => {
                         out.push(1u8);
@@ -197,9 +202,10 @@ impl SharedRange {
                     out.extend_from_slice(r2);
                 }
             }
-            SharedRange::IntervalFSS { keys, role } => {
+            SharedRange::IntervalFSS { keys, role, sketch_seed } => {
                 out.push(1u8); // tag for IntervalFSS
                 out.push(*role as u8);
+                out.extend_from_slice(sketch_seed);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
                     let bytes = k
@@ -208,9 +214,10 @@ impl SharedRange {
                     out.extend_from_slice(&bytes);
                 }
             }
-            SharedRange::DistanceFSS { keys, role } => {
+            SharedRange::DistanceFSS { keys, role, sketch_seed } => {
                 out.push(2u8); // tag for DistanceFSS
                 out.push(*role as u8);
+                out.extend_from_slice(sketch_seed);
                 out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
                 for k in keys {
                     let bytes = k.to_bytes().expect("Failed to serialize DistanceFSSKey");
@@ -232,11 +239,14 @@ impl SharedRange {
         match tag {
             0 => {
                 // OKVS
-                if bytes[offset..].len() < 2 {
+                if bytes[offset..].len() < 18 {
                     return Err("Too short for OKVS header".to_string());
                 }
                 let role = bytes[offset] != 0;
                 offset += 1;
+                let mut sketch_seed = [0u8; 16];
+                sketch_seed.copy_from_slice(&bytes[offset..offset + 16]);
+                offset += 16;
                 let has_p = bytes[offset];
                 offset += 1;
                 let p = if has_p == 1 {
@@ -277,6 +287,7 @@ impl SharedRange {
                         okvs_shares,
                         okvs_seeds,
                         role,
+                        sketch_seed,
                         p,
                     },
                     offset,
@@ -284,11 +295,14 @@ impl SharedRange {
             }
             1 => {
                 // IntervalFSS
-                if bytes[offset..].len() < 5 {
+                if bytes[offset..].len() < 21 {
                     return Err("Too short for IntervalFSS header".to_string());
                 }
                 let role = bytes[offset] != 0;
                 offset += 1;
+                let mut sketch_seed = [0u8; 16];
+                sketch_seed.copy_from_slice(&bytes[offset..offset + 16]);
+                offset += 16;
                 let key_count =
                     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
@@ -299,15 +313,18 @@ impl SharedRange {
                     offset += used_k;
                     keys.push(k);
                 }
-                Ok((SharedRange::IntervalFSS { keys, role }, offset))
+                Ok((SharedRange::IntervalFSS { keys, role, sketch_seed }, offset))
             }
             2 => {
                 // DistanceFSS
-                if bytes[offset..].len() < 5 {
+                if bytes[offset..].len() < 21 {
                     return Err("Too short for DistanceFSS header".to_string());
                 }
                 let role = bytes[offset] != 0;
                 offset += 1;
+                let mut sketch_seed = [0u8; 16];
+                sketch_seed.copy_from_slice(&bytes[offset..offset + 16]);
+                offset += 16;
                 let key_count =
                     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
@@ -318,7 +335,7 @@ impl SharedRange {
                     keys.push(k);
                     offset += used_k;
                 }
-                Ok((SharedRange::DistanceFSS { keys, role }, offset))
+                Ok((SharedRange::DistanceFSS { keys, role, sketch_seed }, offset))
             }
             _ => Err("Unknown SharedRange tag".to_string()),
         }
@@ -329,6 +346,14 @@ impl SharedRange {
             SharedRange::OKVS { role, .. } => *role,
             SharedRange::IntervalFSS { role, .. } => *role,
             SharedRange::DistanceFSS { role, .. } => *role,
+        }
+    }
+
+    pub fn sketch_seed(&self) -> [u8; 16] {
+        match self {
+            SharedRange::OKVS { sketch_seed, .. } => *sketch_seed,
+            SharedRange::IntervalFSS { sketch_seed, .. } => *sketch_seed,
+            SharedRange::DistanceFSS { sketch_seed, .. } => *sketch_seed,
         }
     }
 }

@@ -32,6 +32,9 @@ pub struct ProtocolParameters {
     pub delta: u128,
     /// Threshold for heavy hitters detection
     pub threshold: u128,
+    /// Whether to enable sketching verification
+    #[serde(default)]
+    pub enable_sketch: bool,
     /// Input bit length (for coordinates)
     pub h1: usize,
     /// Output bit length (for ring operations)
@@ -164,6 +167,7 @@ impl CliConfig {
             threshold: self.protocol.threshold,
             delta: self.protocol.delta,
             num_clients: self.protocol.num_clients,
+            enable_sketch: self.protocol.enable_sketch,
         })
     }
 
@@ -231,6 +235,7 @@ pub fn generate_config(output_path: &str) -> Result<(), String> {
         protocol: ProtocolParameters {
             delta: 5,
             threshold: 3,
+            enable_sketch: false,
             h1: 10,
             h2: 16,
             h3: 20, // output_bit_length + 4 for aggregation

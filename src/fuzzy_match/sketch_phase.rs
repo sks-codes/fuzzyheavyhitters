@@ -14,7 +14,7 @@ use crate::{
         share_types::{DistanceMetric, ShareMethod}, 
         shared_range::SharedRange, 
         sketch_helper::SketchHelper, 
-        sketch_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp}, 
+        sketch_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp, SketchDataOwned, TripleOwned}, 
     },
     randomness::prg::PRG,
 };
@@ -63,16 +63,131 @@ impl SketchPhase {
         }
     }
 
-    pub fn get_sketch_data<'a>(&self, prg: &mut PRG) -> Result<SketchData<'a>> {
+    pub fn get_sketch_data<'a>(&'a self, prg: &mut PRG) -> Result<(SketchData<'a>, SketchData<'a>)> {
         match &self.config.method {
             ShareMethod::FSS => {
                 match &self.config.metric {
                     DistanceMetric::LInfinity => self.get_sketch_data_linf(prg),
-                    DistanceMetric::Lp { p } => self.get_sketch_data_lp(prg),
+                    DistanceMetric::Lp { .. } => self.get_sketch_data_lp(prg),
                 }
             }
             _ => Err(anyhow!("get_sketch_data not supported for this method. Only support ShareMethod::FSS")), 
         }
+    }
+
+    pub fn get_sketch_data_owned(&self, prg: &mut PRG) -> Result<(SketchDataOwned, SketchDataOwned)> {
+        let (d0, d1) = self.get_sketch_data(prg)?;
+        Ok((self.sketch_data_to_owned(d0), self.sketch_data_to_owned(d1)))
+    }
+
+    pub fn sketch_data_from_owned<'a>(&'a self, owned: &SketchDataOwned) -> SketchData<'a> {
+        match owned {
+            SketchDataOwned::Dcf {
+                z_ast,
+                z_bullet,
+                z,
+                consistency,
+            } => SketchData::Dcf {
+                z_ast: self.triple_from_owned(z_ast),
+                z_bullet: self.triple_from_owned(z_bullet),
+                z: self.triple_from_owned(z),
+                consistency: consistency
+                    .iter()
+                    .map(|t| self.triple_from_owned(t))
+                    .collect(),
+            },
+            SketchDataOwned::Linf { ldcf, rdcf } => SketchData::Linf {
+                ldcf: Box::new(self.sketch_data_from_owned(ldcf)),
+                rdcf: Box::new(self.sketch_data_from_owned(rdcf)),
+            },
+            SketchDataOwned::DcfPayload { length, consistency } => SketchData::DcfPayload {
+                length: *length,
+                consistency: consistency
+                    .iter()
+                    .map(|row| row.iter().map(|t| self.triple_from_owned(t)).collect())
+                    .collect(),
+            },
+            SketchDataOwned::Lp {
+                p,
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                z_ast,
+                z_bullet,
+                z,
+            } => SketchData::Lp {
+                p: *p,
+                ldcf0: Box::new(self.sketch_data_from_owned(ldcf0)),
+                ldcf1: Box::new(self.sketch_data_from_owned(ldcf1)),
+                rdcf0: Box::new(self.sketch_data_from_owned(rdcf0)),
+                rdcf1: Box::new(self.sketch_data_from_owned(rdcf1)),
+                z_ast: self.triple_from_owned(z_ast),
+                z_bullet: self.triple_from_owned(z_bullet),
+                z: self.triple_from_owned(z),
+            },
+        }
+    }
+
+    fn sketch_data_to_owned(&self, data: SketchData) -> SketchDataOwned {
+        match data {
+            SketchData::Dcf {
+                z_ast,
+                z_bullet,
+                z,
+                consistency,
+            } => SketchDataOwned::Dcf {
+                z_ast: self.triple_to_owned(z_ast),
+                z_bullet: self.triple_to_owned(z_bullet),
+                z: self.triple_to_owned(z),
+                consistency: consistency
+                    .into_iter()
+                    .map(|t| self.triple_to_owned(t))
+                    .collect(),
+            },
+            SketchData::Linf { ldcf, rdcf } => SketchDataOwned::Linf {
+                ldcf: Box::new(self.sketch_data_to_owned(*ldcf)),
+                rdcf: Box::new(self.sketch_data_to_owned(*rdcf)),
+            },
+            SketchData::DcfPayload { length, consistency } => SketchDataOwned::DcfPayload {
+                length,
+                consistency: consistency
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|t| self.triple_to_owned(t)).collect())
+                    .collect(),
+            },
+            SketchData::Lp {
+                p,
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                z_ast,
+                z_bullet,
+                z,
+            } => SketchDataOwned::Lp {
+                p,
+                ldcf0: Box::new(self.sketch_data_to_owned(*ldcf0)),
+                ldcf1: Box::new(self.sketch_data_to_owned(*ldcf1)),
+                rdcf0: Box::new(self.sketch_data_to_owned(*rdcf0)),
+                rdcf1: Box::new(self.sketch_data_to_owned(*rdcf1)),
+                z_ast: self.triple_to_owned(z_ast),
+                z_bullet: self.triple_to_owned(z_bullet),
+                z: self.triple_to_owned(z),
+            },
+        }
+    }
+
+    fn triple_to_owned(&self, triple: TripleModp) -> TripleOwned {
+        (triple.0.value(), triple.1.value(), triple.2.value())
+    }
+
+    fn triple_from_owned<'a>(&'a self, triple: &TripleOwned) -> TripleModp<'a> {
+        (
+            Modp::new(&self.barrett_ctx, triple.0),
+            Modp::new(&self.barrett_ctx, triple.1),
+            Modp::new(&self.barrett_ctx, triple.2),
+        )
     }
 
     /// Verify the sketch using pre-shared Beaver triples over an MPC channel.
@@ -94,6 +209,86 @@ impl SketchPhase {
             _ => Err(anyhow!("Sketch verification not supported for this configuration")),
         }
     }
+
+    pub fn verify<'a>(
+        &'a self,
+        sketch_value: &SketchValues<'a>,
+        sketch_data: &SketchData<'a>,
+        channel: &mut CommTrackingChannel,
+        role: bool,
+    ) -> Result<Vec<Modp<'a>>> {
+        let verify_values = self.batch_verify(
+            std::slice::from_ref(sketch_value),
+            std::slice::from_ref(sketch_data),
+            channel,
+            role,
+        )?;
+
+        let mut flattened = Vec::new();
+        for value in verify_values.iter() {
+            self.flatten_verify_values(value, &mut flattened);
+        }
+        Ok(flattened)
+    }
+
+    fn flatten_verify_values<'a>(
+        &'a self,
+        verify_value: &VerifyValues<'a>,
+        output: &mut Vec<Modp<'a>>,
+    ) {
+        match verify_value {
+            VerifyValues::Dcf {
+                last_layer,
+                consistency,
+            } => {
+                output.push(*last_layer);
+                output.extend(consistency.iter().copied());
+            }
+            VerifyValues::Linf {
+                ldcf,
+                rdcf,
+                consistency,
+            } => {
+                self.flatten_verify_values(ldcf, output);
+                self.flatten_verify_values(rdcf, output);
+                output.push(*consistency);
+            }
+            VerifyValues::DcfPayload {
+                last_layer_consistency,
+                consistency,
+                ..
+            } => {
+                output.extend(last_layer_consistency.iter().copied());
+                for level in consistency.iter() {
+                    for z in level.iter() {
+                        output.push(*z);
+                    }
+                }
+            }
+            VerifyValues::Lp {
+                ldcf0,
+                ldcf1,
+                rdcf0,
+                rdcf1,
+                reference_dpf,
+                ..
+            } => {
+                self.flatten_verify_values(ldcf0, output);
+                self.flatten_verify_values(ldcf1, output);
+                self.flatten_verify_values(rdcf0, output);
+                self.flatten_verify_values(rdcf1, output);
+                output.push(*reference_dpf);
+            }
+        }
+    }
+
+    fn adjust_for_role<'a>(&'a self, value: Modp<'a>, role: bool) -> Modp<'a> {
+        if role {
+            value
+        } else {
+            Modp::zero(&self.barrett_ctx) - value
+        }
+    }
 }
 
 // Helpers for the sketching phase
@@ -105,7 +300,7 @@ impl SketchPhase {
         prg: &mut PRG,
     ) -> Result<Vec<SketchValues<'a>>> {
         match shared_range {
-            SharedRange::IntervalFSS { keys, role: _ } => {
+            SharedRange::IntervalFSS { keys, role: _, .. } => {
                 let mut sketch_values = Vec::new();
                 for key in keys {
                     let sketch_value = self.sketch_linf_one_dimension(key, sketch_helper, prg)
@@ -126,7 +321,7 @@ impl SketchPhase {
         prg: &mut PRG,
     ) -> Result<Vec<SketchValues<'a>>> {
         match shared_range {
-            SharedRange::DistanceFSS { keys, role: _ } => {
+            SharedRange::DistanceFSS { keys, role: _, .. } => {
                 let mut sketch_values = Vec::new();
                 for key in keys {
                     let sketch_value = self.sketch_lp_one_dimension(key, p, sketch_helper, prg)
@@ -477,17 +672,137 @@ impl SketchPhase {
 
 impl SketchPhase {
     fn get_sketch_data_linf<'a>(
-        &self,
+        &'a self,
         prg: &mut PRG,
-    ) -> Result<SketchData<'a>> {
-        unimplemented!()
+    ) -> Result<(SketchData<'a>, SketchData<'a>)> {
+        // How many triples do we need for linf?
+        // 2 DCF data, each has:
+        // z_ast: 1 triple
+        // z_bullet: 1 triple
+        // z: 1 triple
+        // consistency: height - 1 triples
+        // Total: 2 * (height + 2) triples
+        let num_triples = 2 * (self.config.h1 + 2);
+        let (triples0, triples1) = sample_modp_triples(num_triples, &self.barrett_ctx, prg)
+            .map_err(|e| anyhow!("Failed to generate triples: {}", e))?;
+        
+
+        let offset = self.config.h1 + 2;
+        let ldcf_data0 = SketchData::Dcf { 
+            z_ast: triples0[0], 
+            z_bullet: triples0[1], 
+            z: triples0[2], 
+            consistency: triples0[3..offset].to_vec() 
+        };
+        let rdcf_data0 = SketchData::Dcf {
+            z_ast: triples0[offset + 0],
+            z_bullet: triples0[offset + 1],
+            z: triples0[offset + 2],
+            consistency: triples0[offset + 3..2*offset].to_vec(),
+        };
+        let sketch_data0 = SketchData::Linf {
+            ldcf: Box::new(ldcf_data0),
+            rdcf: Box::new(rdcf_data0),
+        };
+
+        let ldcf_data1 = SketchData::Dcf { 
+            z_ast: triples1[0], 
+            z_bullet: triples1[1], 
+            z: triples1[2], 
+            consistency: triples1[3..offset].to_vec() 
+        };
+        let rdcf_data1 = SketchData::Dcf {
+            z_ast: triples1[offset + 0],
+            z_bullet: triples1[offset + 1],
+            z: triples1[offset + 2],
+            consistency: triples1[offset + 3..2*offset].to_vec(),
+        };
+        let sketch_data1 = SketchData::Linf {
+            ldcf: Box::new(ldcf_data1),
+            rdcf: Box::new(rdcf_data1),
+        };
+
+        Ok((sketch_data0, sketch_data1))
     }
 
     fn get_sketch_data_lp<'a>(
-        &self, 
+        &'a self, 
         prg: &mut PRG,
-    ) -> Result<SketchData<'a>> {
-        unimplemented!()
+    ) -> Result<(SketchData<'a>, SketchData<'a>)> {
+        let p_metric = match self.config.metric {
+            DistanceMetric::Lp { p } => p as usize,
+            _ => return Err(anyhow!("get_sketch_data_lp called for non-Lp metric")),
+        };
+        let per_payload = (self.config.h1 - 1) * (p_metric + 1);
+
+        // Each party needs:
+        // - 4 DCF payloads, each with (h1-1)*(p+1) triples
+        // - 3 triples for the reference_dpf sketches (z_ast, z_bullet, z)
+        let num_triples = 4 * per_payload + 3;
+        let (triples0, triples1) =
+            sample_modp_triples(num_triples, &self.barrett_ctx, prg)
+                .map_err(|e| anyhow!("Failed to generate triples for lp: {}", e))?;
+
+        let build_payload = |triples: &[TripleModp<'a>]| -> Result<SketchData<'a>> {
+            ensure!(
+                triples.len() == per_payload,
+                "payload triple size mismatch: got {}, expected {}",
+                triples.len(),
+                per_payload
+            );
+            let mut consistency = Vec::with_capacity(self.config.h1 - 1);
+            let mut idx = 0;
+            for _ in 0..self.config.h1 - 1 {
+                let mut level = Vec::with_capacity(p_metric + 1);
+                for _ in 0..p_metric + 1 {
+                    level.push(triples[idx]);
+                    idx += 1;
+                }
+                consistency.push(level);
+            }
+            Ok(SketchData::DcfPayload {
+                length: p_metric + 1,
+                consistency,
+            })
+        };
+
+        let build_lp_data = |triples: &[TripleModp<'a>]| -> Result<SketchData<'a>> {
+            ensure!(
+                triples.len() == num_triples,
+                "lp triple size mismatch: got {}, expected {}",
+                triples.len(),
+                num_triples
+            );
+            let mut offset = 0;
+            let ldcf0 = build_payload(&triples[offset..offset + per_payload])?;
+            offset += per_payload;
+            let ldcf1 = build_payload(&triples[offset..offset + per_payload])?;
+            offset += per_payload;
+            let rdcf0 = build_payload(&triples[offset..offset + per_payload])?;
+            offset += per_payload;
+            let rdcf1 = build_payload(&triples[offset..offset + per_payload])?;
+            offset += per_payload;
+
+            let z_ast = triples[offset];
+            let z_bullet = triples[offset + 1];
+            let z = triples[offset + 2];
+
+            Ok(SketchData::Lp {
+                p: p_metric,
+                ldcf0: Box::new(ldcf0),
+                ldcf1: Box::new(ldcf1),
+                rdcf0: Box::new(rdcf0),
+                rdcf1: Box::new(rdcf1),
+                z_ast,
+                z_bullet,
+                z,
+            })
+        };
+
+        let sketch_data0 = build_lp_data(&triples0)?;
+        let sketch_data1 = build_lp_data(&triples1)?;
+
+        Ok((sketch_data0, sketch_data1))
     }
 }
 
@@ -517,31 +832,31 @@ impl SketchPhase {
                 } => {
                     match &**ldcf {
                         SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
-                            zs_ast.push(last_layer_case0.0);
-                            zs2_ast.push(last_layer_case0.1);
-                            zs_bullet.push(last_layer_case1.0);
-                            zs2_bullet.push(last_layer_case1.1);
+                            zs_ast.push(self.adjust_for_role(last_layer_case0.0, role));
+                            zs2_ast.push(self.adjust_for_role(last_layer_case0.1, role));
+                            zs_bullet.push(self.adjust_for_role(last_layer_case1.0, role));
+                            zs2_bullet.push(self.adjust_for_role(last_layer_case1.1, role));
                             for consistency_check in consistency {
-                                consistency0.push(consistency_check.0);
-                                consistency1.push(consistency_check.1);
+                                consistency0.push(self.adjust_for_role(consistency_check.0, role));
+                                consistency1.push(self.adjust_for_role(consistency_check.1, role));
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member ldcf of SketchValues::Linf, needed SketchValues::Dcf.")),
                     };
                     match &**rdcf {
                         SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
-                            zs_ast.push(last_layer_case0.0);
-                            zs2_ast.push(last_layer_case0.1);
-                            zs_bullet.push(last_layer_case1.0);
-                            zs2_bullet.push(last_layer_case1.1);
+                            zs_ast.push(self.adjust_for_role(last_layer_case0.0, role));
+                            zs2_ast.push(self.adjust_for_role(last_layer_case0.1, role));
+                            zs_bullet.push(self.adjust_for_role(last_layer_case1.0, role));
+                            zs2_bullet.push(self.adjust_for_role(last_layer_case1.1, role));
                             for consistency_check in consistency {
-                                consistency0.push(consistency_check.0);
-                                consistency1.push(consistency_check.1);
+                                consistency0.push(self.adjust_for_role(consistency_check.0, role));
+                                consistency1.push(self.adjust_for_role(consistency_check.1, role));
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member rdcf of SketchValues::Linf, needed SketchValues::Dcf.")),
                     };
-                    shift_consistency.push(*consistency);
+                    shift_consistency.push(self.adjust_for_role(*consistency, role));
 
                 },
                 _ => return Err(anyhow!("Type mismatch for verify linf. Need SketchValues::Linf")),
@@ -654,12 +969,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for ldcf0, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(*last_layer);
+                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(*cons0);
-                                    consistency1.push(*cons1);
+                                    consistency0.push(self.adjust_for_role(*cons0, role));
+                                    consistency1.push(self.adjust_for_role(*cons1, role));
                                 }
                             }
                         },
@@ -669,12 +984,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for ldcf1, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(*last_layer);
+                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(*cons0);
-                                    consistency1.push(*cons1);
+                                    consistency0.push(self.adjust_for_role(*cons0, role));
+                                    consistency1.push(self.adjust_for_role(*cons1, role));
                                 }
                             }
                         },
@@ -684,12 +999,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for rdcf0, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(*last_layer);
+                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(*cons0);
-                                    consistency1.push(*cons1);
+                                    consistency0.push(self.adjust_for_role(*cons0, role));
+                                    consistency1.push(self.adjust_for_role(*cons1, role));
                                 }
                             }
                         },
@@ -699,21 +1014,21 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for rdcf1, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(*last_layer);
+                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(*cons0);
-                                    consistency1.push(*cons1);
+                                    consistency0.push(self.adjust_for_role(*cons0, role));
+                                    consistency1.push(self.adjust_for_role(*cons1, role));
                                 }
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for rdcf1, expect SketchValues::DcfPayload.")),
                     };
-                    zs_ast.push(reference_dpf_case0.0);
-                    zs2_ast.push(reference_dpf_case0.1);
-                    zs_bullet.push(reference_dpf_case1.0);
-                    zs2_bullet.push(reference_dpf_case1.1);
+                    zs_ast.push(self.adjust_for_role(reference_dpf_case0.0, role));
+                    zs2_ast.push(self.adjust_for_role(reference_dpf_case0.1, role));
+                    zs_bullet.push(self.adjust_for_role(reference_dpf_case1.0, role));
+                    zs2_bullet.push(self.adjust_for_role(reference_dpf_case1.1, role));
                 },
                 _ => return Err(anyhow!("SketchValues type mismatch for batch_verify_lp, expect SketchValues::Lp.")),
             }
@@ -953,10 +1268,10 @@ impl SketchPhase {
         channel: &mut CommTrackingChannel,
     ) -> Result<()> {
         let length: usize = vals.len();
-        channel.write_bytes(&length.to_le_bytes());
+        channel.write_bytes(&length.to_le_bytes())?;
         for (idx, val) in vals.iter().enumerate() {
             ensure!(val.context() == &self.barrett_ctx, "Barrett context mismatch at idx {}", idx);
-            channel.write_bytes(&val.value().to_le_bytes());
+            channel.write_bytes(&val.value().to_le_bytes())?;
         }
         Ok(())
     }
@@ -967,12 +1282,12 @@ impl SketchPhase {
         channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Modp<'a>>> {
         let mut length_bytes = vec![0u8; 8];
-        channel.read_bytes(&mut length_bytes);
+        channel.read_bytes(&mut length_bytes)?;
         let length = usize::from_le_bytes(length_bytes.try_into().unwrap());
         let mut res: Vec<Modp> = Vec::with_capacity(length);
         for _ in 0..length {
             let mut val_bytes = vec![0u8; 16];
-            channel.read_bytes(&mut val_bytes);
+            channel.read_bytes(&mut val_bytes)?;
             let val = u128::from_le_bytes(val_bytes.try_into().unwrap());
             res.push(Modp::new(&self.barrett_ctx, val));
         }

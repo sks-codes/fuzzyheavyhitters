@@ -5,9 +5,8 @@ use mosaic::{
         share_phase::SharePhase,
         share_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
         shared_range::SharedRange,
-        shared_sketch::{SketchData, TripleModp},
         sketch_phase::SketchPhase,
-        sketch_types::{SketchConfig, SketchValues},
+        sketch_types::{SketchConfig, SketchValues, SketchData, TripleModp},
     },
     randomness::prg::PRG,
 };
@@ -97,6 +96,7 @@ fn zero_triple_from<'a>(sketch_value: &SketchValues<'a>) -> TripleModp<'a> {
     (zero, zero, zero)
 }
 
+#[allow(dead_code)]
 fn build_sketch_data_from<'a>(sketch_value: &SketchValues<'a>) -> SketchData<'a> {
     match sketch_value {
         SketchValues::Dcf {
@@ -484,16 +484,20 @@ fn verify_interval_fss_mpc_test() -> Result<()> {
     let mut prg1 = PRG::new(Some(&seed), 0);
     let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
 
+    let mut prg_data = PRG::new(Some(&seed), 1);
+    let (sd0_full, sd1_full) = sketch_phase.get_sketch_data(&mut prg_data)?;
+
     let (mut chan0, mut chan1) = setup_channels_pair()?;
 
     let (checks0, checks1) = thread::scope(|s| -> Result<_> {
         let sv0 = &sketch0[0];
         let sv1 = &sketch1[0];
-        let sd0 = build_sketch_data_from(sv0);
-        let sd1 = build_sketch_data_from(sv1);
+        let sd0 = sd0_full;
+        let sd1 = sd1_full;
+        let sketch_phase_ref = &sketch_phase;
 
-        let handle0 = s.spawn(move || sketch_phase.verify(sv0, &sd0, &mut chan0, true));
-        let handle1 = s.spawn(move || sketch_phase.verify(sv1, &sd1, &mut chan1, false));
+        let handle0 = s.spawn(move || sketch_phase_ref.verify(sv0, &sd0, &mut chan0, true));
+        let handle1 = s.spawn(move || sketch_phase_ref.verify(sv1, &sd1, &mut chan1, false));
 
         let res0 = handle0.join().expect("thread 0 panicked")?;
         let res1 = handle1.join().expect("thread 1 panicked")?;
@@ -529,16 +533,20 @@ fn verify_distance_fss_mpc_test() -> Result<()> {
     let mut prg1 = PRG::new(Some(&seed), 0);
     let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
 
+    let mut prg_data = PRG::new(Some(&seed), 1);
+    let (sd0_full, sd1_full) = sketch_phase.get_sketch_data(&mut prg_data)?;
+
     let (mut chan0, mut chan1) = setup_channels_pair()?;
 
     let (checks0, checks1) = thread::scope(|s| -> Result<_> {
         let sv0 = &sketch0[0];
         let sv1 = &sketch1[0];
-        let sd0 = build_sketch_data_from(sv0);
-        let sd1 = build_sketch_data_from(sv1);
+        let sd0 = sd0_full;
+        let sd1 = sd1_full;
+        let sketch_phase_ref = &sketch_phase;
 
-        let handle0 = s.spawn(move || sketch_phase.verify(sv0, &sd0, &mut chan0, true));
-        let handle1 = s.spawn(move || sketch_phase.verify(sv1, &sd1, &mut chan1, false));
+        let handle0 = s.spawn(move || sketch_phase_ref.verify(sv0, &sd0, &mut chan0, true));
+        let handle1 = s.spawn(move || sketch_phase_ref.verify(sv1, &sd1, &mut chan1, false));
 
         let res0 = handle0.join().expect("thread 0 panicked")?;
         let res1 = handle1.join().expect("thread 1 panicked")?;

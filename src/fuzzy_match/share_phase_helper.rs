@@ -15,6 +15,7 @@ use crate::{
     okvs_f2k::RbOkvsF2k,
     util::u128_to_bits_msb,
 };
+use rand::Rng;
 
 use super::share_phase::{SharePhase, SharePhaseError};
 use super::share_types::DistanceMetric;
@@ -32,6 +33,7 @@ impl SharePhase {
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut okvs_shares_0 = Vec::new();
         let mut okvs_shares_1 = Vec::new();
+        let sketch_seed = rand::rng().random::<[u8; 16]>();
 
         // Create separate OKVS for each dimension
         for dim in 0..self.config.d {
@@ -72,6 +74,7 @@ impl SharePhase {
                 okvs_shares: okvs_shares_0,
                 okvs_seeds: (0..self.config.d).map(|dim| (r1[dim], r2[dim])).collect(),
                 role: false, // Server 0
+                sketch_seed,
                 p: match &self.config.metric {
                     DistanceMetric::LInfinity => None,
                     DistanceMetric::Lp { p } => Some(*p),
@@ -81,6 +84,7 @@ impl SharePhase {
                 okvs_shares: okvs_shares_1,
                 okvs_seeds: (0..self.config.d).map(|dim| (r1[dim], r2[dim])).collect(),
                 role: true, // Server 1
+                sketch_seed,
                 p: match &self.config.metric {
                     DistanceMetric::LInfinity => None,
                     DistanceMetric::Lp { p } => Some(*p),
@@ -151,6 +155,7 @@ impl SharePhase {
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
+        let sketch_seed = rand::rng().random::<[u8; 16]>();
 
         let modulus = 1u128 << self.config.h2;
 
@@ -191,10 +196,12 @@ impl SharePhase {
             SharedRange::IntervalFSS {
                 keys: keys_0,
                 role: false, // Server 0
+                sketch_seed,
             },
             SharedRange::IntervalFSS {
                 keys: keys_1,
                 role: true, // Server 1
+                sketch_seed,
             },
         ))
     }
@@ -222,6 +229,7 @@ impl SharePhase {
     ) -> Result<(SharedRange, SharedRange), SharePhaseError> {
         let mut keys_0 = Vec::new();
         let mut keys_1 = Vec::new();
+        let sketch_seed = rand::rng().random::<[u8; 16]>();
 
         let modulus = 1u128 << self.config.h2;
 
@@ -258,10 +266,12 @@ impl SharePhase {
             SharedRange::DistanceFSS {
                 keys: keys_0,
                 role: false,
+                sketch_seed,
             },
             SharedRange::DistanceFSS {
                 keys: keys_1,
                 role: true,
+                sketch_seed,
             },
         ))
     }

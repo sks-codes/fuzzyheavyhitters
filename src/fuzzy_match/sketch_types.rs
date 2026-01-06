@@ -3,8 +3,10 @@ use crate::{
     configs::cli_config::ProtocolParameters,
     fuzzy_match::share_types::{DictionaryType, DistanceMetric, ShareMethod},
 };
+use serde::{Deserialize, Serialize};
 
-pub(crate) type TripleModp<'a> = (Modp<'a>, Modp<'a>, Modp<'a>);
+pub type TripleModp<'a> = (Modp<'a>, Modp<'a>, Modp<'a>);
+pub type TripleOwned = (u128, u128, u128);
 
 
 #[derive(Debug, Clone)]
@@ -118,6 +120,34 @@ pub enum SketchData<'a> {
         z_bullet: TripleModp<'a>,
         z: TripleModp<'a>,
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SketchDataOwned {
+    Dcf {
+        z_ast: TripleOwned,
+        z_bullet: TripleOwned,
+        z: TripleOwned,
+        consistency: Vec<TripleOwned>,
+    },
+    Linf {
+        ldcf: Box<SketchDataOwned>,
+        rdcf: Box<SketchDataOwned>,
+    },
+    DcfPayload {
+        length: usize,
+        consistency: Vec<Vec<TripleOwned>>,
+    },
+    Lp {
+        p: usize,
+        ldcf0: Box<SketchDataOwned>,
+        ldcf1: Box<SketchDataOwned>,
+        rdcf0: Box<SketchDataOwned>,
+        rdcf1: Box<SketchDataOwned>,
+        z_ast: TripleOwned,
+        z_bullet: TripleOwned,
+        z: TripleOwned,
+    },
 }
 
 #[derive(Debug)]

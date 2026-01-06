@@ -27,8 +27,11 @@ fn run_client(config_path: &str) -> Result<(), String> {
     let share_start = std::time::Instant::now();
     let share_config = cli_config.to_share_config()?; // Client uses share config
     let client = Client::new(share_config);
-    let (shares_server0, shares_server1) =
-        client.generate_client_shares(&client_points, cli_config.protocol.delta)?;
+    let (shares_server0, shares_server1, sketches0, sketches1) = client.generate_client_shares(
+        &client_points,
+        cli_config.protocol.delta,
+        cli_config.protocol.enable_sketch,
+    )?;
     let share_time = share_start.elapsed();
 
     println!("Connecting to servers...");
@@ -49,6 +52,8 @@ fn run_client(config_path: &str) -> Result<(), String> {
     client.send_client_shares(
         shares_server0,
         shares_server1,
+        sketches0,
+        sketches1,
         &mut channel_server0,
         &mut channel_server1,
     )?;

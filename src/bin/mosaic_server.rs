@@ -53,7 +53,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         .expect("Failed to listen for client connection");
 
     println!("Server {}: Receiving shares from client...", server_id);
-    let shares = protocol
+    let (shares, sketches) = protocol
         .receive_client_shares(&mut client_channel)
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
     println!(
@@ -153,6 +153,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
 
         let results = protocol.run_server_known_dictionary_parallel(
             &shares,
+            sketches.as_deref(),
             &query_points,
             &mut signal_dealer_channels,
             &mut check_dealer_channels,
@@ -172,6 +173,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         // Run the protocol for unknown dictionary
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
+            sketches.as_deref(),
             &mut signal_dealer_channels,
             &mut check_dealer_channels,
             &mut threshold_dealer_channels,

@@ -147,6 +147,7 @@ impl SharePhase {
                 okvs_seeds,
                 role,
                 p: _,
+                ..
             } => {
                 let (r1, r2) = (okvs_seeds[dimension].0, okvs_seeds[dimension].1);
                 let result = self.evaluate_okvs_generic(
@@ -158,12 +159,12 @@ impl SharePhase {
                 )?;
                 Ok(result)
             }
-            SharedRange::IntervalFSS { keys, role: _ } => {
+            SharedRange::IntervalFSS { keys, role: _, .. } => {
                 let result =
                     self.evaluate_interval_fss_at_single_dimension(&keys[dimension], point_bits)?;
                 Ok(result)
             }
-            SharedRange::DistanceFSS { keys, role } => {
+            SharedRange::DistanceFSS { keys, role, .. } => {
                 let result =
                     self.evaluate_distance_fss(&keys[dimension], point_bits, *role)?;
                 Ok(result)
@@ -184,6 +185,7 @@ impl SharePhase {
                 okvs_seeds,
                 role,
                 p: _,
+                ..
             } => match share_data {
                 ShareData::OKVS { eval } => {
                     self.expand_prefix_okvs(okvs_shares, okvs_seeds, *role, prefix, eval, dimension)
@@ -192,7 +194,7 @@ impl SharePhase {
                     "Expected OKVS share data for OKVS shared range".to_string(),
                 )),
             },
-            SharedRange::IntervalFSS { keys, role: _ } => match share_data {
+            SharedRange::IntervalFSS { keys, role: _, .. } => match share_data {
                 ShareData::IntervalFSS { data } => {
                     self.expand_prefix_interval_fss(keys, data, dimension)
                 }
@@ -200,7 +202,7 @@ impl SharePhase {
                     "Expected IntervalFSS share data for IntervalFSS shared range".to_string(),
                 )),
             },
-            SharedRange::DistanceFSS { keys, role } => match share_data {
+            SharedRange::DistanceFSS { keys, role, .. } => match share_data {
                 ShareData::DistanceFSS { data, eval } => {
                     self.expand_prefix_distance_fss(keys, prefix, data, eval, dimension, *role)
                 }
@@ -231,8 +233,9 @@ impl SharePhase {
                 okvs_seeds: _,
                 role: _,
                 p: _,
+                ..
             } => Ok(ShareData::OKVS { eval: evals }),
-            SharedRange::IntervalFSS { keys, role: _ } => Ok(ShareData::IntervalFSS {
+            SharedRange::IntervalFSS { keys, role: _, .. } => Ok(ShareData::IntervalFSS {
                 data: keys
                     .iter()
                     .map(|key| {
@@ -241,7 +244,7 @@ impl SharePhase {
                     })
                     .collect::<Result<Vec<IntervalFSSEval>, _>>()?,
             }),
-            SharedRange::DistanceFSS { keys, role: _ } => Ok(ShareData::DistanceFSS {
+            SharedRange::DistanceFSS { keys, role: _, .. } => Ok(ShareData::DistanceFSS {
                 data: keys
                     .iter()
                     .map(|key| {
