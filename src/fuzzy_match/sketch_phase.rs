@@ -13,9 +13,8 @@ use crate::{
         share_phase::SharePhaseError, 
         share_types::{DistanceMetric, ShareMethod}, 
         shared_range::SharedRange, 
-        shared_sketch::{SketchData, TripleModp}, 
         sketch_helper::SketchHelper, 
-        sketch_types::{SketchConfig, SketchValues, VerifyValues},
+        sketch_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp}, 
     },
     randomness::prg::PRG,
 };

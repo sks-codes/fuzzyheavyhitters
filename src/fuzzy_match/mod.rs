@@ -14,7 +14,6 @@ pub mod dealer;
 pub mod protocol;
 pub mod share_okvs_strategies;
 pub mod shared_range;
-pub mod shared_sketch;
 pub mod threshold_phase;
 // Share phase
 pub mod share_phase;
