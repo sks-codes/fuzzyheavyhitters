@@ -1,5 +1,6 @@
 use crate::data_structures::u256::{U256, MAX_MOD, div_u256_by_u128, mul_u128_wide, mul_u256_high, add_mod, sub_mod};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use anyhow::{Result, ensure};
 
 // Barrett Context: fixed modulo and precomputed \mu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,5 +173,19 @@ impl<'a> MulAssign for Modp<'a> {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
+    }
+}
+
+impl<'a> Modp<'a> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.v.to_le_bytes().to_vec()
+    }
+
+    pub fn from_bytes(ctx: &'a BarrettCtx, bytes: &[u8]) -> Result<(Self, usize)> {
+        ensure!(bytes.len() >= 16, "Not enough bytes to read Modp");
+        let mut arr = [0u8; 16];
+        arr.copy_from_slice(&bytes[0..16]);
+        let v = u128::from_le_bytes(arr);
+        Ok((Modp::new(ctx, v), 16))
     }
 }

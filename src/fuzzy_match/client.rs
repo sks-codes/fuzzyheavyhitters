@@ -99,8 +99,6 @@ impl Client {
         &self,
         shares_server0: Vec<SharedRange>,
         shares_server1: Vec<SharedRange>,
-        sketches_server0: Option<Vec<Vec<SketchDataOwned>>>,
-        sketches_server1: Option<Vec<Vec<SketchDataOwned>>>,
         channel_server0: &mut CommTrackingChannel,
         channel_server1: &mut CommTrackingChannel,
     ) -> Result<(), String> {
@@ -173,6 +171,14 @@ impl Client {
 
         Ok(())
     }
+
+    pub fn send_sketch_data(
+        &self,
+        sketch_data_server0: Option<Vec<Vec<SketchDataOwned>>>,
+        sketch_data_server1: Option<Vec<Vec<SketchDataOwned>>>,
+        channel_server0: &mut CommTrackingChannel,
+        channel_server1: &mut CommTrackingChannel,
+    )
 }
 
 fn sketch_config_from_share_config(share_config: &ShareConfig) -> SketchConfig {
