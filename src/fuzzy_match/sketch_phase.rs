@@ -14,7 +14,7 @@ use crate::{
         share_phase_types::{DistanceMetric, ShareMethod}, 
         shared_range::SharedRange, 
         sketch_helper::SketchHelper, 
-        sketch_phase_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp, SketchDataOwned, TripleOwned}, 
+        sketch_phase_types::{SketchConfig, SketchValues, VerifyValues, SketchData, TripleModp, TripleOwned}, 
     },
     randomness::prg::PRG,
 };
@@ -73,109 +73,6 @@ impl SketchPhase {
                 }
             }
             _ => Err(anyhow!("get_sketch_data not supported for this method. Only support ShareMethod::FSS")), 
-        }
-    }
-
-    pub fn get_sketch_data_owned(&self, prg: &mut PRG) -> Result<(SketchDataOwned, SketchDataOwned)> {
-        let (d0, d1) = self.get_sketch_data(prg)?;
-        Ok((self.sketch_data_to_owned(d0), self.sketch_data_to_owned(d1)))
-    }
-
-    pub fn sketch_data_from_owned<'a>(&'a self, owned: &SketchDataOwned) -> SketchData<'a> {
-        match owned {
-            SketchDataOwned::Dcf {
-                z_ast,
-                z_bullet,
-                z,
-                consistency,
-            } => SketchData::Dcf {
-                z_ast: self.triple_from_owned(z_ast),
-                z_bullet: self.triple_from_owned(z_bullet),
-                z: self.triple_from_owned(z),
-                consistency: consistency
-                    .iter()
-                    .map(|t| self.triple_from_owned(t))
-                    .collect(),
-            },
-            SketchDataOwned::Linf { ldcf, rdcf } => SketchData::Linf {
-                ldcf: Box::new(self.sketch_data_from_owned(ldcf)),
-                rdcf: Box::new(self.sketch_data_from_owned(rdcf)),
-            },
-            SketchDataOwned::DcfPayload { length, consistency } => SketchData::DcfPayload {
-                length: *length,
-                consistency: consistency
-                    .iter()
-                    .map(|row| row.iter().map(|t| self.triple_from_owned(t)).collect())
-                    .collect(),
-            },
-            SketchDataOwned::Lp {
-                p,
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                z_ast,
-                z_bullet,
-                z,
-            } => SketchData::Lp {
-                p: *p,
-                ldcf0: Box::new(self.sketch_data_from_owned(ldcf0)),
-                ldcf1: Box::new(self.sketch_data_from_owned(ldcf1)),
-                rdcf0: Box::new(self.sketch_data_from_owned(rdcf0)),
-                rdcf1: Box::new(self.sketch_data_from_owned(rdcf1)),
-                z_ast: self.triple_from_owned(z_ast),
-                z_bullet: self.triple_from_owned(z_bullet),
-                z: self.triple_from_owned(z),
-            },
-        }
-    }
-
-    fn sketch_data_to_owned(&self, data: SketchData) -> SketchDataOwned {
-        match data {
-            SketchData::Dcf {
-                z_ast,
-                z_bullet,
-                z,
-                consistency,
-            } => SketchDataOwned::Dcf {
-                z_ast: self.triple_to_owned(z_ast),
-                z_bullet: self.triple_to_owned(z_bullet),
-                z: self.triple_to_owned(z),
-                consistency: consistency
-                    .into_iter()
-                    .map(|t| self.triple_to_owned(t))
-                    .collect(),
-            },
-            SketchData::Linf { ldcf, rdcf } => SketchDataOwned::Linf {
-                ldcf: Box::new(self.sketch_data_to_owned(*ldcf)),
-                rdcf: Box::new(self.sketch_data_to_owned(*rdcf)),
-            },
-            SketchData::DcfPayload { length, consistency } => SketchDataOwned::DcfPayload {
-                length,
-                consistency: consistency
-                    .into_iter()
-                    .map(|row| row.into_iter().map(|t| self.triple_to_owned(t)).collect())
-                    .collect(),
-            },
-            SketchData::Lp {
-                p,
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                z_ast,
-                z_bullet,
-                z,
-            } => SketchDataOwned::Lp {
-                p,
-                ldcf0: Box::new(self.sketch_data_to_owned(*ldcf0)),
-                ldcf1: Box::new(self.sketch_data_to_owned(*ldcf1)),
-                rdcf0: Box::new(self.sketch_data_to_owned(*rdcf0)),
-                rdcf1: Box::new(self.sketch_data_to_owned(*rdcf1)),
-                z_ast: self.triple_to_owned(z_ast),
-                z_bullet: self.triple_to_owned(z_bullet),
-                z: self.triple_to_owned(z),
-            },
         }
     }
 

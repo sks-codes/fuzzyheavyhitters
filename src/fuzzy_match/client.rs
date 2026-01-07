@@ -83,15 +83,15 @@ impl Client {
             let mut sketches_server0: Vec<Vec<SketchData>> = Vec::new();
             let mut sketches_server1: Vec<Vec<SketchData>> = Vec::new();
 
-            if let Some(phase) = self.sketch_phase {
+            if let Some(phase) = &self.sketch_phase {
                 let mut prg =
                     PRG::new(Some(&rand::rng().random::<[u8; 16]>()), 0);
                 let mut sketch_vec0 = Vec::with_capacity(self.d());
                 let mut sketch_vec1 = Vec::with_capacity(self.d());
                 for _ in 0..self.d() {
                     let (d0, d1) = phase
-                        .get_sketch_data_owned(&mut prg)
-                        .map_err(|e| format!("Failed to get sketch data: {}", e))?;
+                        .get_sketch_data(&mut prg)
+                        .map_err(|e| anyhow!("Failed to get sketch data: {}", e))?;
                     sketch_vec0.push(d0);
                     sketch_vec1.push(d1);
                 }

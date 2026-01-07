@@ -5,7 +5,7 @@
 
 use crate::{
     channel::CommTrackingChannel,
-    data_structures::modp::Modp,
+    data_structures::modp::{Modp, BarrettCtx},
     fuzzy_match::{
         dealer::{DealerSignal, DpfKeyBatch, FssKeyBatch},
         share_phase::SharePhase,
@@ -100,7 +100,7 @@ impl MosaicProtocol {
     }
 
     pub fn receive_client_sketch_data<'a>(
-        &self,
+        &'a self,
         client_channel: &mut CommTrackingChannel,
     ) -> Result<Vec<Vec<SketchData<'a>>>> {
         ensure!(self.enable_sketch, "Sketch data reception called but sketching is disabled");
@@ -285,7 +285,7 @@ impl MosaicProtocol {
     fn verify_client_sketches(
         &self,
         client_shares: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchDataOwned>]>,
+        client_sketches: Option<&[Vec<SketchData>]>,
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
         if self.share_method() != ShareMethod::FSS || !self.enable_sketch() {
@@ -369,7 +369,7 @@ impl MosaicProtocol {
     pub fn run_server_known_dictionary_parallel(
         &self,
         client_shares: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchDataOwned>]>,
+        client_sketches: Option<&[Vec<SketchData>]>,
         query_points: &[Vec<u128>],
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
@@ -450,7 +450,7 @@ impl MosaicProtocol {
     pub fn run_server_unknown_dictionary_parallel(
         &self,
         client_shares_list: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchDataOwned>]>,
+        client_sketches: Option<&[Vec<SketchData>]>,
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
         threshold_dealer_channels: &mut [CommTrackingChannel],
@@ -941,8 +941,8 @@ impl MosaicProtocol {
         self.enable_sketch
     }
 
-    pub fn barrett_ctx<'a>(&self) -> &'a BarrettContext {
-        self.sketch_phase.barrett_ctx()
+    pub fn barrett_ctx<'a>(&'a self) -> &'a BarrettCtx {
+        &self.sketch_phase.barrett_ctx()
     }
 
     pub fn share_method(&self) -> ShareMethod {
