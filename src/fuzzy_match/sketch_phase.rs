@@ -1737,6 +1737,10 @@ impl SketchPhase {
     pub fn q(&self) -> u128 {
         self.config.q
     }
+
+    pub fn barrett_ctx<'a>(&'a self) -> &'a BarrettCtx {
+        &self.barrett_ctx
+    }
 }
 
 fn sample_modp_vec<'a>(

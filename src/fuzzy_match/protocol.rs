@@ -24,6 +24,7 @@ use crate::{
 use rayon::prelude::*;
 use scuttlebutt::{AbstractChannel, AesRng};
 use std::convert::TryInto;
+use anyhow::{anyhow, ensure, Result};
 
 /// Main protocol structure that encapsulates the entire fuzzy heavy hitters protocol
 #[derive(Clone)]
@@ -66,53 +67,81 @@ impl MosaicProtocol {
     pub fn receive_client_shares(
         &self,
         client_channel: &mut CommTrackingChannel,
-    ) -> Result<(Vec<SharedRange>, Option<Vec<Vec<SketchDataOwned>>>), String> {
+    ) -> Result<Vec<SharedRange>> {
         // Receive shares using custom serialization
         let mut len_bytes = [0u8; 8];
         client_channel
             .read_bytes(&mut len_bytes)
-            .map_err(|e| format!("Failed to read length from client: {}", e))?;
+            .map_err(|e| anyhow!("Failed to read length from client: {}", e))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
         let mut shares_data = vec![0u8; len];
         client_channel
             .read_bytes(&mut shares_data)
-            .map_err(|e| format!("Failed to receive shares from client: {}", e))?;
+            .map_err(|e| anyhow!("Failed to receive shares from client: {}", e))?;
 
         // Custom deserialization for Vec<SharedRange>
         let bytes = &shares_data[..];
-        if bytes.len() < 4 {
-            return Err("Too short for Vec<SharedRange> length".to_string());
-        }
+        ensure!(bytes.len() >= 8, "Invalid shares data length");
         let mut offset = 0;
-        let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        let shared_range_count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        ensure!(shared_range_count == self.num_clients, "Mismatch in number of client shares received, expected {}, got {}", self.num_clients, shared_range_count);
         offset += 8;
-        let modulus = 1u128 << self.share_phase.config.h2;
-        let mut shares = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)?;
+
+        let modulus = 1u128 << self.h2();
+        let mut shares = Vec::with_capacity(shared_range_count);
+        for _ in 0..shared_range_count {
+            let (share, share_used) = SharedRange::from_bytes(&bytes[offset..], modulus)
+                .map_err(|e| anyhow!("Failed to deserialize SharedRange: {}", e))?;
             shares.push(share);
             offset += share_used;
         }
-        if !self.enable_sketch {
-            return Ok((shares, None));
+
+        Ok(shares)
+    }
+
+    pub fn receive_client_sketch_data<'a>(
+        &self,
+        client_channel: &mut CommTrackingChannel,
+    ) -> Result<Vec<Vec<SketchData<'a>>>> {
+        ensure!(self.enable_sketch, "Sketch data reception called but sketching is disabled");
+
+        let mut len_bytes = [0u8; 8];
+        client_channel
+            .read_bytes(&mut len_bytes)
+            .map_err(|e| anyhow!("Failed to read length from client: {}", e))?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+
+        let mut sketch_data_buf = vec![0u8; len];
+        client_channel
+            .read_bytes(&mut sketch_data_buf)
+            .map_err(|e| anyhow!("Failed to read sketch data from client: {}", e))?;
+
+        // Custom deserialization for Vec<Vec<SketchData>>
+        let bytes = &sketch_data_buf[..];
+        ensure!(bytes.len() >= 8, "Invalid sketch data length");
+        let mut offset = 0;
+        let sketch_data_count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        ensure!(sketch_data_count == self.num_clients, "Mismatch in number of client sketches received, expected {}, got {}", self.num_clients, sketch_data_count);
+        offset += 8;
+        let d = usize::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        ensure!(d == self.d(), "Mismatch in sketch data dimensions, expected {}, got {}", self.d(), d);
+        offset += 8;
+
+        let barrett_ctx = self.barrett_ctx();
+
+        let mut sketch_data_vec = Vec::with_capacity(sketch_data_count);
+        for _ in 0..sketch_data_count {
+            let mut sketches_per_client = Vec::with_capacity(d);
+            for _ in 0..d {
+                let (sketch_data, used_bytes) = SketchData::from_bytes(&barrett_ctx, &bytes[offset..])
+                    .map_err(|e| anyhow!("Failed to deserialize SketchData: {}", e))?;
+                sketches_per_client.push(sketch_data);
+                offset += used_bytes;
+            }
+            sketch_data_vec.push(sketches_per_client);
         }
 
-        let mut sketch_len_bytes = [0u8; 8];
-        client_channel
-            .read_bytes(&mut sketch_len_bytes)
-            .map_err(|e| format!("Failed to read sketch length from client: {}", e))?;
-        let sketch_len = u64::from_le_bytes(sketch_len_bytes) as usize;
-        if sketch_len == 0 {
-            return Ok((shares, None));
-        }
-        let mut sketch_buf = vec![0u8; sketch_len];
-        client_channel
-            .read_bytes(&mut sketch_buf)
-            .map_err(|e| format!("Failed to read sketches from client: {}", e))?;
-        let sketches: Vec<Vec<SketchDataOwned>> = bincode::deserialize(&sketch_buf)
-            .map_err(|e| format!("Failed to deserialize sketches: {}", e))?;
-
-        Ok((shares, Some(sketches)))
+        Ok(sketch_data_vec)
     }
 
 
@@ -910,6 +939,10 @@ impl MosaicProtocol {
 
     pub fn enable_sketch(&self) -> bool {
         self.enable_sketch
+    }
+
+    pub fn barrett_ctx<'a>(&self) -> &'a BarrettContext {
+        self.sketch_phase.barrett_ctx()
     }
 
     pub fn share_method(&self) -> ShareMethod {
