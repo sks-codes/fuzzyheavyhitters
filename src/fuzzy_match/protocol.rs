@@ -12,7 +12,7 @@ use crate::{
         share_phase_types::{DistanceMetric, ShareConfig, ShareMethod},
         shared_range::{ShareData, SharedRange},
         sketch_phase::SketchPhase,
-        sketch_phase_types::{SketchConfig, SketchDataOwned, VerifyValues},
+        sketch_phase_types::{SketchConfig, SketchData, VerifyValues},
         check_phase::CheckPhase,
         check_phase_types::{CheckConfig, CheckData, CheckMethod, CheckProperty},
         threshold_phase::ThresholdPhase,
