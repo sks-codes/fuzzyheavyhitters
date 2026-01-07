@@ -12,7 +12,7 @@ use crate::{
         share_phase_types::{DistanceMetric, ShareConfig, ShareMethod},
         shared_range::{ShareData, SharedRange},
         sketch_phase::SketchPhase,
-        sketch_phase_types::{SketchConfig, SketchData, VerifyValues},
+        sketch_phase_types::{SketchConfig, SketchData, SketchValues, VerifyValues},
         check_phase::CheckPhase,
         check_phase_types::{CheckConfig, CheckData, CheckMethod, CheckProperty},
         threshold_phase::ThresholdPhase,
@@ -144,223 +144,98 @@ impl MosaicProtocol {
         Ok(sketch_data_vec)
     }
 
-
-    fn extract_role(shared_range: &SharedRange) -> bool {
-        match shared_range {
-            SharedRange::OKVS { role, .. } => *role,
-            SharedRange::IntervalFSS { role, .. } => *role,
-            SharedRange::DistanceFSS { role, .. } => *role,
-        }
-    }
-
-    fn extract_sketch_seed(shared_range: &SharedRange) -> [u8; 16] {
-        shared_range.sketch_seed()
-    }
-
-    fn open_modp_shares(
-        &self,
-        shares: &[Modp<'_>],
-        channel: &mut CommTrackingChannel,
-        role: bool,
-    ) -> Result<Vec<u128>, String> {
-        let modulus = self.q();
-        let my_values: Vec<u128> = shares.iter().map(|m| m.value()).collect();
-        let len = my_values.len() as u64;
-
-        if role {
-            channel
-                .write_bytes(&len.to_le_bytes())
-                .map_err(|e| format!("Failed to send length: {}", e))?;
-            for v in &my_values {
-                channel
-                    .write_bytes(&v.to_le_bytes())
-                    .map_err(|e| format!("Failed to send value: {}", e))?;
-            }
-            channel.flush().map_err(|e| format!("Flush failed: {}", e))?;
-        }
-
-        let mut other_len_bytes = [0u8; 8];
-        channel
-            .read_bytes(&mut other_len_bytes)
-            .map_err(|e| format!("Failed to read length: {}", e))?;
-        let other_len = u64::from_le_bytes(other_len_bytes) as usize;
-        let mut other_values = vec![0u128; other_len];
-        for val in other_values.iter_mut() {
-            let mut buf = [0u8; 16];
-            channel
-                .read_bytes(&mut buf)
-                .map_err(|e| format!("Failed to read value: {}", e))?;
-            *val = u128::from_le_bytes(buf);
-        }
-
-        if !role {
-            channel
-                .write_bytes(&len.to_le_bytes())
-                .map_err(|e| format!("Failed to send length: {}", e))?;
-            for v in &my_values {
-                channel
-                    .write_bytes(&v.to_le_bytes())
-                    .map_err(|e| format!("Failed to send value: {}", e))?;
-            }
-            channel.flush().map_err(|e| format!("Flush failed: {}", e))?;
-        }
-
-        if other_len != my_values.len() {
-            return Err(format!(
-                "Sketch verify length mismatch: local {} remote {}",
-                my_values.len(),
-                other_len
-            ));
-        }
-
-        Ok(my_values
-            .iter()
-            .zip(other_values.iter())
-            .map(|(a, b)| (a + b) % modulus)
-            .collect())
-    }
-
-    fn flatten_verify_values<'a>(
-        &self,
-        verify_values: &'a [VerifyValues<'a>],
-    ) -> Vec<Modp<'a>> {
-        let mut out = Vec::new();
-        for v in verify_values {
-            self.flatten_single_verify_value(v, &mut out);
-        }
-        out
-    }
-
-    fn flatten_single_verify_value<'a>(
-        &self,
-        verify_value: &'a VerifyValues<'a>,
-        output: &mut Vec<Modp<'a>>,
-    ) {
-        match verify_value {
-            VerifyValues::Dcf {
-                last_layer,
-                consistency,
-            } => {
-                output.push(*last_layer);
-                output.extend(consistency.iter().copied());
-            }
-            VerifyValues::Linf {
-                ldcf,
-                rdcf,
-                consistency,
-            } => {
-                self.flatten_single_verify_value(ldcf, output);
-                self.flatten_single_verify_value(rdcf, output);
-                output.push(*consistency);
-            }
-            VerifyValues::DcfPayload {
-                last_layer_consistency,
-                consistency,
-                ..
-            } => {
-                output.extend(last_layer_consistency.iter().copied());
-                for level in consistency.iter() {
-                    for z in level.iter() {
-                        output.push(*z);
-                    }
-                }
-            }
-            VerifyValues::Lp {
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                reference_dpf,
-                ..
-            } => {
-                self.flatten_single_verify_value(ldcf0, output);
-                self.flatten_single_verify_value(ldcf1, output);
-                self.flatten_single_verify_value(rdcf0, output);
-                self.flatten_single_verify_value(rdcf1, output);
-                output.push(*reference_dpf);
-            }
-        }
-    }
-
-    fn verify_client_sketches(
+    pub fn verify_client_shared_ranges(
         &self,
         client_shares: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchData>]>,
+        sketch_data: &[Vec<SketchData>],
+        prg: &mut PRG,
         other_server_channels: &mut [CommTrackingChannel],
-    ) -> Result<Vec<bool>, String> {
-        if self.share_method() != ShareMethod::FSS || !self.enable_sketch() {
-            return Ok(vec![false; client_shares.len()]);
-        }
-        if client_shares.is_empty() {
-            return Ok(Vec::new());
-        }
-        if other_server_channels.is_empty() {
-            return Err("No server channels available for sketch verification".to_string());
-        }
-        let sketches = client_sketches
-            .ok_or_else(|| "Sketch data missing from client".to_string())?;
-        if sketches.len() != client_shares.len() {
-            return Err(format!(
-                "Sketch data length mismatch: shares {} sketches {}",
-                client_shares.len(),
-                sketches.len()
-            ));
-        }
+    ) -> Result<Vec<bool>> {
+        ensure!(self.enable_sketch, "Sketch verification called but sketching is disabled");
+        ensure!(client_shares.len() == sketch_data.len(), 
+            "Mismatch in client shares and sketch data length, client_shares.len() = {}, sketch_data.len() = {}", 
+            client_shares.len(), 
+            sketch_data.len()
+        );
+        ensure!(other_server_channels.len() > 0, "No other server channels provided for sketch verification");
 
         let num_threads = other_server_channels.len().max(1);
         let chunk_size = (client_shares.len() + num_threads - 1) / num_threads.max(1);
         let mut malicious_flags = vec![false; client_shares.len()];
+        let mut sketch_seeds = vec![[0u8; 16]; client_shares.len()];
+        prg.random_16byte_block(&mut sketch_seeds);
         malicious_flags
             .par_chunks_mut(chunk_size)
             .zip(client_shares.par_chunks(chunk_size))
-            .zip(sketches.par_chunks(chunk_size))
+            .zip(sketch_data.par_chunks(chunk_size))
+            .zip(sketch_seeds.par_chunks(chunk_size))
             .zip(other_server_channels.par_iter_mut())
-            .try_for_each(|(((flag_chunk, range_chunk), sketch_chunk), channel)| {
+            .try_for_each(|((((malicious_flags_chunk, range_chunk), sketch_data_chunk), sketch_seeds_chunk), other_server_channel)| -> Result<()> {
                 let sketch_helper = self.sketch_phase
                     .get_sketch_helper()
-                    .map_err(|e| format!("Failed to build sketch helper: {}", e))?;
+                    .map_err(|e| anyhow!("Failed to build sketch helper: {}", e))?;
 
-                for ((flag, shared_range), sketches_one) in
-                    flag_chunk.iter_mut().zip(range_chunk.iter()).zip(sketch_chunk.iter())
-                {
-                    let role = Self::extract_role(shared_range);
-                    let expected_len = match shared_range {
-                        SharedRange::IntervalFSS { keys, .. } => keys.len(),
-                        SharedRange::DistanceFSS { keys, .. } => keys.len(),
-                        _ => 0,
-                    };
-                    if sketches_one.len() != expected_len {
-                        return Err(format!(
-                            "Sketch data dimension mismatch: expected {} got {}",
-                            expected_len,
-                            sketches_one.len()
-                        ));
-                    }
+                let sketch_values = range_chunk.iter()
+                    .zip(sketch_seeds_chunk.iter())
+                    .map(|(shared_range, seed)| {
+                        let mut prg_sketch = PRG::new(Some(&seed), 0);
+                        self.sketch_phase
+                            .sketch(shared_range, &sketch_helper, &mut prg_sketch)
+                            .map_err(|e| anyhow!("Sketch failed: {}", e))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                    let seed = Self::extract_sketch_seed(shared_range);
-                    let mut prg_sketch = PRG::new(Some(&seed), 0);
-                    let sketch_values = self.sketch_phase
-                        .sketch(shared_range, &sketch_helper, &mut prg_sketch)
-                        .map_err(|e| format!("Sketch failed: {}", e))?;
+                let sketch_values_flatten: Vec<SketchValues> = sketch_values.iter()
+                    .flat_map(|v| v.iter().cloned())
+                    .collect();
 
-                    let sketch_data_vec: Vec<_> = sketches_one
-                        .iter()
-                        .map(|owned| self.sketch_phase.sketch_data_from_owned(owned))
-                        .collect();
+                let sketch_data_flatten: Vec<SketchData> = sketch_data_chunk.iter()
+                    .flat_map(|v| v.iter().cloned())
+                    .collect();
 
-                    let verify_shares = self.sketch_phase
-                        .batch_verify(&sketch_values, &sketch_data_vec, channel, role)
-                        .map_err(|e| format!("Sketch verify failed: {}", e))?;
-                    let flattened = self.flatten_verify_values(&verify_shares);
-                    let opened =
-                        self.open_modp_shares(&flattened, channel, self.role)?;
-                    if opened.iter().any(|v| *v != 0) {
-                        *flag = true;
+                let verify_values = self.sketch_phase
+                    .batch_verify(&sketch_values_flatten, &sketch_data_flatten, other_server_channel, self.role())
+                    .map_err(|e| anyhow!("Batch verify failed: {}", e))?;
+
+                let verify_values_flattened: Vec<Modp> = verify_values.iter()
+                    .flat_map(|v| 
+                       flatten_verify_values(v)
+                    ).collect();
+
+                let other_verify_values_flattened = if self.role() {
+                    self.send_modp_vec(&verify_values_flattened, other_server_channel)
+                        .map_err(|e| anyhow!("Failed to send verify values to other server: {}", e))?;
+                    self.recv_modp_vec(other_server_channel)
+                        .map_err(|e| anyhow!("Failed to receive verify values from other server: {}", e))?
+                } else {
+                    let other_values = self.recv_modp_vec(other_server_channel)
+                        .map_err(|e| anyhow!("Failed to receive verify values from other server: {}", e))?;
+                    self.send_modp_vec(&verify_values_flattened, other_server_channel)
+                        .map_err(|e| anyhow!("Failed to send verify values to other server: {}", e))?;
+                    other_values
+                };
+
+                ensure!(other_verify_values_flattened.len() == verify_values_flattened.len(),
+                    "Mismatch in verify values length between servers, local length = {}, remote length = {}",
+                    verify_values_flattened.len(),
+                    other_verify_values_flattened.len()
+                );
+
+                let one_flattened_length = verify_values_flattened.len() / verify_values.len();
+
+                for (i, malicious_flag) in malicious_flags_chunk.iter_mut().enumerate() {
+                    for j in 0..one_flattened_length {
+                        let local_value = &verify_values_flattened[i * one_flattened_length + j];
+                        let remote_value = &other_verify_values_flattened[i * one_flattened_length + j];
+                        if local_value.value() != remote_value.value() {
+                            *malicious_flag = true;
+                            break;
+                        }
                     }
                 }
-                Ok::<(), String>(())
-            })
-            .map_err(|e| format!("Parallel sketch verification failed: {}", e))?;
+
+                Ok(())
+            })?;
 
         Ok(malicious_flags)
     }
@@ -369,32 +244,12 @@ impl MosaicProtocol {
     pub fn run_server_known_dictionary_parallel(
         &self,
         client_shares: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchData>]>,
         query_points: &[Vec<u128>],
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
         threshold_dealer_channels: &mut [CommTrackingChannel],
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<bool>, String> {
-        let sketch_flags =
-            self.verify_client_sketches(client_shares, client_sketches, other_server_channels)?;
-        let malicious_indices: Vec<usize> = sketch_flags
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, bad)| if *bad { Some(idx) } else { None })
-            .collect();
-        if !malicious_indices.is_empty() {
-            println!(
-                "Detected potentially malicious shared ranges (sketch verification failed): {:?}",
-                malicious_indices
-            );
-        }
-        let client_shares: Vec<SharedRange> = client_shares
-            .iter()
-            .zip(sketch_flags.iter())
-            .filter_map(|(share, ok)| if !*ok { Some(share.clone()) } else { None })
-            .collect();
-
         // Convert query points from u128 to Vec<Vec<bool>>
         let query_point_sets: Vec<Vec<Vec<bool>>> = query_points
             .iter()
@@ -450,31 +305,11 @@ impl MosaicProtocol {
     pub fn run_server_unknown_dictionary_parallel(
         &self,
         client_shares_list: &[SharedRange],
-        client_sketches: Option<&[Vec<SketchData>]>,
         signal_dealer_channels: &mut [CommTrackingChannel],
         check_dealer_channels: &mut [CommTrackingChannel],
         threshold_dealer_channels: &mut [CommTrackingChannel],
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<Vec<u128>>, String> {
-        let sketch_flags =
-            self.verify_client_sketches(client_shares_list, client_sketches, other_server_channels)?;
-        let malicious_indices: Vec<usize> = sketch_flags
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, bad)| if *bad { Some(idx) } else { None })
-            .collect();
-        if !malicious_indices.is_empty() {
-            println!(
-                "Detected potentially malicious shared ranges (sketch verification failed): {:?}",
-                malicious_indices
-            );
-        }
-        let client_shares_list: Vec<SharedRange> = client_shares_list
-            .iter()
-            .zip(sketch_flags.iter())
-            .filter_map(|(share, ok)| if !*ok { Some(share.clone()) } else { None })
-            .collect();
-
         let max_bit_length = self.h1();
         let dimension = self.d();
         let eval_len = self.h2();
@@ -901,6 +736,41 @@ impl MosaicProtocol {
 }
 
 impl MosaicProtocol {
+    // Heavily assumes that both parties synchronize on the barrett context
+    fn send_modp_vec<'a>(
+        &'a self,
+        vals: &[Modp<'a>],
+        channel: &mut CommTrackingChannel,
+    ) -> Result<()> {
+        let length: usize = vals.len();
+        channel.write_bytes(&length.to_le_bytes())?;
+        for (idx, val) in vals.iter().enumerate() {
+            ensure!(val.context() == self.barrett_ctx(), "Barrett context mismatch at idx {}", idx);
+            channel.write_bytes(&val.value().to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    // Heavily assumes that both parties synchronize on the barrett context
+    fn recv_modp_vec<'a>(
+        &'a self,
+        channel: &mut CommTrackingChannel,
+    ) -> Result<Vec<Modp<'a>>> {
+        let mut length_bytes = vec![0u8; 8];
+        channel.read_bytes(&mut length_bytes)?;
+        let length = usize::from_le_bytes(length_bytes.try_into().unwrap());
+        let mut res: Vec<Modp> = Vec::with_capacity(length);
+        for _ in 0..length {
+            let mut val_bytes = vec![0u8; 16];
+            channel.read_bytes(&mut val_bytes)?;
+            let val = u128::from_le_bytes(val_bytes.try_into().unwrap());
+            res.push(Modp::new(self.barrett_ctx(), val));
+        }
+        Ok(res)
+    }
+}
+
+impl MosaicProtocol {
     pub fn h1(&self) -> usize {
         self.share_phase.h1()
     }
@@ -933,6 +803,10 @@ impl MosaicProtocol {
         self.num_clients
     }
 
+    pub fn role(&self) -> bool {
+        self.role
+    }
+
     pub fn match_threshold(&self) -> u128 {
         self.match_threshold
     }
@@ -959,6 +833,53 @@ impl MosaicProtocol {
 
     pub fn threshold_method(&self) -> ThresholdMethod {
         self.threshold_phase.method()
+    }
+}
+
+fn flatten_verify_values<'a>(
+    verify_values: &VerifyValues<'a>,
+) -> Vec<Modp<'a>> {
+    match verify_values {
+        VerifyValues::Dcf { last_layer, consistency } => {
+            let mut flattened = Vec::with_capacity(1 + consistency.len());
+            flattened.push(*last_layer);
+            flattened.extend(consistency.into_iter());
+            flattened
+        },
+        VerifyValues::DcfPayload { length, last_layer_consistency, consistency } => {
+            let mut flattened = Vec::with_capacity(*length);
+            flattened.extend(last_layer_consistency.into_iter());
+            for consistency_vec in consistency.into_iter() {
+                flattened.extend(consistency_vec.into_iter());
+            }
+            flattened
+        },
+        VerifyValues::Linf { ldcf, rdcf, consistency } => {
+            let ldcf_flat = flatten_verify_values(&**ldcf);
+            let rdcf_flat = flatten_verify_values(&**rdcf);
+            let mut flattened = Vec::with_capacity(ldcf_flat.len() + rdcf_flat.len() + 1);
+            flattened.extend(ldcf_flat);
+            flattened.extend(rdcf_flat);
+            flattened.push(*consistency);
+            flattened
+        },
+        VerifyValues::Lp { p, ldcf0, ldcf1, rdcf0, rdcf1, reference_dpf } => {
+            let ldcf0_flat = flatten_verify_values(&**ldcf0);
+            let ldcf1_flat = flatten_verify_values(&**ldcf1);
+            let rdcf0_flat = flatten_verify_values(&**rdcf0);
+            let rdcf1_flat = flatten_verify_values(&**rdcf1);
+            let mut flattened = Vec::with_capacity(
+                ldcf0_flat.len() + ldcf1_flat.len() +
+                rdcf0_flat.len() + rdcf1_flat.len() +
+                1
+            );
+            flattened.extend(ldcf0_flat);
+            flattened.extend(ldcf1_flat);
+            flattened.extend(rdcf0_flat);
+            flattened.extend(rdcf1_flat);
+            flattened.push(*reference_dpf);
+            flattened
+        }
     }
 }
 

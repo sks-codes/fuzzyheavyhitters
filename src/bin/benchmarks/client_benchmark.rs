@@ -17,10 +17,10 @@ fn main() {
         delta: 160,
     };
 
-    // let share_phase = SharePhase::new(share_config);
-    let client = Client::new(share_config);
-
     let num_clients = 1usize << 10;
+    let enable_sketch = false;
+    // let share_phase = SharePhase::new(share_config);
+    let client = Client::new(share_config, enable_sketch, num_clients);
     let modulus = 1u128 << 20;
     let random_points = (0..num_clients)
         .map(|_| {
@@ -32,10 +32,7 @@ fn main() {
         .collect::<Vec<Vec<u128>>>();
 
     let start = Instant::now();
-    let delta = 160u128;
-    let results = client
-        .generate_client_shares(&random_points, delta, false)
-        .unwrap();
+    let results = client.generate_client_shares(&random_points).unwrap();
     println!(
         "Time to generate shares for {} clients: {:?}",
         num_clients,

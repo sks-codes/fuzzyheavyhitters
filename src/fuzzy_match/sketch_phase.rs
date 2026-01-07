@@ -76,18 +76,6 @@ impl SketchPhase {
         }
     }
 
-    fn triple_to_owned(&self, triple: TripleModp) -> TripleOwned {
-        (triple.0.value(), triple.1.value(), triple.2.value())
-    }
-
-    fn triple_from_owned<'a>(&'a self, triple: &TripleOwned) -> TripleModp<'a> {
-        (
-            Modp::new(&self.barrett_ctx, triple.0),
-            Modp::new(&self.barrett_ctx, triple.1),
-            Modp::new(&self.barrett_ctx, triple.2),
-        )
-    }
-
     /// Verify the sketch using pre-shared Beaver triples over an MPC channel.
     /// Returns a collection of zero-tests (shares) that should all open to 0 when combined.
     pub fn batch_verify<'a>(

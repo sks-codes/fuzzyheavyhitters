@@ -1,7 +1,7 @@
 use crate::{
     data_structures::modp::{Modp, BarrettCtx},
     configs::cli_config::ProtocolParameters,
-    fuzzy_match::share_phase_types::{DictionaryType, DistanceMetric, ShareMethod},
+    fuzzy_match::share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
 };
 use anyhow::{anyhow, Result, ensure};
 use std::convert::TryInto;
@@ -56,7 +56,22 @@ impl From<ProtocolParameters> for SketchConfig {
     }
 }
 
-#[derive(Debug)]
+impl From<ShareConfig> for SketchConfig {
+    fn from(config: ShareConfig) -> Self {
+        SketchConfig {
+            h1: config.h1,
+            h2: config.h2,
+            q: config.sketch_modulus,
+            delta: config.delta,
+            d: config.d,
+            method: config.method,
+            metric: config.metric,
+            dictionary_type: config.dictionary_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum SketchValues<'a> {
     Dcf {
         last_layer_case0: (Modp<'a>, Modp<'a>),
@@ -84,6 +99,7 @@ pub enum SketchValues<'a> {
     },
 }
 
+#[derive(Debug, Clone)]
 pub enum SketchData<'a> {
     Dcf {
         /*

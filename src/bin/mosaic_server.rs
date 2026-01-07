@@ -3,6 +3,7 @@ use mosaic::{
     channel::{listen_to, setup_parallel_channels},
     configs::cli_config::CliConfig,
     fuzzy_match::protocol::MosaicProtocol,
+    randomness::prg::PRG,
 };
 use std::fs;
 
@@ -39,8 +40,8 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     };
 
     // Create protocol configuration
-    let protocol_parameters = cli_config.protocol;
-    let protocol = MosaicProtocol::new(
+    let protocol_parameters = cli_config.protocol.clone();
+    let mut protocol = MosaicProtocol::new(
         protocol_parameters.clone(), 
         is_server1,
         protocol_parameters.clone().enable_sketch,
@@ -59,7 +60,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         .expect("Failed to listen for client connection");
 
     println!("Server {}: Receiving shares from client...", server_id);
-    let (shares, sketches) = protocol
+    let mut shares = protocol
         .receive_client_shares(&mut client_channel)
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
     println!(
@@ -67,6 +68,19 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         server_id,
         shares.len()
     );
+    let mut sketch_data = None;
+    if protocol_parameters.enable_sketch {
+        println!("Server {}: Receiving sketch data from client...", server_id);
+        let data = protocol
+            .receive_client_sketch_data(&mut client_channel)
+            .map_err(|e| format!("Failed to receive client sketch data: {}", e))?;
+        println!(
+            "Server {}: Received sketch data for {} shares",
+            server_id,
+            data.len()
+        );
+        sketch_data = Some(data);
+    }
 
     // Determine number of parallel channels (use same as num_threads or system parallelism)
     let num_dealer_channels = num_threads;
@@ -139,6 +153,47 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         );
         channels
     };
+    if protocol_parameters.enable_sketch {
+        let (malicious_flags, bad_count) = {
+            let sketch_data = sketch_data
+                .take()
+                .ok_or_else(|| "Sketch data missing while sketching is enabled".to_string())?;
+            let prg_seed = [0u8; 16];
+            let mut prg = PRG::new(Some(&prg_seed), 0);
+            let flags = protocol
+                .verify_client_shared_ranges(
+                    &shares,
+                    &sketch_data,
+                    &mut prg,
+                    &mut other_server_channels,
+                )
+                .map_err(|e| format!("Failed to verify client shares: {}", e))?;
+            let bad_count = flags.iter().filter(|&&flag| flag).count();
+            (flags, bad_count)
+        };
+        let total = malicious_flags.len();
+        if bad_count > 0 {
+            println!(
+                "Server {}: Removing {} of {} shares flagged by sketch verification",
+                server_id, bad_count, total
+            );
+        }
+        shares = shares
+            .into_iter()
+            .zip(malicious_flags.iter())
+            .filter_map(|(share, flag)| if *flag { None } else { Some(share) })
+            .collect();
+        if bad_count > 0 {
+            protocol = MosaicProtocol::new(
+                protocol_parameters.clone(),
+                is_server1,
+                protocol_parameters.enable_sketch,
+                shares.len(),
+                protocol_parameters.match_threshold,
+            );
+        }
+    }
+
     let start_time = std::time::Instant::now();
 
     let protocol_time = if is_known_dictionary {
@@ -159,7 +214,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
 
         let results = protocol.run_server_known_dictionary_parallel(
             &shares,
-            sketches.as_deref(),
             &query_points,
             &mut signal_dealer_channels,
             &mut check_dealer_channels,
@@ -179,7 +233,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         // Run the protocol for unknown dictionary
         let heavy_hitters = protocol.run_server_unknown_dictionary_parallel(
             &shares,
-            sketches.as_deref(),
             &mut signal_dealer_channels,
             &mut check_dealer_channels,
             &mut threshold_dealer_channels,

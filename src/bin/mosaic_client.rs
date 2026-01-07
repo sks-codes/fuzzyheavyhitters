@@ -26,12 +26,12 @@ fn run_client(config_path: &str) -> Result<(), String> {
     // Generate client shares
     let share_start = std::time::Instant::now();
     let share_config = cli_config.to_share_config()?; // Client uses share config
-    let client = Client::new(share_config);
-    let (shares_server0, shares_server1, sketches0, sketches1) = client.generate_client_shares(
-        &client_points,
-        cli_config.protocol.delta,
-        cli_config.protocol.enable_sketch,
-    )?;
+    let enable_sketch = cli_config.protocol.enable_sketch;
+    let num_clients = cli_config.protocol.num_clients;
+    let client = Client::new(share_config, enable_sketch, num_clients);
+    let (shares_server0, shares_server1, sketches0, sketches1) = client
+        .generate_client_shares(&client_points)
+        .map_err(|e| e.to_string())?;
     let share_time = share_start.elapsed();
 
     println!("Connecting to servers...");
@@ -49,14 +49,21 @@ fn run_client(config_path: &str) -> Result<(), String> {
     // Send shares to both servers
     println!("Sending shares to servers...");
     let send_start = std::time::Instant::now();
-    client.send_client_shares(
-        shares_server0,
-        shares_server1,
-        sketches0,
-        sketches1,
-        &mut channel_server0,
-        &mut channel_server1,
-    )?;
+    client
+        .send_client_shares(
+            shares_server0,
+            shares_server1,
+            &mut channel_server0,
+            &mut channel_server1,
+        )
+        .map_err(|e| e.to_string())?;
+    if enable_sketch {
+        let sketches0 = sketches0.ok_or_else(|| "Missing sketch data for server 0".to_string())?;
+        let sketches1 = sketches1.ok_or_else(|| "Missing sketch data for server 1".to_string())?;
+        client
+            .send_sketch_data(sketches0, sketches1, &mut channel_server0, &mut channel_server1)
+            .map_err(|e| e.to_string())?;
+    }
     let send_time = send_start.elapsed();
 
     let total_time = start_time.elapsed();
