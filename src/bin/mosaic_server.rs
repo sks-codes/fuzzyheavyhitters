@@ -153,12 +153,17 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         );
         channels
     };
+
+    println!("Server {}: Verifying client shares using sketches...", server_id);
+
+    let start_sketch = std::time::Instant::now();
+
     if protocol_parameters.enable_sketch {
         let (malicious_flags, bad_count) = {
             let sketch_data = sketch_data
                 .take()
                 .ok_or_else(|| "Sketch data missing while sketching is enabled".to_string())?;
-            let prg_seed = [0u8; 16];
+            let prg_seed = [0u8; 16]; // Change later, need to exchange seed between servers
             let mut prg = PRG::new(Some(&prg_seed), 0);
             let flags = protocol
                 .verify_client_shared_ranges(
@@ -193,6 +198,14 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             );
         }
     }
+
+    println!(
+        "Server {}: Sketch verification completed in {:.2?}",
+        server_id,
+        start_sketch.elapsed()
+    );
+
+    println!("Server {}: Running protocol...", server_id);
 
     let start_time = std::time::Instant::now();
 

@@ -29,7 +29,7 @@ fn run_client(config_path: &str) -> Result<(), String> {
     let enable_sketch = cli_config.protocol.enable_sketch;
     let num_clients = cli_config.protocol.num_clients;
     let client = Client::new(share_config, enable_sketch, num_clients);
-    let (shares_server0, shares_server1, sketches0, sketches1) = client
+    let (shares_server0, shares_server1) = client
         .generate_client_shares(&client_points)
         .map_err(|e| e.to_string())?;
     let share_time = share_start.elapsed();
@@ -57,14 +57,24 @@ fn run_client(config_path: &str) -> Result<(), String> {
             &mut channel_server1,
         )
         .map_err(|e| e.to_string())?;
+    let send_time = send_start.elapsed();
+
+    println!("Client sending PC-FSS keys took {:.2?}", send_time);
+
+    let sketch_start = std::time::Instant::now();
     if enable_sketch {
-        let sketches0 = sketches0.ok_or_else(|| "Missing sketch data for server 0".to_string())?;
-        let sketches1 = sketches1.ok_or_else(|| "Missing sketch data for server 1".to_string())?;
+        let (sketches0, sketches1) = client
+            .generate_client_sketch_data()
+            .map_err(|e| e.to_string())?;
+
+        println!("Client generating sketch data took {:.2?}", sketch_start.elapsed());
+
         client
             .send_sketch_data(sketches0, sketches1, &mut channel_server0, &mut channel_server1)
             .map_err(|e| e.to_string())?;
+
+        println!("Client sending sketch data took {:.2?}", sketch_start.elapsed());
     }
-    let send_time = send_start.elapsed();
 
     let total_time = start_time.elapsed();
 

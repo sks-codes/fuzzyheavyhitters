@@ -171,36 +171,53 @@ impl MosaicProtocol {
             .zip(sketch_seeds.par_chunks(chunk_size))
             .zip(other_server_channels.par_iter_mut())
             .try_for_each(|((((malicious_flags_chunk, range_chunk), sketch_data_chunk), sketch_seeds_chunk), other_server_channel)| -> Result<()> {
+                let start = std::time::Instant::now();
+
                 let sketch_helper = self.sketch_phase
                     .get_sketch_helper()
                     .map_err(|e| anyhow!("Failed to build sketch helper: {}", e))?;
 
+                println!("Sketch helper built in {:?}", start.elapsed());
+
                 let sketch_values = range_chunk.iter()
                     .zip(sketch_seeds_chunk.iter())
                     .map(|(shared_range, seed)| {
-                        let mut prg_sketch = PRG::new(Some(&seed), 0);
-                        self.sketch_phase
+                        let mut prg_sketch = PRG::new(Some(&seed), 0); 
+                        // let start = std::time::Instant::now();
+                        let sketch = self.sketch_phase
                             .sketch(shared_range, &sketch_helper, &mut prg_sketch)
-                            .map_err(|e| anyhow!("Sketch failed: {}", e))
+                            .map_err(|e| anyhow!("Sketch failed: {}", e));
+                        // println!("Sketch for one client done in {:?}", start.elapsed());
+                        sketch
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                
+                println!("Sketches generated in {:?}", start.elapsed());
 
                 let sketch_values_flatten: Vec<SketchValues> = sketch_values.iter()
                     .flat_map(|v| v.iter().cloned())
                     .collect();
 
+                println!("Sketch values flattened in {:?}", start.elapsed());
+
                 let sketch_data_flatten: Vec<SketchData> = sketch_data_chunk.iter()
                     .flat_map(|v| v.iter().cloned())
                     .collect();
+
+                println!("Sketch data flattened in {:?}", start.elapsed());
 
                 let verify_values = self.sketch_phase
                     .batch_verify(&sketch_values_flatten, &sketch_data_flatten, other_server_channel, self.role())
                     .map_err(|e| anyhow!("Batch verify failed: {}", e))?;
 
+                println!("Verify values obtained in {:?}", start.elapsed());
+
                 let verify_values_flattened: Vec<Modp> = verify_values.iter()
                     .flat_map(|v| 
                        flatten_verify_values(v)
                     ).collect();
+
+                println!("Verify values flattened in {:?}", start.elapsed());
 
                 let other_verify_values_flattened = if self.role() {
                     self.send_modp_vec(&verify_values_flattened, other_server_channel)
@@ -214,6 +231,8 @@ impl MosaicProtocol {
                         .map_err(|e| anyhow!("Failed to send verify values to other server: {}", e))?;
                     other_values
                 };
+
+                println!("Other server verify values received in {:?}", start.elapsed());
 
                 ensure!(other_verify_values_flattened.len() == verify_values_flattened.len(),
                     "Mismatch in verify values length between servers, local length = {}, remote length = {}",
@@ -748,6 +767,7 @@ impl MosaicProtocol {
             ensure!(val.context() == self.barrett_ctx(), "Barrett context mismatch at idx {}", idx);
             channel.write_bytes(&val.value().to_le_bytes())?;
         }
+        channel.flush()?;
         Ok(())
     }
 

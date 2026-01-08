@@ -53,8 +53,6 @@ impl Client {
         (
             Vec<SharedRange>,
             Vec<SharedRange>,
-            Option<Vec<Vec<SketchData>>>,
-            Option<Vec<Vec<SketchData>>>,
         )
     > {
         ensure!(
@@ -78,38 +76,9 @@ impl Client {
             shares_server1.push(share1.clone());
         }
 
-        // Generate sketch data 
-        let (sketch_data0, sketch_data1) = if self.enable_sketch {
-            let mut sketches_server0: Vec<Vec<SketchData>> = Vec::new();
-            let mut sketches_server1: Vec<Vec<SketchData>> = Vec::new();
-
-            if let Some(phase) = &self.sketch_phase {
-                let mut prg =
-                    PRG::new(Some(&rand::rng().random::<[u8; 16]>()), 0);
-                let mut sketch_vec0 = Vec::with_capacity(self.d());
-                let mut sketch_vec1 = Vec::with_capacity(self.d());
-                for _ in 0..self.d() {
-                    let (d0, d1) = phase
-                        .get_sketch_data(&mut prg)
-                        .map_err(|e| anyhow!("Failed to get sketch data: {}", e))?;
-                    sketch_vec0.push(d0);
-                    sketch_vec1.push(d1);
-                }
-                sketches_server0.push(sketch_vec0);
-                sketches_server1.push(sketch_vec1);
-                (Some(sketches_server0), Some(sketches_server1))
-            } else {
-                return Err(anyhow!("Sketch phase is not initialized while self.enable_sketch is true"));
-            }
-        } else {
-            (None, None)
-        };
-
         Ok((
             shares_server0, 
             shares_server1, 
-            sketch_data0, 
-            sketch_data1
         ))
     }
 
@@ -157,6 +126,40 @@ impl Client {
             .map_err(|e| anyhow!("Failed to flush to server 1: {}", e))?;
 
         Ok(())
+    }
+
+    pub fn generate_client_sketch_data<'a>(
+        &'a self,
+    ) -> Result<(Vec<Vec<SketchData<'a>>>, Vec<Vec<SketchData<'a>>>)> {
+        ensure!(
+            self.enable_sketch,
+            "Sketch generation is not enabled for this client",
+        );
+        if self.share_method() != ShareMethod::FSS {
+            return Err(anyhow!("Sketch generation is only supported with FSS share method"));
+        }
+
+        let mut sketches_server0: Vec<Vec<SketchData>> = Vec::with_capacity(self.num_clients);
+        let mut sketches_server1: Vec<Vec<SketchData>> = Vec::with_capacity(self.num_clients);
+        if let Some(phase) = &self.sketch_phase {
+            for _ in 0..self.num_clients {
+                let mut prg =
+                    PRG::new(Some(&rand::rng().random::<[u8; 16]>()), 0);
+                let (mut sketches0, mut sketches1) = (Vec::new(), Vec::new());
+                for _ in 0..self.d() {
+                    let (d0, d1) = phase
+                        .get_sketch_data(&mut prg)
+                        .map_err(|e| anyhow!("Failed to get sketch data: {}", e))?;
+                    sketches0.push(d0);
+                    sketches1.push(d1);
+                }
+                sketches_server0.push(sketches0);
+                sketches_server1.push(sketches1);
+            }
+            Ok((sketches_server0, sketches_server1))
+        } else {
+            Err(anyhow!("Sketch phase is not initialized while self.enable_sketch is true"))
+        }
     }
 
     pub fn send_sketch_data(
