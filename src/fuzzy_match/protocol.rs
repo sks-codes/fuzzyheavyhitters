@@ -164,6 +164,7 @@ impl MosaicProtocol {
         let mut malicious_flags = vec![false; client_shares.len()];
         let mut sketch_seeds = vec![[0u8; 16]; client_shares.len()];
         prg.random_16byte_block(&mut sketch_seeds);
+
         malicious_flags
             .par_chunks_mut(chunk_size)
             .zip(client_shares.par_chunks(chunk_size))
@@ -193,18 +194,22 @@ impl MosaicProtocol {
                     .collect::<Result<Vec<_>, _>>()?;
                 
                 println!("Sketches generated in {:?}", start.elapsed());
+                println!("Number of sketches: {}", sketch_values.len());
+                println!("Length of one sketch: {}", sketch_values[0].len());
 
                 let sketch_values_flatten: Vec<SketchValues> = sketch_values.iter()
                     .flat_map(|v| v.iter().cloned())
                     .collect();
 
                 println!("Sketch values flattened in {:?}", start.elapsed());
+                println!("Number of sketch values: {}", sketch_values_flatten.len());
 
                 let sketch_data_flatten: Vec<SketchData> = sketch_data_chunk.iter()
                     .flat_map(|v| v.iter().cloned())
                     .collect();
 
                 println!("Sketch data flattened in {:?}", start.elapsed());
+                println!("Number of sketch data entries: {}", sketch_data_flatten.len());
 
                 let verify_values = self.sketch_phase
                     .batch_verify(&sketch_values_flatten, &sketch_data_flatten, other_server_channel, self.role())
@@ -218,6 +223,7 @@ impl MosaicProtocol {
                     ).collect();
 
                 println!("Verify values flattened in {:?}", start.elapsed());
+                println!("Number of verify values: {}", verify_values_flattened.len());
 
                 let other_verify_values_flattened = if self.role() {
                     self.send_modp_vec(&verify_values_flattened, other_server_channel)
@@ -246,7 +252,8 @@ impl MosaicProtocol {
                     for j in 0..one_flattened_length {
                         let local_value = &verify_values_flattened[i * one_flattened_length + j];
                         let remote_value = &other_verify_values_flattened[i * one_flattened_length + j];
-                        if local_value.value() != remote_value.value() {
+                        let total_value = *local_value - *remote_value;
+                        if total_value.value() != 0 {
                             *malicious_flag = true;
                             break;
                         }

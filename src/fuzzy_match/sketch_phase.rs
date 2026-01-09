@@ -85,6 +85,7 @@ impl SketchPhase {
         channel: &mut CommTrackingChannel,
         role: bool,
     ) -> Result<Vec<VerifyValues<'a>>> {
+        println!("Starting batch_verify for party {}", role);
         match (&self.config.method, &self.config.metric) {
             (ShareMethod::FSS, DistanceMetric::LInfinity) => {
                 self.batch_verify_linf(sketch_values, sketch_data, channel, role)
@@ -93,86 +94,6 @@ impl SketchPhase {
                 self.batch_verify_lp(sketch_values, sketch_data, channel, role)
             }
             _ => Err(anyhow!("Sketch verification not supported for this configuration")),
-        }
-    }
-
-    pub fn verify<'a>(
-        &'a self,
-        sketch_value: &SketchValues<'a>,
-        sketch_data: &SketchData<'a>,
-        channel: &mut CommTrackingChannel,
-        role: bool,
-    ) -> Result<Vec<Modp<'a>>> {
-        let verify_values = self.batch_verify(
-            std::slice::from_ref(sketch_value),
-            std::slice::from_ref(sketch_data),
-            channel,
-            role,
-        )?;
-
-        let mut flattened = Vec::new();
-        for value in verify_values.iter() {
-            self.flatten_verify_values(value, &mut flattened);
-        }
-        Ok(flattened)
-    }
-
-    fn flatten_verify_values<'a>(
-        &'a self,
-        verify_value: &VerifyValues<'a>,
-        output: &mut Vec<Modp<'a>>,
-    ) {
-        match verify_value {
-            VerifyValues::Dcf {
-                last_layer,
-                consistency,
-            } => {
-                output.push(*last_layer);
-                output.extend(consistency.iter().copied());
-            }
-            VerifyValues::Linf {
-                ldcf,
-                rdcf,
-                consistency,
-            } => {
-                self.flatten_verify_values(ldcf, output);
-                self.flatten_verify_values(rdcf, output);
-                output.push(*consistency);
-            }
-            VerifyValues::DcfPayload {
-                last_layer_consistency,
-                consistency,
-                ..
-            } => {
-                output.extend(last_layer_consistency.iter().copied());
-                for level in consistency.iter() {
-                    for z in level.iter() {
-                        output.push(*z);
-                    }
-                }
-            }
-            VerifyValues::Lp {
-                ldcf0,
-                ldcf1,
-                rdcf0,
-                rdcf1,
-                reference_dpf,
-                ..
-            } => {
-                self.flatten_verify_values(ldcf0, output);
-                self.flatten_verify_values(ldcf1, output);
-                self.flatten_verify_values(rdcf0, output);
-                self.flatten_verify_values(rdcf1, output);
-                output.push(*reference_dpf);
-            }
-        }
-    }
-
-    fn adjust_for_role<'a>(&'a self, value: Modp<'a>, role: bool) -> Modp<'a> {
-        if role {
-            value
-        } else {
-            Modp::zero(&self.barrett_ctx) - value
         }
     }
 }
@@ -718,31 +639,31 @@ impl SketchPhase {
                 } => {
                     match &**ldcf {
                         SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
-                            zs_ast.push(self.adjust_for_role(last_layer_case0.0, role));
-                            zs2_ast.push(self.adjust_for_role(last_layer_case0.1, role));
-                            zs_bullet.push(self.adjust_for_role(last_layer_case1.0, role));
-                            zs2_bullet.push(self.adjust_for_role(last_layer_case1.1, role));
+                            zs_ast.push(last_layer_case0.0);
+                            zs2_ast.push(last_layer_case0.1);
+                            zs_bullet.push(last_layer_case1.0);
+                            zs2_bullet.push(last_layer_case1.1);
                             for consistency_check in consistency {
-                                consistency0.push(self.adjust_for_role(consistency_check.0, role));
-                                consistency1.push(self.adjust_for_role(consistency_check.1, role));
+                                consistency0.push(consistency_check.0);
+                                consistency1.push(consistency_check.1);
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member ldcf of SketchValues::Linf, needed SketchValues::Dcf.")),
                     };
                     match &**rdcf {
                         SketchValues::Dcf { last_layer_case0, last_layer_case1, consistency } => {
-                            zs_ast.push(self.adjust_for_role(last_layer_case0.0, role));
-                            zs2_ast.push(self.adjust_for_role(last_layer_case0.1, role));
-                            zs_bullet.push(self.adjust_for_role(last_layer_case1.0, role));
-                            zs2_bullet.push(self.adjust_for_role(last_layer_case1.1, role));
+                            zs_ast.push(last_layer_case0.0);
+                            zs2_ast.push(last_layer_case0.1);
+                            zs_bullet.push(last_layer_case1.0);
+                            zs2_bullet.push(last_layer_case1.1);
                             for consistency_check in consistency {
-                                consistency0.push(self.adjust_for_role(consistency_check.0, role));
-                                consistency1.push(self.adjust_for_role(consistency_check.1, role));
+                                consistency0.push(consistency_check.0);
+                                consistency1.push(consistency_check.1);
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for member rdcf of SketchValues::Linf, needed SketchValues::Dcf.")),
                     };
-                    shift_consistency.push(self.adjust_for_role(*consistency, role));
+                    shift_consistency.push(*consistency);
 
                 },
                 _ => return Err(anyhow!("Type mismatch for verify linf. Need SketchValues::Linf")),
@@ -855,12 +776,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for ldcf0, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
+                                last_layer_verify.push(*last_layer);
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(self.adjust_for_role(*cons0, role));
-                                    consistency1.push(self.adjust_for_role(*cons1, role));
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
                                 }
                             }
                         },
@@ -870,12 +791,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for ldcf1, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
+                                last_layer_verify.push(*last_layer);
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(self.adjust_for_role(*cons0, role));
-                                    consistency1.push(self.adjust_for_role(*cons1, role));
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
                                 }
                             }
                         },
@@ -885,12 +806,12 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for rdcf0, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
+                                last_layer_verify.push(*last_layer);
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(self.adjust_for_role(*cons0, role));
-                                    consistency1.push(self.adjust_for_role(*cons1, role));
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
                                 }
                             }
                         },
@@ -900,21 +821,21 @@ impl SketchPhase {
                         SketchValues::DcfPayload { length, last_layer_consistency, consistency } => {
                             ensure!(*length == *p+1, "Length mismatch for rdcf1, expect p+1 = {}, have length = {}", *p+1, length);
                             for last_layer in last_layer_consistency.iter() {
-                                last_layer_verify.push(self.adjust_for_role(*last_layer, role));
+                                last_layer_verify.push(*last_layer);
                             }
                             for consistency_vec in consistency.iter() {
                                 for (cons0, cons1) in consistency_vec.iter() {
-                                    consistency0.push(self.adjust_for_role(*cons0, role));
-                                    consistency1.push(self.adjust_for_role(*cons1, role));
+                                    consistency0.push(*cons0);
+                                    consistency1.push(*cons1);
                                 }
                             }
                         },
                         _ => return Err(anyhow!("Type mismatch for rdcf1, expect SketchValues::DcfPayload.")),
                     };
-                    zs_ast.push(self.adjust_for_role(reference_dpf_case0.0, role));
-                    zs2_ast.push(self.adjust_for_role(reference_dpf_case0.1, role));
-                    zs_bullet.push(self.adjust_for_role(reference_dpf_case1.0, role));
-                    zs2_bullet.push(self.adjust_for_role(reference_dpf_case1.1, role));
+                    zs_ast.push(reference_dpf_case0.0);
+                    zs2_ast.push(reference_dpf_case0.1);
+                    zs_bullet.push(reference_dpf_case1.0);
+                    zs2_bullet.push(reference_dpf_case1.1);
                 },
                 _ => return Err(anyhow!("SketchValues type mismatch for batch_verify_lp, expect SketchValues::Lp.")),
             }
@@ -1074,7 +995,7 @@ impl SketchPhase {
 
 // Beaver multiplication for the verify phase
 impl SketchPhase {
-    fn batch_multiply_with_beaver<'a>(
+    pub fn batch_multiply_with_beaver<'a>(
         &'a self,
         xs: &[Modp<'a>],
         ys: &[Modp<'a>],
@@ -1092,22 +1013,28 @@ impl SketchPhase {
         let e = element_wise_subtract_modp(ys, &b)
             .map_err(|err| anyhow!("Failed to obtain e = y - b: {}", err))?; // e = y - b
 
-        let (d_other, e_other) = if role {
-            // Send first, receive after
+        let (d_open, e_open) = if role {
+            // Send first this party's d and e first
             self.send_modp_vec(&d, channel)
                 .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
             self.send_modp_vec(&e, channel)
                 .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
             channel.flush()?;
+
+            let d_other = self.recv_modp_vec(channel)
+                .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?;
+            let e_other = self.recv_modp_vec(channel)
+                .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?;
+
             (
-                self.recv_modp_vec(channel)
-                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
-                self.recv_modp_vec(channel)
-                    .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
+                element_wise_subtract_modp(&d_other, &d)
+                    .map_err(|err| anyhow!("Failed to obtain d_open = d_other - d for party {}: {}", role, err))?, // d_open = d_other - d
+                element_wise_subtract_modp(&e_other, &e)
+                    .map_err(|err| anyhow!("Failed to obtain e_open = e_other - e for party {}: {}", role, err))?, // e_open = e_other - e
             )
         } else {
             // Receive first, send after
-            let (d_recv, e_recv) = (
+            let (d_other, e_other) = (
                 self.recv_modp_vec(channel)
                     .map_err(|err| anyhow!("Failed to receive d from other party: {}", err))?,
                 self.recv_modp_vec(channel)
@@ -1118,13 +1045,13 @@ impl SketchPhase {
             self.send_modp_vec(&e, channel)
                 .map_err(|err| anyhow!("Failed to send d to other party: {}", err))?;
             channel.flush()?;
-            (d_recv, e_recv)
+            (
+                element_wise_subtract_modp(&d, &d_other)
+                    .map_err(|err| anyhow!("Failed to obtain d_open = d - d_other for party {}: {}", role, err))?, // d_open = d - d_other
+                element_wise_subtract_modp(&e, &e_other)
+                    .map_err(|err| anyhow!("Failed to obtain e_open = e - e_other for party {}: {}", role, err))?, // e_open = e - e_other
+            )
         };
-
-        let d_open = element_wise_sum_modp(&d, &d_other)
-            .map_err(|err| anyhow!("Failed to obtain d_open = d + d_other: {}", err))?; // d_open = d + d_other
-        let e_open = element_wise_sum_modp(&e, &e_other)
-            .map_err(|err| anyhow!("Failed to obtain e_open = e + e_other: {}", err))?; // e_open = e + e_other
 
         let d_open_times_b = element_wise_product_modp(&d_open, &b)
             .map_err(|err| anyhow!("Failed to obtain d_open * b: {}", err))?; // Compute d * b = (x - a) * b = xb - ab
@@ -1137,7 +1064,7 @@ impl SketchPhase {
             .map_err(|err| anyhow!("Failed to obtain d_open * b + e_open * a: {}", err))?; // Compute d * b + e * a = xb + ya - 2ab
         prod_shares = element_wise_sum_modp(&prod_shares, &c)
             .map_err(|err| anyhow!("Failed to obtain c + d * b + e * a: {}", err))?; // Compute c + d * b + e * a = ab + xb + ya - 2ab = xb + ya - ab
-        if role {
+        if !role {
             let d_open_times_e_open = element_wise_product_modp(&d_open, &e_open)
                 .map_err(|err| anyhow!("Failed to obtain d * e for final step: {}", err))?; // Obtain d * e = (x - a) * (y - b) = xy - ay - bx + ab
             prod_shares = element_wise_sum_modp(&prod_shares, &d_open_times_e_open)
@@ -1656,17 +1583,17 @@ fn sample_modp_triples<'a>(
         .map_err(|e| anyhow!("Error sampling vector b0 for triple: {}", e))?;
     let b1 = sample_modp_vec(num_triples, barrett_ctx, prg)
         .map_err(|e| anyhow!("Error sampling vector b1 for triple: {}", e))?;
-    let a = element_wise_sum_modp(&a0, &a1)
-        .map_err(|e| anyhow!("Error getting vector a from a0 + a1: {}", e))?;
-    let b = element_wise_sum_modp(&b0, &b1)
-        .map_err(|e| anyhow!("Error getting vector b from b0 + b1: {}", e))?;
+    let a = element_wise_subtract_modp(&a0, &a1)
+        .map_err(|e| anyhow!("Error getting vector a from a0 - a1: {}", e))?;
+    let b = element_wise_subtract_modp(&b0, &b1)
+        .map_err(|e| anyhow!("Error getting vector b from b0 - b1: {}", e))?;
     // Get c = a * b, then sample c0, then get c1 from c - c0
     let c = element_wise_product_modp(&a, &b)
         .map_err(|e| anyhow!("Error getting c from a * b: {}", e))?;
     let c0 = sample_modp_vec(num_triples, barrett_ctx, prg)
         .map_err(|e| anyhow!("Error sampling vector c0 for triple: {}", e))?;
-    let c1 = element_wise_subtract_modp(&c, &c0)
-        .map_err(|e| anyhow!("Error getting c1 from c - c0: {}", e))?;
+    let c1 = element_wise_subtract_modp(&c0, &c)
+        .map_err(|e| anyhow!("Error getting c1 from c0 - c: {}", e))?;
 
     Ok((
         a0.iter().zip(b0.iter()).zip(c0.iter()).map(|((a, b), c)| (*a, *b, *c)).collect(),

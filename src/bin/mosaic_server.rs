@@ -82,42 +82,6 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         sketch_data = Some(data);
     }
 
-    // Determine number of parallel channels (use same as num_threads or system parallelism)
-    let num_dealer_channels = num_threads;
-
-    // Set up multiple dealer channels
-    println!(
-        "Server {}: Setting up {} dealer channels...",
-        server_id, num_dealer_channels
-    );
-    let dealer_to_server_port = if is_server1 {
-        cli_config.network.dealer_to_server1_port
-    } else {
-        cli_config.network.dealer_to_server0_port
-    };
-
-    let mut signal_dealer_channels = setup_parallel_channels(
-        false,
-        num_dealer_channels,
-        &server_addr,
-        dealer_to_server_port,
-    )?;
-    let mut check_dealer_channels = setup_parallel_channels(
-        false, // is_connector (server listens for dealer connections)
-        num_dealer_channels,
-        &server_addr, // listen on all interfaces
-        dealer_to_server_port + num_dealer_channels as u16,
-    )?;
-    let mut threshold_dealer_channels = setup_parallel_channels(
-        false, // is_connector (server listens for dealer connections)
-        num_dealer_channels,
-        &server_addr, // listen on all interfaces
-        dealer_to_server_port + 2 * num_dealer_channels as u16, // Next set of ports for threshold
-    )?;
-
-    println!("Server {}: Successfully established {} check dealer channels and {} threshold dealer channels",
-             server_id, check_dealer_channels.len(), threshold_dealer_channels.len());
-
     // Set up parallel server-to-server communication channels
     let server0_addr = &cli_config.network.server0_addr;
     let server0_to_server1_port = cli_config.network.server0_to_server1_port;
@@ -204,6 +168,42 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         server_id,
         start_sketch.elapsed()
     );
+
+    // Determine number of parallel channels (use same as num_threads or system parallelism)
+    let num_dealer_channels = num_threads;
+
+    // Set up multiple dealer channels
+    println!(
+        "Server {}: Setting up {} dealer channels...",
+        server_id, num_dealer_channels
+    );
+    let dealer_to_server_port = if is_server1 {
+        cli_config.network.dealer_to_server1_port
+    } else {
+        cli_config.network.dealer_to_server0_port
+    };
+
+    let mut signal_dealer_channels = setup_parallel_channels(
+        false,
+        num_dealer_channels,
+        &server_addr,
+        dealer_to_server_port,
+    )?;
+    let mut check_dealer_channels = setup_parallel_channels(
+        false, // is_connector (server listens for dealer connections)
+        num_dealer_channels,
+        &server_addr, // listen on all interfaces
+        dealer_to_server_port + num_dealer_channels as u16,
+    )?;
+    let mut threshold_dealer_channels = setup_parallel_channels(
+        false, // is_connector (server listens for dealer connections)
+        num_dealer_channels,
+        &server_addr, // listen on all interfaces
+        dealer_to_server_port + 2 * num_dealer_channels as u16, // Next set of ports for threshold
+    )?;
+
+    println!("Server {}: Successfully established {} check dealer channels and {} threshold dealer channels",
+             server_id, check_dealer_channels.len(), threshold_dealer_channels.len());
 
     println!("Server {}: Running protocol...", server_id);
 

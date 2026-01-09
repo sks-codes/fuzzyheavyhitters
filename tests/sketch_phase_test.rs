@@ -1,12 +1,12 @@
 use mosaic::{
     channel::CommTrackingChannel,
-    data_structures::modp::Modp,
+    data_structures::modp::{BarrettCtx, Modp},
     fuzzy_match::{
         share_phase::SharePhase,
         share_phase_types::{DictionaryType, DistanceMetric, ShareConfig, ShareMethod},
         shared_range::SharedRange,
         sketch_phase::SketchPhase,
-        sketch_phase_types::{SketchConfig, SketchValues, SketchData, TripleModp},
+        sketch_phase_types::{SketchConfig, SketchValues, VerifyValues},
     },
     randomness::prg::PRG,
 };
@@ -19,7 +19,7 @@ use std::{
 
 const H1: usize = 5;
 const H2: usize = 10;
-const X: u128 = 10;
+const X: [u128; 2] = [15, 25];
 const DELTA: u128 = 2;
 
 fn sketch_phase_config(method: ShareMethod, metric: DistanceMetric, dictionary_type: DictionaryType) -> Result<SketchConfig> {
@@ -31,7 +31,7 @@ fn sketch_phase_config(method: ShareMethod, metric: DistanceMetric, dictionary_t
         h2: H2,
         q: 892270022585185806328177,
         delta: DELTA,
-        d: 1,
+        d: 2,
     })
 }
 
@@ -43,7 +43,7 @@ fn share_phase_config(method: ShareMethod, metric: DistanceMetric, dictionary_ty
             dictionary_type,
             h1: H1,
             h2: H2,
-            d: 1,
+            d: 2,
             sketch_modulus: 1u128 << H2,
             delta: DELTA,
         }
@@ -72,82 +72,66 @@ fn setup_channels_pair() -> Result<(CommTrackingChannel, CommTrackingChannel)> {
     Ok((server_channel, client_channel))
 }
 
-fn zero_modp_from<'a>(sketch_value: &SketchValues<'a>) -> Modp<'a> {
-    match sketch_value {
-        SketchValues::Dcf { last_layer_case0, .. } => last_layer_case0.0 - last_layer_case0.0,
-        SketchValues::Linf { ldcf, .. } => zero_modp_from(ldcf),
-        SketchValues::DcfPayload {
-            last_layer_consistency,
-            ..
-        } => {
-            let first = last_layer_consistency
-                .first()
-                .expect("last_layer_consistency should not be empty");
-            *first - *first
-        }
-        SketchValues::Lp {
-            reference_dpf_case0, ..
-        } => reference_dpf_case0.0 - reference_dpf_case0.0,
-    }
+fn sample_modp<'a>(ctx: &'a BarrettCtx, prg: &mut PRG) -> Modp<'a> {
+    let mut buf = [0u128; 1];
+    prg.random_u128s(&mut buf);
+    Modp::new(ctx, buf[0])
 }
 
-fn zero_triple_from<'a>(sketch_value: &SketchValues<'a>) -> TripleModp<'a> {
-    let zero = zero_modp_from(sketch_value);
-    (zero, zero, zero)
-}
-
-#[allow(dead_code)]
-fn build_sketch_data_from<'a>(sketch_value: &SketchValues<'a>) -> SketchData<'a> {
-    match sketch_value {
-        SketchValues::Dcf {
-            consistency, ..
-        } => {
-            let zero_triple = zero_triple_from(sketch_value);
-            SketchData::Dcf {
-                z_ast: zero_triple,
-                z_bullet: zero_triple,
-                z: zero_triple,
-                consistency: vec![zero_triple; consistency.len()],
-            }
+fn flatten_verify_values<'a>(verify_values: &VerifyValues<'a>) -> Vec<Modp<'a>> {
+    match verify_values {
+        VerifyValues::Dcf { last_layer, consistency } => {
+            let mut flattened = Vec::with_capacity(1 + consistency.len());
+            flattened.push(*last_layer);
+            flattened.extend(consistency.into_iter());
+            flattened
         }
-        SketchValues::Linf { ldcf, rdcf, .. } => SketchData::Linf {
-            ldcf: Box::new(build_sketch_data_from(ldcf)),
-            rdcf: Box::new(build_sketch_data_from(rdcf)),
-        },
-        SketchValues::DcfPayload {
+        VerifyValues::DcfPayload {
             length,
+            last_layer_consistency,
             consistency,
-            ..
         } => {
-            let zero_triple = zero_triple_from(sketch_value);
-            let consistency_triples = consistency
-                .iter()
-                .map(|pairs| vec![zero_triple; pairs.len()])
-                .collect();
-            SketchData::DcfPayload {
-                length: *length,
-                consistency: consistency_triples,
+            let mut flattened = Vec::with_capacity(*length);
+            flattened.extend(last_layer_consistency.into_iter());
+            for layer in consistency.into_iter() {
+                flattened.extend(layer.into_iter());
             }
+            flattened
         }
-        SketchValues::Lp {
-            p,
+        VerifyValues::Linf {
+            ldcf,
+            rdcf,
+            consistency,
+        } => {
+            let ldcf_flat = flatten_verify_values(&**ldcf);
+            let rdcf_flat = flatten_verify_values(&**rdcf);
+            let mut flattened = Vec::with_capacity(ldcf_flat.len() + rdcf_flat.len() + 1);
+            flattened.extend(ldcf_flat);
+            flattened.extend(rdcf_flat);
+            flattened.push(*consistency);
+            flattened
+        }
+        VerifyValues::Lp {
             ldcf0,
             ldcf1,
             rdcf0,
             rdcf1,
+            reference_dpf,
             ..
         } => {
-            let zero_triple = zero_triple_from(sketch_value);
-            SketchData::Lp {
-                p: *p,
-                ldcf0: Box::new(build_sketch_data_from(ldcf0)),
-                ldcf1: Box::new(build_sketch_data_from(ldcf1)),
-                rdcf0: Box::new(build_sketch_data_from(rdcf0)),
-                rdcf1: Box::new(build_sketch_data_from(rdcf1)),
-                z_ast: zero_triple,
-                z_bullet: zero_triple,
-                z: zero_triple,
-            }
+            let ldcf0_flat = flatten_verify_values(&**ldcf0);
+            let ldcf1_flat = flatten_verify_values(&**ldcf1);
+            let rdcf0_flat = flatten_verify_values(&**rdcf0);
+            let rdcf1_flat = flatten_verify_values(&**rdcf1);
+            let mut flattened = Vec::with_capacity(
+                ldcf0_flat.len() + ldcf1_flat.len() + rdcf0_flat.len() + rdcf1_flat.len() + 1,
+            );
+            flattened.extend(ldcf0_flat);
+            flattened.extend(ldcf1_flat);
+            flattened.extend(rdcf0_flat);
+            flattened.extend(rdcf1_flat);
+            flattened.push(*reference_dpf);
+            flattened
         }
     }
 }
@@ -157,7 +141,7 @@ fn sketch_interval_fss_test() -> Result<()> {
     // Generate keys from share phase
     let share_cfg = share_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
     let share_phase = SharePhase::new(share_cfg);
-    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+    let (range0, range1) = share_phase.share_range(&X, DELTA)?;
 
     // Init sketch phase and get sketch helper
     let sketch_cfg = sketch_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
@@ -276,7 +260,7 @@ fn sketch_distance_fss_test() -> Result<()> {
     let share_cfg =
         share_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
     let share_phase = SharePhase::new(share_cfg);
-    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+    let (range0, range1) = share_phase.share_range(&X, DELTA)?;
 
     let sketch_cfg =
         sketch_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
@@ -470,7 +454,7 @@ fn verify_interval_fss_mpc_test() -> Result<()> {
     let share_cfg =
         share_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
     let share_phase = SharePhase::new(share_cfg);
-    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+    let (range0, range1) = share_phase.share_range(&X, DELTA)?;
 
     let sketch_cfg =
         sketch_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
@@ -485,28 +469,41 @@ fn verify_interval_fss_mpc_test() -> Result<()> {
     let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
 
     let mut prg_data = PRG::new(Some(&seed), 1);
-    let (sd0_full, sd1_full) = sketch_phase.get_sketch_data(&mut prg_data)?;
+    let mut sd0_full = Vec::with_capacity(sketch0.len());
+    let mut sd1_full = Vec::with_capacity(sketch1.len());
+    for _ in 0..sketch0.len() {
+        let (sd0, sd1) = sketch_phase.get_sketch_data(&mut prg_data)?;
+        sd0_full.push(sd0);
+        sd1_full.push(sd1);
+    }
 
     let (mut chan0, mut chan1) = setup_channels_pair()?;
 
     let (checks0, checks1) = thread::scope(|s| -> Result<_> {
-        let sv0 = &sketch0[0];
-        let sv1 = &sketch1[0];
-        let sd0 = sd0_full;
-        let sd1 = sd1_full;
+        let sv0 = &sketch0;
+        let sv1 = &sketch1;
+        let sd0 = &sd0_full;
+        let sd1 = &sd1_full;
         let sketch_phase_ref = &sketch_phase;
 
-        let handle0 = s.spawn(move || sketch_phase_ref.verify(sv0, &sd0, &mut chan0, true));
-        let handle1 = s.spawn(move || sketch_phase_ref.verify(sv1, &sd1, &mut chan1, false));
+        let handle0 = s.spawn(move || sketch_phase_ref.batch_verify(sv0, sd0, &mut chan0, false));
+        let handle1 = s.spawn(move || sketch_phase_ref.batch_verify(sv1, sd1, &mut chan1, true));
 
         let res0 = handle0.join().expect("thread 0 panicked")?;
         let res1 = handle1.join().expect("thread 1 panicked")?;
         Ok((res0, res1))
     })?;
 
-    assert_eq!(checks0.len(), checks1.len());
-    for (idx, (c0, c1)) in checks0.iter().zip(checks1.iter()).enumerate() {
-        let opened = *c0 + *c1;
+    assert_eq!(checks0.len(), checks1.len(), "Verify value count mismatch");
+    let flat0: Vec<Modp> = checks0.iter().flat_map(|v| flatten_verify_values(v)).collect();
+    let flat1: Vec<Modp> = checks1.iter().flat_map(|v| flatten_verify_values(v)).collect();
+
+    println!("flat0: {:?}", flat0);
+    println!("flat1: {:?}", flat1);
+
+    assert_eq!(flat0.len(), flat1.len(), "Flattened verify length mismatch");
+    for (idx, (c0, c1)) in flat0.iter().zip(flat1.iter()).enumerate() {
+        let opened = *c0 - *c1;
         assert_eq!(opened.value(), 0, "Interval verify failed at {}", idx);
     }
 
@@ -519,7 +516,7 @@ fn verify_distance_fss_mpc_test() -> Result<()> {
     let share_cfg =
         share_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
     let share_phase = SharePhase::new(share_cfg);
-    let (range0, range1) = share_phase.share_range(&[X], DELTA)?;
+    let (range0, range1) = share_phase.share_range(&X, DELTA)?;
 
     let sketch_cfg =
         sketch_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
@@ -534,29 +531,131 @@ fn verify_distance_fss_mpc_test() -> Result<()> {
     let sketch1 = sketch_phase.sketch(&range1, &sketch_helper, &mut prg1)?;
 
     let mut prg_data = PRG::new(Some(&seed), 1);
-    let (sd0_full, sd1_full) = sketch_phase.get_sketch_data(&mut prg_data)?;
+    let mut sd0_full = Vec::with_capacity(sketch0.len());
+    let mut sd1_full = Vec::with_capacity(sketch1.len());
+    for _ in 0..sketch0.len() {
+        let (sd0, sd1) = sketch_phase.get_sketch_data(&mut prg_data)?;
+        sd0_full.push(sd0);
+        sd1_full.push(sd1);
+    }
 
     let (mut chan0, mut chan1) = setup_channels_pair()?;
 
     let (checks0, checks1) = thread::scope(|s| -> Result<_> {
-        let sv0 = &sketch0[0];
-        let sv1 = &sketch1[0];
-        let sd0 = sd0_full;
-        let sd1 = sd1_full;
+        let sv0 = &sketch0;
+        let sv1 = &sketch1;
+        let sd0 = &sd0_full;
+        let sd1 = &sd1_full;
         let sketch_phase_ref = &sketch_phase;
 
-        let handle0 = s.spawn(move || sketch_phase_ref.verify(sv0, &sd0, &mut chan0, true));
-        let handle1 = s.spawn(move || sketch_phase_ref.verify(sv1, &sd1, &mut chan1, false));
+        let handle0 = s.spawn(move || sketch_phase_ref.batch_verify(sv0, sd0, &mut chan0, true));
+        let handle1 = s.spawn(move || sketch_phase_ref.batch_verify(sv1, sd1, &mut chan1, false));
 
         let res0 = handle0.join().expect("thread 0 panicked")?;
         let res1 = handle1.join().expect("thread 1 panicked")?;
         Ok((res0, res1))
     })?;
 
-    assert_eq!(checks0.len(), checks1.len());
-    for (idx, (c0, c1)) in checks0.iter().zip(checks1.iter()).enumerate() {
-        let opened = *c0 + *c1;
+    assert_eq!(checks0.len(), checks1.len(), "Verify value count mismatch");
+    let flat0: Vec<Modp> = checks0.iter().flat_map(|v| flatten_verify_values(v)).collect();
+    let flat1: Vec<Modp> = checks1.iter().flat_map(|v| flatten_verify_values(v)).collect();
+    assert_eq!(flat0.len(), flat1.len(), "Flattened verify length mismatch");
+    for (idx, (c0, c1)) in flat0.iter().zip(flat1.iter()).enumerate() {
+        let opened = *c0 - *c1;
         assert_eq!(opened.value(), 0, "Distance verify failed at {}", idx);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn batch_multiply_with_beaver_subtractive_shares_test() -> Result<()> {
+    let sketch_cfg =
+        sketch_phase_config(ShareMethod::FSS, DistanceMetric::LInfinity, DictionaryType::Known)?;
+    let sketch_phase = SketchPhase::new(sketch_cfg);
+    let ctx = sketch_phase.barrett_ctx();
+
+    let seed = [1u8; 16];
+    let mut prg = PRG::new(Some(&seed), 0);
+
+    let count = 8usize;
+    let mut values_x = Vec::with_capacity(count);
+    let mut values_y = Vec::with_capacity(count);
+    let mut x0 = Vec::with_capacity(count);
+    let mut x1 = Vec::with_capacity(count);
+    let mut y0 = Vec::with_capacity(count);
+    let mut y1 = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let x = sample_modp(ctx, &mut prg);
+        let y = sample_modp(ctx, &mut prg);
+        values_x.push(x);
+        values_y.push(y);
+
+        // Subtractive sharing: share0 - share1 = value.
+        let x_share0 = sample_modp(ctx, &mut prg);
+        let y_share0 = sample_modp(ctx, &mut prg);
+        x0.push(x_share0);
+        x1.push(x_share0 - x);
+        y0.push(y_share0);
+        y1.push(y_share0 - y);
+    }
+
+    let mut triples0 = Vec::with_capacity(count);
+    let mut triples1 = Vec::with_capacity(count);
+    for _ in 0..count {
+        let a = sample_modp(ctx, &mut prg);
+        let b = sample_modp(ctx, &mut prg);
+        let c = a * b;
+
+        let a0 = sample_modp(ctx, &mut prg);
+        let b0 = sample_modp(ctx, &mut prg);
+        let c0 = sample_modp(ctx, &mut prg);
+
+        let a1 = a0 - a;
+        let b1 = b0 - b;
+        let c1 = c0 - c;
+
+        triples0.push((a0, b0, c0));
+        triples1.push((a1, b1, c1));
+    }
+
+    let (mut chan0, mut chan1) = setup_channels_pair()?;
+
+    let (prod0, prod1) = thread::scope(|s| -> Result<_> {
+        let xs0 = &x0;
+        let ys0 = &y0;
+        let xs1 = &x1;
+        let ys1 = &y1;
+        let t0 = &triples0;
+        let t1 = &triples1;
+        let sketch_phase_ref = &sketch_phase;
+
+        let handle0 =
+            s.spawn(move || sketch_phase_ref.batch_multiply_with_beaver(xs0, ys0, t0, &mut chan0, false));
+        let handle1 =
+            s.spawn(move || sketch_phase_ref.batch_multiply_with_beaver(xs1, ys1, t1, &mut chan1, true));
+
+        let res0 = handle0.join().expect("thread 0 panicked")?;
+        let res1 = handle1.join().expect("thread 1 panicked")?;
+        Ok((res0, res1))
+    })?;
+
+    assert_eq!(prod0.len(), prod1.len(), "Product share length mismatch");
+    for (idx, ((z0, z1), (x, y))) in prod0
+        .iter()
+        .zip(prod1.iter())
+        .zip(values_x.iter().zip(values_y.iter()))
+        .enumerate()
+    {
+        let opened = *z0 - *z1;
+        let expected = *x * *y;
+        assert_eq!(
+            opened.value(),
+            expected.value(),
+            "Subtractive share mismatch at {}",
+            idx
+        );
     }
 
     Ok(())
