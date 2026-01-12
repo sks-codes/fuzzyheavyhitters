@@ -1,0 +1,35 @@
+{
+  "data_file": "data/start_100_samples.json",
+  "query_file": "data/start_100_samples.json",
+  "protocol": {
+    "delta": 5,
+    "match_threshold": 1000,
+    "enable_sketch": true,
+    "h1": 11,
+    "h2": 16,
+    "h3": 20,
+    "d": 2,
+    "share_method": "FSS",
+    "dictionary_type": "Unknown",
+    "check_method": "GC",
+    "check_property": "Equality",
+    "threshold_method": "GC",
+    "distance_metric": "Linf",
+    "num_clients": 100,
+    "sketch_modulus": 892270022585185806328177
+  },
+  "network": {
+    "server0_addr": "127.0.0.1",
+    "server1_addr": "127.0.0.1",
+    "server0_to_server1_port": 8000,
+    "dealer_to_server0_port": 9000,
+    "dealer_to_server1_port": 9200,
+    "client_to_server0_port": 7000,
+    "client_to_server1_port": 7200
+  },
+  "output": {
+    "verbose": true,
+    "show_intermediate": false,
+    "output_file": "results.json"
+  }
+}

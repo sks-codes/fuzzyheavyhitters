@@ -14,9 +14,7 @@ script
 
 # Data files and generated synthetic data
 /data/
-data/synthetic/
-*.json
-!data/*_config.json
 !src/bin/amazon.json
 !src/bin/config.json
 *.log
+results.json
