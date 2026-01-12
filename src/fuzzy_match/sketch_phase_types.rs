@@ -7,7 +7,6 @@ use anyhow::{anyhow, Result, ensure};
 use std::convert::TryInto;
 
 pub type TripleModp<'a> = (Modp<'a>, Modp<'a>, Modp<'a>);
-pub type TripleOwned = (u128, u128, u128);
 
 #[derive(Debug, Clone)]
 pub struct SketchConfig {

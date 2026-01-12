@@ -80,7 +80,6 @@ impl SharePhaseNaive {
         keys0: &mut Vec<DpfKey>,
         keys1: &mut Vec<DpfKey>,
     ) -> Result<(), anyhow::Error> {
-        println!("Current point: {:?}, dim: {}", current_point, dim);
         if dim == offset.len() {
             return self.push_dpf_keys_for_point(current_point, a, b, out_modulus, keys0, keys1);
         }

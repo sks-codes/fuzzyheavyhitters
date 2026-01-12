@@ -73,7 +73,6 @@ fn run_client(config_path: &str) -> Result<(), String> {
     let mut dpf_keys0 = Vec::new();
     let mut dpf_keys1 = Vec::new();
     for point in client_points.iter() {
-        println!("Sharing point: {:?}", point);
         let (keys0, keys1) = share_phase_naive
             .share_range(point, config.protocol.delta)
             .map_err(|e| format!("Failed to share range for point {:?}: {}", point, e))?;

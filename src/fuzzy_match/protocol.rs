@@ -890,7 +890,7 @@ fn flatten_verify_values<'a>(
             flattened.push(*consistency);
             flattened
         },
-        VerifyValues::Lp { p, ldcf0, ldcf1, rdcf0, rdcf1, reference_dpf } => {
+        VerifyValues::Lp { p: _, ldcf0, ldcf1, rdcf0, rdcf1, reference_dpf } => {
             let ldcf0_flat = flatten_verify_values(&**ldcf0);
             let ldcf1_flat = flatten_verify_values(&**ldcf1);
             let rdcf0_flat = flatten_verify_values(&**rdcf0);

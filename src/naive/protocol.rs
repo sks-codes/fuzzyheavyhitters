@@ -85,7 +85,6 @@ impl NaiveProtocol {
                     }
                 });
         });
-        println!("Query points converted to bits.");
 
         let chunk_size = (client_shares.len() + num_threads - 1) / num_threads;
         let mut server_bits = vec![false; query_points_bits.len()];
@@ -105,7 +104,6 @@ impl NaiveProtocol {
                         }
                         let acc_modint = Mod2k::new(acc, modulus);
                         count_shares.push(acc_modint);
-                        println!("Computed count share: {}", acc);
                     }
 
                     let mut local_rng = AesRng::new();
@@ -158,7 +156,6 @@ impl NaiveProtocol {
         // Since this is just testing equality for dpf, we can flatten a multi-dimensional point into a single long string.
         for prefix_length in 1..=max_bit_length*dimension {
             println!("expanding to prefix length {}", prefix_length);
-            println!("Current prefixes: {:?}", current_prefixes);
             let mut new_data: Vec<Vec<Vec<u8>>> = vec![];
             for data in current_data.iter() {
                 let mut data0 = Vec::with_capacity(client_shares.len());
@@ -210,8 +207,6 @@ impl NaiveProtocol {
                     .collect()
             });
             
-            println!("Count shares for prefix length {}: {:?}", prefix_length, count_shares.iter().map(|x| x.val()).collect::<Vec<u128>>());
-
             let mut new_prefixes: Vec<Vec<bool>> = vec![];
             for prefix in current_prefixes.iter() {
                 let mut prefix0 = prefix.clone();
@@ -223,7 +218,6 @@ impl NaiveProtocol {
             }
 
             if count_shares.is_empty() {
-                current_data = Vec::new();
                 current_prefixes = Vec::new();
                 break;
             }
@@ -238,7 +232,6 @@ impl NaiveProtocol {
                     .try_for_each(|((server_bits_chunk, count_shares_chunk), other_channel)| -> Result<(), anyhow::Error> {
                         let mut local_rng = AesRng::new();
                         let threshold = Mod2k::new(self.threshold, eval_modulus);
-                        println!("Threshold: {}", threshold.val());
                         let comparison_result = if self.side {
                             multiple_gb_greater_than_ss(&mut local_rng, other_channel, &count_shares_chunk, &threshold)
                         } else {
@@ -252,8 +245,6 @@ impl NaiveProtocol {
                         Ok(())
                     })
             })?;
-
-            println!("Server bits for prefix length {}: {:?}", prefix_length, server_bits);
 
             current_data = vec![];
             current_prefixes = vec![];
