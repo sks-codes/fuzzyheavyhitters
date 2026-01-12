@@ -512,7 +512,6 @@ fn gen_cor_word(
 
 /// All-prefix DPF implementation.
 impl DpfKey {
-    // Need alpha < beta
     pub fn gen_dpf_key(
         alpha_bits: &[bool],
         a: &RingVec,

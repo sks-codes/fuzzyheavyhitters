@@ -4,6 +4,7 @@ use crate::{
     fuzzy_match::share_phase_types::{DistanceMetric, ShareConfig, ShareMethod},
     util::u128_to_bits_msb,
 };
+use anyhow::ensure;
 
 pub struct SharePhaseNaive {
     share_config: ShareConfig,
@@ -23,7 +24,22 @@ impl SharePhaseNaive {
         x: &[u128],
         delta: u128,
     ) -> Result<(Vec<DpfKey>, Vec<DpfKey>), anyhow::Error> {
-        let points = match self.share_config.metric {
+        ensure!(
+            x.len() == self.share_config.d,
+            "Input x must match the configured dimension"
+        );
+        let max_input = (1u128 << self.share_config.h1) - 1;
+        for &xi in x {
+            ensure!(
+                xi <= max_input,
+                "Input x ({}) exceeds maximum value for {}-bit input ({})",
+                xi,
+                self.share_config.h1,
+                max_input
+            );
+        }
+
+        let offsets = match self.share_config.metric {
             DistanceMetric::LInfinity => self.create_linfinity_ball(delta, self.share_config.d),
             DistanceMetric::Lp { p } => {
                 let distance = delta.pow(p);
@@ -32,53 +48,121 @@ impl SharePhaseNaive {
         };
         let mut keys0 = Vec::new();
         let mut keys1 = Vec::new();
-        let in_modulus = 1 << self.share_config.h1;
-        let out_modulus = 1 << self.share_config.h2;
-        let a = RingVec::zero_with_len(1, out_modulus)?;
-        let b = RingVec::new(vec![1u128], out_modulus)?;
-        for point in points {
-            let positive_point = point
-                .iter()
-                .zip(x.iter())
-                .map(|(&p, &xi)| if p + xi < in_modulus { p + xi } else { 0u128 })
-                .collect::<Vec<u128>>();
-            let positive_point_bits = positive_point
-                .iter()
-                .map(|&v| u128_to_bits_msb(v, self.share_config.h1))
-                .collect::<Vec<Vec<bool>>>();
-            let mut positive_point_bits_flat = Vec::new();
-            for i in 0..self.share_config.h1 {
-                for dimension in 0..self.share_config.d {
-                    positive_point_bits_flat.push(positive_point_bits[dimension][i]);
-                }
-            }
-            let (key0, key1) = DpfKey::gen_dpf_key(&positive_point_bits_flat, &a, &b, out_modulus)?;
-            keys0.push(key0);
-            keys1.push(key1);
-
-            let negative_point = point
-                .iter()
-                .zip(x.iter())
-                .map(|(&p, &xi)| if xi >= p { xi - p } else { 0u128 })
-                .collect::<Vec<u128>>();
-            if negative_point == positive_point {
-                continue;
-            }
-            let negative_point_bits = negative_point
-                .iter()
-                .map(|&v| u128_to_bits_msb(v, self.share_config.h1))
-                .collect::<Vec<Vec<bool>>>();
-            let mut negative_point_bits_flat = Vec::new();
-            for i in 0..self.share_config.h1 {
-                for dimension in 0..self.share_config.d {
-                    negative_point_bits_flat.push(negative_point_bits[dimension][i]);
-                }
-            }
-            let (key0, key1) = DpfKey::gen_dpf_key(&negative_point_bits_flat, &a, &b, out_modulus)?;
-            keys0.push(key0);
-            keys1.push(key1);
+        let out_modulus = 1u128 << self.share_config.h2;
+        let a = RingVec::new(vec![1u128], out_modulus)?;
+        let b = RingVec::zero_with_len(1, out_modulus)?;
+        for offset in offsets {
+            let mut point = Vec::with_capacity(self.share_config.d);
+            self.expand_offset_points(
+                x,
+                &offset,
+                0,
+                &mut point,
+                &a,
+                &b,
+                out_modulus,
+                &mut keys0,
+                &mut keys1,
+            )?;
         }
         Ok((keys0, keys1))
+    }
+
+    fn expand_offset_points(
+        &self,
+        x: &[u128],
+        offset: &[u128],
+        dim: usize,
+        current_point: &mut Vec<u128>,
+        a: &RingVec,
+        b: &RingVec,
+        out_modulus: u128,
+        keys0: &mut Vec<DpfKey>,
+        keys1: &mut Vec<DpfKey>,
+    ) -> Result<(), anyhow::Error> {
+        println!("Current point: {:?}, dim: {}", current_point, dim);
+        if dim == offset.len() {
+            return self.push_dpf_keys_for_point(current_point, a, b, out_modulus, keys0, keys1);
+        }
+
+        let xi = x[dim];
+        let p = offset[dim];
+        if p == 0 {
+            current_point.push(xi);
+            let result = self.expand_offset_points(
+                x,
+                offset,
+                dim + 1,
+                current_point,
+                a,
+                b,
+                out_modulus,
+                keys0,
+                keys1,
+            );
+            current_point.pop();
+            return result;
+        }
+
+        let max_input = (1u128 << self.share_config.h1) - 1;
+        let upper = xi.saturating_add(p).min(max_input);
+        let lower = xi.saturating_sub(p);
+
+        // Add the plus point
+        current_point.push(upper);
+        self.expand_offset_points(
+            x,
+            offset,
+            dim + 1,
+            current_point,
+            a,
+            b,
+            out_modulus,
+            keys0,
+            keys1,
+        )?;
+        current_point.pop();
+
+        // Add the minus point
+        current_point.push(lower);
+        self.expand_offset_points(
+            x,
+            offset,
+            dim + 1,
+            current_point,
+            a,
+            b,
+            out_modulus,
+            keys0,
+            keys1,
+        )?;
+        current_point.pop();
+        Ok(())
+    }
+
+    fn push_dpf_keys_for_point(
+        &self,
+        point: &[u128],
+        a: &RingVec,
+        b: &RingVec,
+        out_modulus: u128,
+        keys0: &mut Vec<DpfKey>,
+        keys1: &mut Vec<DpfKey>,
+    ) -> Result<(), anyhow::Error> {
+        let point_bits = point
+            .iter()
+            .map(|&v| u128_to_bits_msb(v, self.share_config.h1))
+            .collect::<Vec<Vec<bool>>>();
+        let mut point_bits_flat = Vec::with_capacity(self.share_config.h1 * self.share_config.d);
+        for i in 0..self.share_config.h1 {
+            for dimension in 0..self.share_config.d {
+                point_bits_flat.push(point_bits[dimension][i]);
+            }
+        }
+        let (key0, key1) = DpfKey::gen_dpf_key(&point_bits_flat, a, b, out_modulus)?;
+        keys0.push(key0);
+        keys1.push(key1);
+        Ok(())
     }
 
     fn create_linfinity_ball(&self, delta: u128, d: usize) -> Vec<Vec<u128>> {

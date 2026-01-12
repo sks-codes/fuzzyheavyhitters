@@ -2,6 +2,7 @@ use clap::Parser;
 use mosaic::{
     channel::{listen_to, setup_parallel_channels},
     configs::cli_config::CliConfig,
+    fuzzy_match::share_phase_types::DictionaryType,
     naive::protocol::NaiveProtocol,
 };
 use std::fs;
@@ -28,6 +29,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     };
 
     let share_config = config.to_share_config()?;
+    let dictionary_type = share_config.dictionary_type;
     let threshold = config.protocol.match_threshold;
     let protocol = NaiveProtocol::new(share_config, is_server1, threshold);
 
@@ -44,6 +46,11 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         .receive_client_shares(&mut client_channel)
         .map_err(|e| format!("Failed to receive client shares: {}", e))?;
 
+    println!(
+        "Received {} client shares.",
+        client_shares.len()
+    );
+
     let server0_addr = config.network.server0_addr;
     let server0_to_server1_port = config.network.server0_to_server1_port;
 
@@ -55,23 +62,41 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             .map_err(|e| format!("Failed to set up channels from other server: {}", e))?
     };
 
-    let query_points = load_query_points(&config.query_file)
-        .map_err(|e| format!("Failed to load query points: {}", e))?;
-
     let thread_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build()
         .map_err(|e| format!("Failed to build thread pool: {}", e))?;
 
     println!("Running server protocol...");
-    let _results = protocol
-        .run_server_known_dictionary_parallel(
-            &client_shares,
-            &query_points,
-            &thread_pool,
-            &mut other_server_channels,
-        )
-        .map_err(|e| format!("Failed to run server protocol: {}", e))?;
+    match dictionary_type {
+        DictionaryType::Known => {
+            let query_points = load_query_points(&config.query_file)
+                .map_err(|e| format!("Failed to load query points: {}", e))?;
+            let results = protocol
+                .run_server_known_dictionary_parallel(
+                    &client_shares,
+                    &query_points,
+                    &thread_pool,
+                    &mut other_server_channels,
+                )
+                .map_err(|e| format!("Failed to run server protocol: {}", e))?;
+            if !is_server1 {
+                let heavy_hitter_count = results.iter().filter(|&&hit| hit).count();
+                println!("Heavy hitters count: {}", heavy_hitter_count);
+            }
+        }
+        DictionaryType::Unknown => {
+            let results = protocol
+                .run_server_unknown_dictionary_parallel(
+                    &client_shares,
+                    &mut other_server_channels,
+                )
+                .map_err(|e| format!("Failed to run server protocol: {}", e))?;
+            if !is_server1 {
+                println!("Heavy hitters count: {}", results.len());
+            }
+        }
+    }
 
     Ok(())
 }
