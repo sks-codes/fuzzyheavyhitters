@@ -2,14 +2,14 @@
   "data_file": "data/start_busiest_day.json",
   "query_file": "data/start_busiest_day.json",
   "protocol": {
-    "delta": 3,
+    "delta": 2,
     "match_threshold": 200,
     "enable_sketch": true,
     "h1": 11,
-    "h2": 15,
+    "h2": 96,
     "h3": 15,
     "d": 2,
-    "share_method": "FSS",
+    "share_method": "OKVS",
     "dictionary_type": "Unknown",
     "check_method": "GC",
     "check_property": "Equality",
@@ -25,7 +25,7 @@
     "dealer_to_server0_port": 3200,
     "dealer_to_server1_port": 3200,
     "client_to_server0_port": 3005,
-    "client_to_server1_port": 3006
+    "client_to_server1_port": 3005
   },
   "output": {
     "verbose": true,
