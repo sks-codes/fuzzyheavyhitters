@@ -68,17 +68,8 @@ fn run_client(config_path: &str) -> Result<(), String> {
     let config = CliConfig::from_file(config_path)?;
     let share_config = config.to_share_config()?;
     let client_points = load_client_points(&config.data_file)?;
+    println!("Loaded {} client points", client_points.len());
 
-    let share_phase_naive = SharePhaseNaive::new(share_config.clone());
-    let mut dpf_keys0 = Vec::new();
-    let mut dpf_keys1 = Vec::new();
-    for point in client_points.iter() {
-        let (keys0, keys1) = share_phase_naive
-            .share_range(point, config.protocol.delta)
-            .map_err(|e| format!("Failed to share range for point {:?}: {}", point, e))?;
-        dpf_keys0.extend(keys0);
-        dpf_keys1.extend(keys1);
-    }
 
     let mut channel_server0 = connect_to(
         config.network.server0_addr,
@@ -90,15 +81,41 @@ fn run_client(config_path: &str) -> Result<(), String> {
         config.network.client_to_server1_port,
     )
     .map_err(|e| format!("Failed to connect to server 1: {}", e))?;
+    println!("Connected to both servers");
 
-    send_client_shares(
-        dpf_keys0,
-        dpf_keys1,
-        &mut channel_server0,
-        &mut channel_server1,
-    )?;
+    let start = std::time::Instant::now();
+
+    let share_phase_naive = SharePhaseNaive::new(share_config.clone());
+    let mut points_sent = 0;
+    for points_chunk in client_points.chunks(1000) {
+        let mut dpf_keys0 = Vec::new();
+        let mut dpf_keys1 = Vec::new();
+        for point in points_chunk.iter() {
+            let (keys0, keys1) = share_phase_naive
+                .share_range(point, config.protocol.delta)
+                .map_err(|e| format!("Failed to share range for point {:?}: {}", point, e))?;
+            dpf_keys0.extend(keys0);
+            dpf_keys1.extend(keys1);
+        }
+        send_client_shares(
+            dpf_keys0,
+            dpf_keys1,
+            &mut channel_server0,
+            &mut channel_server1,
+        )?;
+
+        points_sent += points_chunk.len();
+        println!("Sent {} / {} client points", points_sent, client_points.len());
+    }
 
     println!("Client shares sent successfully");
+    let duration = start.elapsed();
+    println!("Time taken to send client shares: {:?}", duration);
+    println!("Time taken per client point: {:?}", duration / (client_points.len() as u32));
+
+    println!("Communication statistics:");
+    channel_server0.print_stats("Server 0");
+    channel_server1.print_stats("Server 1");
 
     Ok(())
 }

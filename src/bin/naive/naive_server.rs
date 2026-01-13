@@ -42,9 +42,25 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
     let mut client_channel = listen_to(server_addr.clone(), client_to_server_port)
         .map_err(|e| format!("Failed to listen for client connection: {}", e))?;
 
-    let client_shares = protocol
-        .receive_client_shares(&mut client_channel)
-        .map_err(|e| format!("Failed to receive client shares: {}", e))?;
+    let mut points_received = 0;
+    let num_clients = config.protocol.num_clients;
+    println!("Waiting to receive client shares from {} clients...", num_clients);
+    let mut client_shares = Vec::new();
+    let mut ball_size = 0;
+
+    while points_received < num_clients {
+        let new_shares = protocol
+            .receive_client_shares(&mut client_channel)
+            .map_err(|e| format!("Failed to receive client shares: {}", e))?;
+
+        if ball_size == 0 {
+            ball_size = new_shares.len() / 1000;
+        }
+        points_received += new_shares.len() / ball_size;
+        println!("Received {}/{} client shares", points_received, num_clients);
+        client_shares.extend(new_shares);
+
+    }
 
     println!(
         "Received {} client shares.",
@@ -68,6 +84,7 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         .map_err(|e| format!("Failed to build thread pool: {}", e))?;
 
     println!("Running server protocol...");
+    let start = std::time::Instant::now();
     match dictionary_type {
         DictionaryType::Known => {
             let query_points = load_query_points(&config.query_file)
@@ -97,6 +114,24 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             }
         }
     }
+
+    let duration = start.elapsed();
+    println!("Server protocol completed in {:?}", duration);
+
+    println!("Communication statistics:");
+    client_channel.print_stats("Client");
+
+    let mut total_sent = 0;
+    let mut total_received = 0;
+    for (i, channel) in other_server_channels.iter().enumerate() {
+        let (sent, received) = channel.get_communication_stats();
+        total_sent += sent;
+        total_received += received;
+    }
+
+    println!("Communication with other server:");
+    println!("Total sent: {} bytes, Total received: {} bytes", total_sent, total_received);
+
 
     Ok(())
 }
