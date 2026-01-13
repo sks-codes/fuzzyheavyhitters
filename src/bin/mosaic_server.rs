@@ -234,7 +234,10 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
             &mut other_server_channels,
         )?;
         println!("Server {}: Protocol execution completed", server_id);
-        println!("Results: {:?}", results);
+        println!(
+            "Found {} heavy hitters.",
+            results.len(),
+        );
 
         start_time.elapsed()
     } else {
@@ -253,9 +256,8 @@ fn run_server(config_path: &str, is_server1: bool, num_threads: usize) -> Result
         )?;
         println!("Server {}: Protocol execution completed", server_id);
         println!(
-            "Found {} heavy hitters: {:?}",
+            "Found {} heavy hitters.",
             heavy_hitters.len(),
-            heavy_hitters
         );
 
         start_time.elapsed()
