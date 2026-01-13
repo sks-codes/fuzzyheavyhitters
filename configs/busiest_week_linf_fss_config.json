@@ -21,11 +21,11 @@
   "network": {
     "server0_addr": "172.31.31.193",
     "server1_addr": "172.31.20.182",
-    "server0_to_server1_port": 8000,
-    "dealer_to_server0_port": 9000,
-    "dealer_to_server1_port": 9200,
-    "client_to_server0_port": 7000,
-    "client_to_server1_port": 7200
+    "server0_to_server1_port": 3400,
+    "dealer_to_server0_port": 3200,
+    "dealer_to_server1_port": 3200,
+    "client_to_server0_port": 3005,
+    "client_to_server1_port": 3005
   },
   "output": {
     "verbose": true,

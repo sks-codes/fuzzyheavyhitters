@@ -1,13 +1,13 @@
 {
-  "data_file": "data/start_busiest_month.json",
-  "query_file": "data/start_busiest_month.json",
+  "data_file": "data/start_busiest_day.json",
+  "query_file": "data/start_busiest_day.json",
   "protocol": {
     "delta": 5,
-    "match_threshold": 20,
+    "match_threshold": 200,
     "enable_sketch": true,
     "h1": 11,
-    "h2": 1,
-    "h3": 18,
+    "h2": 15,
+    "h3": 15,
     "d": 2,
     "share_method": "FSS",
     "dictionary_type": "Unknown",
@@ -15,7 +15,7 @@
     "check_property": "Equality",
     "threshold_method": "GC",
     "distance_metric": "Linf",
-    "num_clients": 115174,
+    "num_clients": 21581,
     "sketch_modulus": 892270022585185806328177
   },
   "network": {

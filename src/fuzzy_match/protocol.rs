@@ -484,7 +484,7 @@ impl MosaicProtocol {
                     prefix_length,
                     start.elapsed()
                 );
-                println!("Exceed threshold results: {:?}", exceeds_threshold_results);
+                // println!("Exceed threshold results: {:?}", exceeds_threshold_results);
             }
         }
         let final_heavy_hitters = current_prefixes
