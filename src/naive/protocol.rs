@@ -103,15 +103,15 @@ impl NaiveProtocol {
                             acc = (acc + eval[0]) % modulus;
                         }
                         let acc_modint = if self.side {
-                            Mod2k::new((eval_modulus - acc) % eval_modulus, eval_modulus)
+                            Mod2k::new((modulus - acc) % modulus, modulus)
                         } else {
-                            Mod2k::new(acc, eval_modulus)
-                        }
+                            Mod2k::new(acc, modulus)
+                        };
                         count_shares.push(acc_modint);
                     }
 
                     let mut local_rng = AesRng::new();
-                    let threshold = Mod2k::new(self.threshold, eval_modulus);
+                    let threshold = Mod2k::new(self.threshold, modulus);
                     let comparison_result = if self.side {
                         multiple_gb_greater_than_ss(&mut local_rng, other_channel, &count_shares, &threshold)
                     } else {
