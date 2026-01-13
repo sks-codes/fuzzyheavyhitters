@@ -236,7 +236,6 @@ impl<V: OkvsValue> RbOkvsF2k<V> {
 
         hasher.update(r1);
         let hash = hasher.finalize();
-        println!("Column: {}", column);
         let index =
             u128::from_le_bytes(hash.as_bytes()[0..16].try_into().unwrap()) % (column as u128);
         index as usize
