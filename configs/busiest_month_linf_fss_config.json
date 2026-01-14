@@ -3,7 +3,7 @@
   "query_file": "data/start_busiest_month.json",
   "protocol": {
     "delta": 5,
-    "match_threshold": 20,
+    "match_threshold": 2303,
     "enable_sketch": true,
     "h1": 11,
     "h2": 1,
