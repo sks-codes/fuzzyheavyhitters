@@ -336,6 +336,10 @@ impl MosaicProtocol {
         threshold_dealer_channels: &mut [CommTrackingChannel],
         other_server_channels: &mut [CommTrackingChannel],
     ) -> Result<Vec<Vec<u128>>, String> {
+        if client_shares_list.is_empty() {
+            println!("No client shares available; skipping unknown dictionary protocol.");
+            return Ok(Vec::new());
+        }
         let max_bit_length = self.h1();
         let dimension = self.d();
         let eval_len = self.h2();
@@ -369,7 +373,7 @@ impl MosaicProtocol {
                         let (data_dim, _) =
                             ShareData::from_bytes(&data[idx], eval_len, eval_modulus)
                                 .map_err(|e| e.to_string())?;
-                        
+
                         let (eval0, eval1) = self
                             .share_phase
                             .expand_prefix(shared_range, &data_dim, &prefix[dim], dim)
@@ -378,8 +382,6 @@ impl MosaicProtocol {
                         data0.push(eval0.to_bytes(eval_len).map_err(|e| e.to_string())?);
                         data1.push(eval1.to_bytes(eval_len).map_err(|e| e.to_string())?);
                     }
-
-                    let start = std::time::Instant::now();
 
                     new_data.push(data0);
                     new_data.push(data1);

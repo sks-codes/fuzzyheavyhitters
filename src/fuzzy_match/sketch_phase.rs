@@ -259,6 +259,15 @@ impl SketchPhase {
             reference_dcf[i] - reference_dcf[i+1]
         }).collect();
         reference_dpf.push(Mod2k::zero(modulus));
+
+        // For p odd and role == 1, negate the reference_dpf
+        if (p & 1) == 1 {
+            reference_dpf = reference_dpf
+                .iter()
+                .map(|x| Mod2k::zero(modulus) - *x)
+                .collect();
+        }
+
         // Now sketch it
         // Get sketch helper and sketch each ldcf, rdcf relative to the reference
         let sketch_helper_dcf = match sketch_helper {

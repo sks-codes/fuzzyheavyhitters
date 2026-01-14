@@ -12,7 +12,7 @@
     "share_method": "OKVS",
     "dictionary_type": "Unknown",
     "check_method": "FSS",
-    "check_property": "Equality",
+    "check_property": "MuBounded",
     "threshold_method": "FSS",
     "distance_metric": "L1",
     "num_clients": 21581,
@@ -20,12 +20,12 @@
   },
   "network": {
     "server0_addr": "172.31.31.193",
-    "server1_addr": "172.31.20.182",
-    "server0_to_server1_port": 3400,
-    "dealer_to_server0_port": 3200,
+    "server1_addr": "127.0.0.1",
+    "server0_to_server1_port": 3600,
+    "dealer_to_server0_port": 3400,
     "dealer_to_server1_port": 3200,
-    "client_to_server0_port": 3005,
-    "client_to_server1_port": 3005
+    "client_to_server0_port": 3006,
+    "client_to_server1_port": 3007
   },
   "output": {
     "verbose": true,

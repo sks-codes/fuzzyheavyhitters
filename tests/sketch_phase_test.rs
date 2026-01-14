@@ -256,7 +256,7 @@ fn sketch_interval_fss_test() -> Result<()> {
 
 #[test]
 fn sketch_distance_fss_test() -> Result<()> {
-    let p: u32 = 2;
+    let p: u32 = 3;
     let share_cfg =
         share_phase_config(ShareMethod::FSS, DistanceMetric::Lp { p }, DictionaryType::Known)?;
     let share_phase = SharePhase::new(share_cfg);
