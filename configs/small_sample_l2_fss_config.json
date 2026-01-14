@@ -3,10 +3,10 @@
   "query_file": "data/start_100_samples.json",
   "protocol": {
     "delta": 5,
-    "match_threshold": 11,
+    "match_threshold": 10,
     "enable_sketch": true,
     "h1": 11,
-    "h2": 6,
+    "h2": 16,
     "h3": 20,
     "d": 2,
     "share_method": "FSS",
@@ -14,7 +14,7 @@
     "check_method": "GC",
     "check_property": "Equality",
     "threshold_method": "GC",
-    "distance_metric": "Linf",
+    "distance_metric": "L2",
     "num_clients": 100,
     "sketch_modulus": 892270022585185806328177
   },

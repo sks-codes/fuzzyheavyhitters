@@ -1,31 +1,31 @@
 {
-  "data_file": "data/start_100_samples.json",
-  "query_file": "data/start_100_samples.json",
+  "data_file": "data/start_busiest_day.json",
+  "query_file": "data/start_busiest_day.json",
   "protocol": {
     "delta": 5,
-    "match_threshold": 11,
+    "match_threshold": 400,
     "enable_sketch": true,
     "h1": 11,
     "h2": 6,
-    "h3": 20,
+    "h3": 18,
     "d": 2,
     "share_method": "FSS",
     "dictionary_type": "Unknown",
     "check_method": "GC",
     "check_property": "Equality",
     "threshold_method": "GC",
-    "distance_metric": "Linf",
-    "num_clients": 100,
+    "distance_metric": "L2",
+    "num_clients": 21581,
     "sketch_modulus": 892270022585185806328177
   },
   "network": {
     "server0_addr": "127.0.0.1",
     "server1_addr": "127.0.0.1",
-    "server0_to_server1_port": 8000,
-    "dealer_to_server0_port": 9000,
-    "dealer_to_server1_port": 9200,
-    "client_to_server0_port": 7000,
-    "client_to_server1_port": 7200
+    "server0_to_server1_port": 3400,
+    "dealer_to_server0_port": 3200,
+    "dealer_to_server1_port": 3200,
+    "client_to_server0_port": 3005,
+    "client_to_server1_port": 3006
   },
   "output": {
     "verbose": true,
