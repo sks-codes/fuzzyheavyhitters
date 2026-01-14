@@ -246,7 +246,7 @@ impl DistanceFSSKey {
             + self.left_fss.1.eval_ldcf(x_bits, modulus)?;
         let right_eval = self.right_fss.0.eval_rdcf(x_bits, modulus)?
             + self.right_fss.1.eval_rdcf(x_bits, modulus)?;
-        println!("Left Eval: {:?}, Right Eval: {:?}", left_eval, right_eval);
+        // println!("Left Eval: {:?}, Right Eval: {:?}", left_eval, right_eval);
         let mut x = 0;
         for i in 0..x_bits.len() {
             if x_bits[i] {
