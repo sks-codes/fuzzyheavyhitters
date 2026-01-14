@@ -11,9 +11,9 @@
     "d": 2,
     "share_method": "OKVS",
     "dictionary_type": "Unknown",
-    "check_method": "FSS",
+    "check_method": "GC",
     "check_property": "MuBounded",
-    "threshold_method": "GC",
+    "threshold_method": "FSS",
     "distance_metric": "L1",
     "num_clients": 21581,
     "sketch_modulus": 892270022585185806328177
