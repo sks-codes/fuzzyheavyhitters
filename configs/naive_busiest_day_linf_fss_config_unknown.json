@@ -1,0 +1,35 @@
+{
+  "data_file": "data/start_busiest_day.json",
+  "query_file": "data/query_points.json",
+  "protocol": {
+    "delta": 2,
+    "match_threshold": 200,
+    "enable_sketch": true,
+    "h1": 11,
+    "h2": 15,
+    "h3": 15,
+    "d": 2,
+    "share_method": "FSS",
+    "dictionary_type": "Unknown",
+    "check_method": "GC",
+    "check_property": "Equality",
+    "threshold_method": "GC",
+    "distance_metric": "Linf",
+    "num_clients": 21581,
+    "sketch_modulus": 892270022585185806328177
+  },
+  "network": {
+    "server0_addr": "172.31.31.193",
+    "server1_addr": "172.31.20.182",
+    "server0_to_server1_port": 3400,
+    "dealer_to_server0_port": 3200,
+    "dealer_to_server1_port": 3200,
+    "client_to_server0_port": 3005,
+    "client_to_server1_port": 3006
+  },
+  "output": {
+    "verbose": true,
+    "show_intermediate": false,
+    "output_file": "results.json"
+  }
+}
