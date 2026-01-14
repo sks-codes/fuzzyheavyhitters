@@ -6,7 +6,7 @@
     "match_threshold": 200,
     "enable_sketch": false,
     "h1": 11,
-    "h2": 5,
+    "h2": 6,
     "h3": 15,
     "d": 2,
     "share_method": "FSS",
