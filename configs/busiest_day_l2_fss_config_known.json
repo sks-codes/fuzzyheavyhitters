@@ -2,7 +2,7 @@
   "data_file": "data/start_busiest_day.json",
   "query_file": "data/query_points.json",
   "protocol": {
-    "delta": 4,
+    "delta": 3,
     "match_threshold": 200,
     "enable_sketch": false,
     "h1": 11,
