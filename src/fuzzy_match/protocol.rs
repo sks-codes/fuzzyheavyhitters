@@ -340,7 +340,6 @@ impl MosaicProtocol {
         let dimension = self.d();
         let eval_len = self.h2();
         let eval_modulus = 1u128 << eval_len;
-
         // Evaluate the empty prefix for each dimension
         let empty_string_data = client_shares_list
             .iter()
@@ -370,6 +369,7 @@ impl MosaicProtocol {
                         let (data_dim, _) =
                             ShareData::from_bytes(&data[idx], eval_len, eval_modulus)
                                 .map_err(|e| e.to_string())?;
+                        
                         let (eval0, eval1) = self
                             .share_phase
                             .expand_prefix(shared_range, &data_dim, &prefix[dim], dim)
@@ -378,6 +378,9 @@ impl MosaicProtocol {
                         data0.push(eval0.to_bytes(eval_len).map_err(|e| e.to_string())?);
                         data1.push(eval1.to_bytes(eval_len).map_err(|e| e.to_string())?);
                     }
+
+                    let start = std::time::Instant::now();
+
                     new_data.push(data0);
                     new_data.push(data1);
                 }
