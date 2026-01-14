@@ -159,6 +159,7 @@ impl NaiveProtocol {
 
         // Since this is just testing equality for dpf, we can flatten a multi-dimensional point into a single long string.
         for prefix_length in 1..=max_bit_length*dimension {
+            let start = std::time::Instant::now();
             println!("expanding to prefix length {}", prefix_length);
             let mut new_data: Vec<Vec<Vec<u8>>> = vec![];
             for data in current_data.iter() {
@@ -175,6 +176,10 @@ impl NaiveProtocol {
                 new_data.push(data0);
                 new_data.push(data1);
             }
+
+            println!("Gathered new data for {} prefixes.", new_data.len());
+            let expansion_time = start.elapsed();
+            println!("Expansion took {:?}", expansion_time);
 
             let new_eval = thread_pool.install(|| -> Result<Vec<Vec<u128>>> {
                 new_data
@@ -210,6 +215,11 @@ impl NaiveProtocol {
                     })
                     .collect()
             });
+
+            let new_eval_time = start.elapsed();
+            println!("Time taken so far {:?}", new_eval_time);
+            println!("Getting count shares took {:?}", new_eval_time - expansion_time);
+
             
             let mut new_prefixes: Vec<Vec<bool>> = vec![];
             for prefix in current_prefixes.iter() {
@@ -250,6 +260,10 @@ impl NaiveProtocol {
                     })
             })?;
 
+            let filtering_time = start.elapsed();
+            println!("Time taken so far {:?}", filtering_time);
+            println!("Filtering took {:?}", filtering_time - new_eval_time);
+
             current_data = vec![];
             current_prefixes = vec![];
             for (i, &bit) in server_bits.iter().enumerate() {
@@ -258,6 +272,12 @@ impl NaiveProtocol {
                     current_prefixes.push(new_prefixes[i].clone());
                 }
             }
+
+            println!(
+                "After filtering, {} prefixes remain.",
+                current_prefixes.len()
+            );
+            println!("Total time for this round {:?}", start.elapsed());
         }
 
         let final_heavy_hitters = current_prefixes.iter()
