@@ -2,11 +2,11 @@
   "data_file": "data/start_busiest_day.json",
   "query_file": "data/query_points.json",
   "protocol": {
-    "delta": 4,
+    "delta": 2,
     "match_threshold": 200,
-    "enable_sketch": true,
+    "enable_sketch": false,
     "h1": 11,
-    "h2": 15,
+    "h2": 1,
     "h3": 15,
     "d": 2,
     "share_method": "FSS",
@@ -25,7 +25,7 @@
     "dealer_to_server0_port": 3200,
     "dealer_to_server1_port": 3200,
     "client_to_server0_port": 3005,
-    "client_to_server1_port": 3006
+    "client_to_server1_port": 3005
   },
   "output": {
     "verbose": true,
