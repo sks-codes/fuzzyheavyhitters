@@ -13,7 +13,7 @@
     "dictionary_type": "Unknown",
     "check_method": "FSS",
     "check_property": "MuBounded",
-    "threshold_method": "FSS",
+    "threshold_method": "GC",
     "distance_metric": "L1",
     "num_clients": 21581,
     "sketch_modulus": 892270022585185806328177

@@ -594,7 +594,7 @@ impl MosaicProtocol {
                                 CheckMethod::FSS => {
                                     // Request check FSS keys from dealer using the parallel check dealer channel
                                     let batch = request_dealer_check(signal_dealer_channel, check_dealer_channel, 1u128 << self.h3())?;
-                                    println!("Received dealer check keys");
+                                    // println!("Received dealer check keys");
 
                                     if batch.keys.len() < self.num_clients() {
                                         return Err(format!("Dealer provided {} keys but {} are needed",
