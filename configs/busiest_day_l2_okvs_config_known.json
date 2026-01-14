@@ -6,7 +6,7 @@
     "match_threshold": 200,
     "enable_sketch": false,
     "h1": 11,
-    "h2": 55,
+    "h2": 58,
     "h3": 15,
     "d": 2,
     "share_method": "OKVS",
