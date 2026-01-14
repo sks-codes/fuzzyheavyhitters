@@ -10,7 +10,7 @@
     "h3": 15,
     "d": 2,
     "share_method": "FSS",
-    "dictionary_type": "Unknown",
+    "dictionary_type": "Known",
     "check_method": "GC",
     "check_property": "Equality",
     "threshold_method": "GC",
