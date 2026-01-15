@@ -12,7 +12,7 @@
     "share_method": "OKVS",
     "dictionary_type": "Unknown",
     "check_method": "GC",
-    "check_property": "Equality",
+    "check_property": "MuBounded",
     "threshold_method": "GC",
     "distance_metric": "L1",
     "num_clients": 59040,
