@@ -14,7 +14,7 @@
     "check_method": "FSS",
     "check_property": "MuBounded",
     "threshold_method": "FSS",
-    "distance_metric": "L1",
+    "distance_metric": "L2",
     "num_clients": 21581,
     "sketch_modulus": 892270022585185806328177
   },
